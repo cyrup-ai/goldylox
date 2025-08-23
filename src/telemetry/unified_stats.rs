@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
-use super::super::coherence::CacheTier;
+use crate::cache::coherence::CacheTier;
 use super::data_structures::{OpsPerSecondState, TierHitRateState};
 
 /// Unified cache statistics across all tiers with atomic coordination

@@ -5,8 +5,8 @@
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::communication::CoherenceError;
-use super::data_structures::{CacheTier, MesiState};
+use crate::cache::coherence::communication::CoherenceError;
+use crate::cache::coherence::data_structures::{CacheTier, MesiState};
 
 /// State transition validator for protocol correctness
 #[derive(Debug)]

@@ -10,8 +10,8 @@ use std::time::Instant;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use crossbeam_skiplist::SkipMap;
 
-use super::super::super::super::types::timestamp_nanos;
-use super::super::core::WarmCacheKey;
+use crate::cache::types::timestamp_nanos;
+use crate::cache::tier::warm::core::WarmCacheKey;
 use super::frequency_estimator::FrequencyEstimator;
 use super::pattern_classifier::TemporalPatternClassifier;
 use super::types::{AccessRecord, HitStatus};

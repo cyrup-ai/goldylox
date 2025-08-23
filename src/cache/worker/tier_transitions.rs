@@ -3,18 +3,24 @@
 //! This module implements the logic for checking and performing automatic
 //! tier promotions and demotions based on access patterns and thresholds.
 
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::types::WorkerStats;
+use crossbeam::channel::Sender;
+
+use super::types::StatUpdate;
 use crate::cache::tier::{cold, hot, warm};
+use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Check for entries that need tier transitions with generic types
 /// NOTE: This function is now generic and must be called with explicit type parameters
-/// Example: check_tier_transitions::<MyKey, MyValue>(&stats)
-pub fn check_tier_transitions<K: CacheKey + Clone, V: CacheValue + Clone>(
-    stats: &Arc<Mutex<WorkerStats>>,
-) {
+/// Example: check_tier_transitions::<MyKey, MyValue>(&stat_sender)
+pub fn check_tier_transitions<K, V>(
+    stat_sender: &Sender<StatUpdate>,
+)
+where
+    K: CacheKey + Clone + 'static,
+    V: CacheValue + Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
     let now = Instant::now();
 
     // Define promotion/demotion thresholds
@@ -24,40 +30,35 @@ pub fn check_tier_transitions<K: CacheKey + Clone, V: CacheValue + Clone>(
     const WARM_TO_HOT_ACCESS_THRESHOLD: u32 = 10; // 10 accesses in recent window
 
     // Check warm tier utilization for promotion to hot tier
-    if let Some(_warm_stats) = warm::get_stats::<K, V>() {
+    if let Some(_warm_stats) = warm::global_api::get_stats::<K, V>() {
         // Promote frequently accessed warm entries to hot tier
         let frequently_accessed_keys: Vec<K> =
             warm::get_frequently_accessed_keys::<K, V>(WARM_TO_HOT_ACCESS_THRESHOLD as usize);
 
-        let mut promotions = 0;
         for key in frequently_accessed_keys {
             if let Some(value) = warm::warm_get::<K, V>(&key) {
-                if warm::remove_entry::<K, V>(&key).is_ok() {
+                if warm::global_api::remove_entry::<K, V>(&key).is_ok() {
+                    // MOVE value from warm to hot (no clone)
                     if hot::insert_promoted(key, value).is_ok() {
-                        promotions += 1;
+                        let _ = stat_sender.send(StatUpdate::Promotion);
+                        let _ = stat_sender.send(StatUpdate::TierTransition);
                     }
                 }
             }
         }
-
-        // Update statistics with actual promotion count
-        if let Ok(mut worker_stats) = stats.lock() {
-            worker_stats.tier_transitions += promotions;
-        }
     }
 
     // Check cold tier for promotion to warm tier
-    if let Ok(_cold_stats) = cold::get_stats() {
+    if let Ok(_cold_stats) = cold::get_stats::<K, V>() {
         let frequently_accessed_keys: Vec<K> =
             cold::get_frequently_accessed_keys(COLD_TO_WARM_ACCESS_THRESHOLD);
 
         for key in frequently_accessed_keys {
             if let Ok(Some(value)) = cold::cold_get::<K, V>(&key) {
-                if cold::remove_entry(&key).is_ok() {
+                if cold::remove_entry::<K, V>(&key).is_ok() {
                     if warm::insert_promoted(key, value).is_ok() {
-                        if let Ok(mut worker_stats) = stats.lock() {
-                            worker_stats.tier_transitions += 1;
-                        }
+                        let _ = stat_sender.send(StatUpdate::Promotion);
+                        let _ = stat_sender.send(StatUpdate::TierTransition);
                     }
                 }
             }
@@ -65,13 +66,13 @@ pub fn check_tier_transitions<K: CacheKey + Clone, V: CacheValue + Clone>(
     }
 
     // Check for demotions - hot to warm
-    let idle_hot_keys: Vec<K> = hot::get_idle_keys(HOT_TO_WARM_IDLE_THRESHOLD);
+    let idle_hot_keys: Vec<K> = hot::get_idle_keys::<K>(HOT_TO_WARM_IDLE_THRESHOLD);
     for key in idle_hot_keys {
-        if let Some(entry) = hot::remove_entry::<K, V>(&key) {
-            if warm::insert_demoted(key, entry).is_ok() {
-                if let Ok(mut worker_stats) = stats.lock() {
-                    worker_stats.tier_transitions += 1;
-                }
+        // MOVE value from hot to warm (no clone)
+        if let Some(value) = hot::remove_entry::<K, V>(&key) {
+            if warm::insert_demoted(key, value).is_ok() {
+                let _ = stat_sender.send(StatUpdate::Demotion);
+                let _ = stat_sender.send(StatUpdate::TierTransition);
             }
         }
     }
@@ -80,18 +81,19 @@ pub fn check_tier_transitions<K: CacheKey + Clone, V: CacheValue + Clone>(
     let idle_warm_keys: Vec<K> = warm::get_idle_keys::<K, V>(WARM_TO_COLD_IDLE_THRESHOLD);
     for key in idle_warm_keys {
         if let Some(value) = warm::warm_get::<K, V>(&key) {
-            if warm::remove_entry::<K, V>(&key).is_ok() {
-                if cold::insert_demoted(key, value).is_ok() {
-                    if let Ok(mut worker_stats) = stats.lock() {
-                        worker_stats.tier_transitions += 1;
-                    }
+            if warm::global_api::remove_entry::<K, V>(&key).is_ok() {
+                if cold::insert_demoted::<K, V>(key, value).is_ok() {
+                    let _ = stat_sender.send(StatUpdate::Demotion);
+                    let _ = stat_sender.send(StatUpdate::TierTransition);
                 }
             }
         }
     }
 
     // Update worker statistics - last tier check timestamp
-    if let Ok(mut worker_stats) = stats.lock() {
-        worker_stats.last_tier_check = Some(now);
-    }
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let _ = stat_sender.send(StatUpdate::SetLastTierCheck(now_ns));
 }

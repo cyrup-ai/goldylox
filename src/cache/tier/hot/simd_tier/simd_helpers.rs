@@ -3,7 +3,7 @@
 //! This module contains SIMD-accelerated helper functions for key hashing,
 //! parallel search, and context analysis.
 
-use super::super::types::SearchResult;
+use crate::cache::tier::hot::types::SearchResult;
 use super::core::SimdHotTier;
 use crate::cache::traits::core::{CacheKey, CacheValue};
 
@@ -53,7 +53,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                 collision_count += 1;
 
                 // Limit collision count to prevent infinite loops
-                if collision_count >= super::super::types::constants::MAX_COLLISION_COUNT {
+                if collision_count >= crate::cache::tier::hot::types::constants::MAX_COLLISION_COUNT {
                     break;
                 }
             }

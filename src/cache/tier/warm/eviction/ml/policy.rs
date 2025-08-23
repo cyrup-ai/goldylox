@@ -8,8 +8,8 @@ use std::sync::atomic::Ordering;
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::atomic::AtomicCell;
 
-use super::super::super::core::WarmCacheKey;
-use super::super::types::*;
+use crate::cache::tier::warm::core::WarmCacheKey;
+use crate::cache::tier::warm::eviction::types::*;
 use super::features::{FeatureVector, FEATURE_COUNT};
 use crate::cache::traits::AccessType;
 use crate::telemetry::cache::types::timestamp_nanos;
@@ -301,7 +301,7 @@ impl<K: crate::cache::traits::CacheKey> EvictionPolicy<WarmCacheKey<K>>
         }
     }
 
-    fn adapt(&mut self) {
+    fn adapt(&self) {
         // Connect to real feature vector system that already exists
         let current_time = crate::telemetry::cache::types::timestamp_nanos();
         

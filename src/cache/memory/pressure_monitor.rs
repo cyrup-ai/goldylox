@@ -10,7 +10,7 @@ pub use crate::cache::tier::warm::monitoring::alert_system::MemoryAlertSystem;
 pub use crate::cache::tier::warm::monitoring::usage_history::MemoryUsageHistory;
 pub use crate::cache::tier::warm::monitoring::trend_analysis::TrendAnalysis;
 
-use super::super::config::CacheConfig;
+use crate::cache::config::CacheConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Create advanced pressure monitor with configuration

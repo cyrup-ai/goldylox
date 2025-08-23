@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-pub use super::super::traits::ErrorCategory;
-use super::super::traits::*;
+pub use crate::cache::traits::ErrorCategory;
+use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
 #[derive(Debug, Clone)]

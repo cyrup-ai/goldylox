@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_skiplist::{SkipMap, SkipSet};
 
-use super::super::core::WarmCacheKey;
+use crate::cache::tier::warm::core::WarmCacheKey;
 use super::types::*;
 use crate::cache::traits::CacheKey;
 

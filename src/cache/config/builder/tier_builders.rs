@@ -5,7 +5,7 @@
 
 use arrayvec::ArrayString;
 
-use super::super::types::{ConfigError, SkipMapConfig};
+use crate::cache::config::types::{ConfigError, SkipMapConfig};
 use super::core::CacheConfigBuilder;
 
 impl CacheConfigBuilder {

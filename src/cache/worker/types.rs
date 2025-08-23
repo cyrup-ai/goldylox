@@ -3,36 +3,76 @@
 //! This module defines the main data structures used for background cache
 //! maintenance, task processing, and worker statistics tracking.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use crossbeam_utils::CachePadded;
 
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Sender, Receiver};
 
 use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::traits::types_and_enums::CacheOperationError;
+
+/// Stats update messages sent from worker thread to manager
+#[derive(Debug, Clone)]
+pub enum StatUpdate {
+    /// Task processed successfully
+    TaskProcessed,
+    /// Task added to queue
+    TaskQueued,
+    /// Entry promoted to higher tier
+    Promotion,
+    /// Entry demoted to lower tier
+    Demotion,
+    /// Cleanup operation completed
+    Cleanup,
+    /// Tier transition completed
+    TierTransition,
+    /// Number of entries cleaned
+    EntriesCleaned(u64),
+    /// Task processing time in nanoseconds
+    TaskTime(u64),
+    /// Set last maintenance timestamp
+    SetLastMaintenance(u64),
+    /// Set last tier check timestamp
+    SetLastTierCheck(u64),
+    /// Set last cleanup timestamp
+    SetLastCleanup(u64),
+    /// Update uptime in seconds
+    UpdateUptime(u64),
+}
 
 /// Background maintenance worker for cache system
 pub struct CacheMaintenanceWorker<K: CacheKey, V: CacheValue> {
     /// Worker thread handle
     pub worker_handle: Option<JoinHandle<()>>,
     /// Shutdown signal
-    pub shutdown: Arc<AtomicBool>,
+    pub shutdown: AtomicBool,
     /// Task channel sender
     pub task_sender: Sender<MaintenanceTask<K, V>>,
+    /// Task channel receiver (moved to worker thread on start)
+    task_receiver: Option<Receiver<MaintenanceTask<K, V>>>,
+    /// Stats update sender for worker to send updates
+    pub stat_sender: Sender<StatUpdate>,
+    /// Stats update receiver for manager to process updates
+    pub stat_receiver: Receiver<StatUpdate>,
     /// Worker statistics
-    pub stats: Arc<Mutex<WorkerStats>>,
+    pub stats: WorkerStats,
 }
 
 impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
     /// Create a new maintenance worker
     pub fn new() -> Self {
-        let (task_sender, _) = crossbeam::channel::unbounded();
+        let (task_sender, task_receiver) = crossbeam::channel::unbounded();
+        let (stat_sender, stat_receiver) = crossbeam::channel::unbounded();
         Self {
             worker_handle: None,
-            shutdown: Arc::new(AtomicBool::new(false)),
+            shutdown: AtomicBool::new(false),
             task_sender,
-            stats: Arc::new(Mutex::new(WorkerStats::default())),
+            task_receiver: Some(task_receiver),
+            stat_sender,
+            stat_receiver,
+            stats: WorkerStats::default(),
         }
     }
 
@@ -40,26 +80,68 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
     pub fn submit_task(
         &self,
         task: MaintenanceTask<K, V>,
-    ) -> Result<(), crate::cache::types::CacheOperationError> {
+    ) -> Result<(), CacheOperationError> {
+        // Send stats update for task queued
+        let _ = self.stat_sender.send(StatUpdate::TaskQueued);
         self.task_sender
             .send(task)
-            .map_err(|_| crate::cache::types::CacheOperationError::OperationFailed)
+            .map_err(|_| CacheOperationError::OperationFailed)
     }
 
     /// Get worker statistics
-    pub fn stats(&self) -> WorkerStats {
-        match self.stats.lock() {
-            Ok(stats) => stats.clone(),
-            Err(poisoned) => {
-                // Handle mutex poisoning gracefully - return recovered data or default
-                eprintln!("Warning: Worker stats mutex poisoned, recovering data");
-                poisoned.into_inner().clone()
+    pub fn stats(&mut self) -> WorkerStatsSnapshot {
+        // Process any pending stat updates first
+        self.process_stat_updates();
+        self.stats.snapshot()
+    }
+
+    /// Process pending stat updates from worker thread
+    pub fn process_stat_updates(&mut self) {
+        while let Ok(update) = self.stat_receiver.try_recv() {
+            match update {
+                StatUpdate::TaskProcessed => {
+                    self.stats.tasks_processed.fetch_add(1, Ordering::Relaxed);
+                    self.stats.tasks_queued.fetch_sub(1, Ordering::Relaxed);
+                }
+                StatUpdate::TaskQueued => {
+                    self.stats.tasks_queued.fetch_add(1, Ordering::Relaxed);
+                }
+                StatUpdate::Promotion => {
+                    self.stats.promotions.fetch_add(1, Ordering::Relaxed);
+                }
+                StatUpdate::Demotion => {
+                    self.stats.demotions.fetch_add(1, Ordering::Relaxed);
+                }
+                StatUpdate::Cleanup => {
+                    self.stats.cleanups.fetch_add(1, Ordering::Relaxed);
+                }
+                StatUpdate::TierTransition => {
+                    self.stats.tier_transitions.fetch_add(1, Ordering::Relaxed);
+                }
+                StatUpdate::EntriesCleaned(count) => {
+                    self.stats.entries_cleaned.fetch_add(count, Ordering::Relaxed);
+                }
+                StatUpdate::TaskTime(ns) => {
+                    self.stats.update_avg_task_time(ns);
+                }
+                StatUpdate::SetLastMaintenance(ns) => {
+                    self.stats.last_maintenance_ns.store(ns, Ordering::Relaxed);
+                }
+                StatUpdate::SetLastTierCheck(ns) => {
+                    self.stats.last_tier_check_ns.store(ns, Ordering::Relaxed);
+                }
+                StatUpdate::SetLastCleanup(ns) => {
+                    self.stats.last_cleanup_ns.store(ns, Ordering::Relaxed);
+                }
+                StatUpdate::UpdateUptime(seconds) => {
+                    self.stats.uptime_seconds.store(seconds, Ordering::Relaxed);
+                }
             }
         }
     }
 
     /// Schedule automatic maintenance
-    pub fn schedule_maintenance(&self) -> Result<(), crate::cache::types::CacheOperationError> {
+    pub fn schedule_maintenance(&self) -> Result<(), CacheOperationError> {
         // Submit various maintenance tasks
         self.submit_task(MaintenanceTask::CleanupExpired)?;
         self.submit_task(MaintenanceTask::UpdateStatistics)?;
@@ -71,9 +153,9 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
 #[derive(Debug, Clone)]
 pub enum MaintenanceTask<K: CacheKey, V: CacheValue> {
     /// Promote entry from cold to warm tier
-    Promote { key: K, value: Arc<V> },
+    Promote { key: K, value: V },
     /// Demote entry from warm to cold tier
-    Demote { key: K, value: Arc<V> },
+    Demote { key: K, value: V },
     /// Cleanup expired entries
     CleanupExpired,
     /// Compact cold tier storage
@@ -84,50 +166,114 @@ pub enum MaintenanceTask<K: CacheKey, V: CacheValue> {
     UpdateStatistics,
 }
 
-/// Worker performance statistics
-#[derive(Debug, Clone)]
+/// Worker performance statistics with lock-free atomic fields
+#[derive(Debug)]
 pub struct WorkerStats {
     /// Total tasks processed
-    pub tasks_processed: u64,
+    pub tasks_processed: CachePadded<AtomicU64>,
     /// Tasks currently queued
-    pub tasks_queued: u64,
+    pub tasks_queued: CachePadded<AtomicU64>,
     /// Average task processing time
-    pub avg_task_time_ns: u64,
+    pub avg_task_time_ns: CachePadded<AtomicU64>,
     /// Worker uptime
-    pub uptime_seconds: u64,
-    /// Last maintenance run
-    pub last_maintenance: Option<Instant>,
+    pub uptime_seconds: CachePadded<AtomicU64>,
+    
     /// Total promotions performed
-    pub promotions: u64,
+    pub promotions: CachePadded<AtomicU64>,
     /// Total demotions performed
-    pub demotions: u64,
-    /// Total cleanup operations
-    pub cleanups: u64,
+    pub demotions: CachePadded<AtomicU64>,
     /// Total tier transitions performed
-    pub tier_transitions: u64,
-    /// Last tier transition check
-    pub last_tier_check: Option<Instant>,
+    pub tier_transitions: CachePadded<AtomicU64>,
+    
+    /// Total cleanup operations
+    pub cleanups: CachePadded<AtomicU64>,
     /// Total entries cleaned across all operations
+    pub entries_cleaned: CachePadded<AtomicU64>,
+    
+    /// Last maintenance run (nanos since epoch)
+    pub last_maintenance_ns: AtomicU64,
+    /// Last tier transition check (nanos since epoch)
+    pub last_tier_check_ns: AtomicU64,
+    /// Last cleanup operation timestamp (nanos since epoch)
+    pub last_cleanup_ns: AtomicU64,
+}
+
+impl WorkerStats {
+    /// Atomic snapshot of all statistics
+    pub fn snapshot(&self) -> WorkerStatsSnapshot {
+        WorkerStatsSnapshot {
+            tasks_processed: self.tasks_processed.load(Ordering::Relaxed),
+            tasks_queued: self.tasks_queued.load(Ordering::Relaxed),
+            avg_task_time_ns: self.avg_task_time_ns.load(Ordering::Relaxed),
+            uptime_seconds: self.uptime_seconds.load(Ordering::Relaxed),
+            promotions: self.promotions.load(Ordering::Relaxed),
+            demotions: self.demotions.load(Ordering::Relaxed),
+            tier_transitions: self.tier_transitions.load(Ordering::Relaxed),
+            cleanups: self.cleanups.load(Ordering::Relaxed),
+            entries_cleaned: self.entries_cleaned.load(Ordering::Relaxed),
+            last_maintenance_ns: self.last_maintenance_ns.load(Ordering::Relaxed),
+            last_tier_check_ns: self.last_tier_check_ns.load(Ordering::Relaxed),
+            last_cleanup_ns: self.last_cleanup_ns.load(Ordering::Relaxed),
+        }
+    }
+    
+    /// Update average task time using atomic CAS loop
+    pub fn update_avg_task_time(&self, new_time_ns: u64) {
+        let count = self.tasks_processed.load(Ordering::Relaxed);
+        if count == 0 {
+            self.avg_task_time_ns.store(new_time_ns, Ordering::Relaxed);
+            return;
+        }
+        
+        // Atomic update of running average
+        let mut current = self.avg_task_time_ns.load(Ordering::Relaxed);
+        loop {
+            let new_avg = (current * (count - 1) + new_time_ns) / count;
+            match self.avg_task_time_ns.compare_exchange_weak(
+                current,
+                new_avg,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
+/// Snapshot for cloning stats without locks
+#[derive(Debug, Clone)]
+pub struct WorkerStatsSnapshot {
+    pub tasks_processed: u64,
+    pub tasks_queued: u64,
+    pub avg_task_time_ns: u64,
+    pub uptime_seconds: u64,
+    pub promotions: u64,
+    pub demotions: u64,
+    pub tier_transitions: u64,
+    pub cleanups: u64,
     pub entries_cleaned: u64,
-    /// Last cleanup operation timestamp
-    pub last_cleanup: Option<Instant>,
+    pub last_maintenance_ns: u64,
+    pub last_tier_check_ns: u64,
+    pub last_cleanup_ns: u64,
 }
 
 impl Default for WorkerStats {
     fn default() -> Self {
         Self {
-            tasks_processed: 0,
-            tasks_queued: 0,
-            avg_task_time_ns: 0,
-            uptime_seconds: 0,
-            last_maintenance: None,
-            promotions: 0,
-            demotions: 0,
-            cleanups: 0,
-            tier_transitions: 0,
-            last_tier_check: None,
-            entries_cleaned: 0,
-            last_cleanup: None,
+            tasks_processed: CachePadded::new(AtomicU64::new(0)),
+            tasks_queued: CachePadded::new(AtomicU64::new(0)),
+            avg_task_time_ns: CachePadded::new(AtomicU64::new(0)),
+            uptime_seconds: CachePadded::new(AtomicU64::new(0)),
+            promotions: CachePadded::new(AtomicU64::new(0)),
+            demotions: CachePadded::new(AtomicU64::new(0)),
+            tier_transitions: CachePadded::new(AtomicU64::new(0)),
+            cleanups: CachePadded::new(AtomicU64::new(0)),
+            entries_cleaned: CachePadded::new(AtomicU64::new(0)),
+            last_maintenance_ns: AtomicU64::new(0),
+            last_tier_check_ns: AtomicU64::new(0),
+            last_cleanup_ns: AtomicU64::new(0),
         }
     }
 }

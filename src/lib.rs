@@ -20,5 +20,5 @@ pub mod telemetry;
 // REMOVED: Compatibility re-exports that hide canonical API paths
 // These re-exports enabled broken code to import via the root instead of explicit paths
 // Users must now import from canonical module paths:
-// - Use blitz_cache::cache::coordinator:: for coordinator functionality
+// - Use goldylox::cache::coordinator:: for coordinator functionality
 // - Use specific cache::* imports instead of wildcard re-exports

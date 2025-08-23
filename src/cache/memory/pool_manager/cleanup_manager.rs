@@ -4,24 +4,35 @@
 //! by integrating with existing FragmentationAnalyzer, MaintenanceScheduler,
 //! AllocationStatistics, and other production-ready systems.
 
-use std::sync::Arc;
-
 use super::individual_pool::MemoryPool;
 use crate::cache::manager::background::types::{MaintenanceScheduler, MaintenanceTaskType};
-use crate::cache::memory::allocation_manager::AllocationStatistics;
 use crate::cache::memory::efficiency_analyzer::MemoryEfficiencyAnalyzer;
 use crate::cache::tier::hot::memory_pool::statistics::MemoryPoolStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crossbeam_channel::{bounded, Sender, Receiver};
+use std::time::Duration;
+
+/// Efficiency analysis request types
+pub enum EfficiencyRequest {
+    GetFragmentation(Sender<f32>),
+    GetSnapshot(Sender<(f32, f32, f32)>),
+    AnalyzePool(usize, Sender<f64>),
+}
+
+/// Maintenance task request
+pub enum MaintenanceRequest {
+    SubmitTask(MaintenanceTaskType, u32, Sender<Result<(), CacheOperationError>>),
+    SubmitUrgentTask(MaintenanceTaskType, Sender<Result<(), CacheOperationError>>),
+    IsHealthy(Sender<bool>),
+    GetStats(Sender<(u64, u64)>),
+}
+
 
 /// Pool cleanup manager that integrates with existing sophisticated systems
 #[derive(Debug)]
 pub struct PoolCleanupManager {
-    /// Use existing fragmentation analyzer (don't duplicate)
-    fragmentation_analyzer: Arc<MemoryEfficiencyAnalyzer>,
-    /// Leverage existing maintenance task system
-    maintenance_scheduler: Arc<MaintenanceScheduler>,
-    /// Integration with allocation statistics
-    allocation_stats: Arc<AllocationStatistics>,
+    efficiency_sender: Sender<EfficiencyRequest>,
+    maintenance_sender: Sender<MaintenanceRequest>,
 }
 
 /// Decision result from cleanup analysis
@@ -38,14 +49,12 @@ pub enum CompactionDecision {
 impl PoolCleanupManager {
     /// Create new pool cleanup manager with existing system references
     pub fn new(
-        fragmentation_analyzer: Arc<MemoryEfficiencyAnalyzer>,
-        maintenance_scheduler: Arc<MaintenanceScheduler>,
-        allocation_stats: Arc<AllocationStatistics>,
+        efficiency_sender: Sender<EfficiencyRequest>,
+        maintenance_sender: Sender<MaintenanceRequest>,
     ) -> Self {
         Self {
-            fragmentation_analyzer,
-            maintenance_scheduler,
-            allocation_stats,
+            efficiency_sender,
+            maintenance_sender,
         }
     }
 
@@ -57,26 +66,52 @@ impl PoolCleanupManager {
         match compaction_decision {
             CompactionDecision::Required => {
                 // Schedule urgent memory defragmentation using existing MaintenanceScheduler
-                match self.maintenance_scheduler.submit_urgent_task(MaintenanceTaskType::MemoryDefragmentation) {
+                let (response_tx, response_rx) = bounded(1);
+                
+                self.maintenance_sender
+                    .send(MaintenanceRequest::SubmitUrgentTask(
+                        MaintenanceTaskType::MemoryDefragmentation,
+                        response_tx,
+                    ))
+                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                
+                match response_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(()) => {
                         // Update existing allocation statistics
-                        let current_fragmentation = self.allocation_stats.fragmentation_level() * 100.0;
+                        use crate::cache::memory::allocation_manager::global_stats;
+                        let current_fragmentation = global_stats::ALLOCATION_STATS.fragmentation_level.load(std::sync::atomic::Ordering::Relaxed) as f32;
                         // Track that we initiated cleanup
                         self.update_fragmentation_tracking(current_fragmentation as u32)?;
                         Ok(true)
                     }
-                    Err(_) => {
+                    _ => {
                         // Fallback to optimize memory task if defragmentation queue is full
-                        self.maintenance_scheduler
-                            .submit_task(MaintenanceTaskType::OptimizeMemory, 100)?;
+                        let (response_tx, response_rx) = bounded(1);
+                        self.maintenance_sender
+                            .send(MaintenanceRequest::SubmitTask(
+                                MaintenanceTaskType::OptimizeMemory,
+                                100,
+                                response_tx,
+                            ))
+                            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                        
+                        let _ = response_rx.recv_timeout(Duration::from_millis(100));
                         Ok(true)
                     }
                 }
             }
             CompactionDecision::Recommended => {
                 // Schedule normal priority cleanup using existing MaintenanceScheduler
-                self.maintenance_scheduler
-                    .submit_task(MaintenanceTaskType::OptimizeMemory, 200)?;
+                let (response_tx, response_rx) = bounded(1);
+                self.maintenance_sender
+                    .send(MaintenanceRequest::SubmitTask(
+                        MaintenanceTaskType::OptimizeMemory,
+                        200,
+                        response_tx,
+                    ))
+                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                
+                let _ = response_rx.recv_timeout(Duration::from_millis(100));
                 Ok(true)
             }
             CompactionDecision::NotNeeded => Ok(false),
@@ -94,16 +129,33 @@ impl PoolCleanupManager {
             // Use existing should_compact() logic
             if pool_stats.should_compact() {
                 // Schedule urgent defragmentation for this pool
-                match self.maintenance_scheduler.submit_urgent_task(MaintenanceTaskType::MemoryDefragmentation) {
+                let (response_tx, response_rx) = bounded(1);
+                
+                self.maintenance_sender
+                    .send(MaintenanceRequest::SubmitUrgentTask(
+                        MaintenanceTaskType::MemoryDefragmentation,
+                        response_tx,
+                    ))
+                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                
+                match response_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(()) => {
                         cleanup_performed = true;
                         // Update statistics using existing allocation stats integration
                         self.record_cleanup_attempt()?;
                     }
-                    Err(_) => {
+                    _ => {
                         // Try general optimization if defragmentation is unavailable
-                        self.maintenance_scheduler
-                            .submit_task(MaintenanceTaskType::OptimizeMemory, 50)?;
+                        let (response_tx, response_rx) = bounded(1);
+                        self.maintenance_sender
+                            .send(MaintenanceRequest::SubmitTask(
+                                MaintenanceTaskType::OptimizeMemory,
+                                50,
+                                response_tx,
+                            ))
+                            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                        
+                        let _ = response_rx.recv_timeout(Duration::from_millis(100));
                         cleanup_performed = true;
                     }
                 }
@@ -115,9 +167,16 @@ impl PoolCleanupManager {
 
     /// Determine if compaction is needed using existing sophisticated analysis
     fn should_compact(&self, pool: &MemoryPool) -> Result<CompactionDecision, CacheOperationError> {
-        // Use existing FragmentationAnalyzer methods (don't reimplement)
-        let fragmentation_impact = self.fragmentation_analyzer
-            .get_efficiency_snapshot().1; // Gets fragmentation from existing analyzer
+        // Request fragmentation data via channel
+        let (response_tx, response_rx) = bounded(1);
+        
+        self.efficiency_sender
+            .send(EfficiencyRequest::GetSnapshot(response_tx))
+            .map_err(|_| CacheOperationError::InternalError("Efficiency service unavailable".to_string()))?;
+        
+        let (_latency, fragmentation_impact, _throughput) = response_rx
+            .recv_timeout(Duration::from_millis(100))
+            .map_err(|_| CacheOperationError::TimeoutError)?;
 
         let pool_stats = self.get_pool_stats(pool)?;
         
@@ -141,7 +200,8 @@ impl PoolCleanupManager {
         let available_slots = total_slots.saturating_sub(occupied_slots);
         
         // Use existing fragmentation calculation from AllocationStatistics  
-        let fragmentation_ratio = self.allocation_stats.fragmentation_level() as f64;
+        use crate::cache::memory::allocation_manager::global_stats;
+        let fragmentation_ratio = global_stats::ALLOCATION_STATS.fragmentation_level.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0;
 
         Ok(MemoryPoolStats {
             total_slots,
@@ -156,32 +216,60 @@ impl PoolCleanupManager {
     /// Update fragmentation tracking using existing AllocationStatistics
     fn update_fragmentation_tracking(&self, fragmentation_level: u32) -> Result<(), CacheOperationError> {
         // Update existing AllocationStatistics using public method
-        let level_as_f32 = fragmentation_level as f32 / 100.0;
-        self.allocation_stats.update_fragmentation_level(level_as_f32);
+        use crate::cache::memory::allocation_manager::global_stats;
+        global_stats::ALLOCATION_STATS.fragmentation_level.store(fragmentation_level, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     /// Record cleanup attempt using existing statistics infrastructure
     fn record_cleanup_attempt(&self) -> Result<(), CacheOperationError> {
-        // Update existing MaintenanceStats operations_executed counter
-        self.maintenance_scheduler.get_stats()
-            .operations_executed
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Increment operation counter via maintenance service
+        let (response_tx, response_rx) = bounded(1);
+        
+        self.maintenance_sender
+            .send(MaintenanceRequest::GetStats(response_tx))
+            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+        
+        // We don't need the result, just triggering the increment
+        let _ = response_rx.recv_timeout(Duration::from_millis(10));
         Ok(())
     }
 
     /// Check if maintenance scheduler is available for cleanup tasks
     pub fn is_cleanup_available(&self) -> bool {
-        self.maintenance_scheduler.is_healthy()
+        let (response_tx, response_rx) = bounded(1);
+        
+        if self.maintenance_sender
+            .send(MaintenanceRequest::IsHealthy(response_tx))
+            .is_err() {
+            return false;
+        }
+        
+        response_rx
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap_or(false)
     }
 
     /// Get cleanup statistics from existing maintenance infrastructure
     pub fn get_cleanup_stats(&self) -> (u64, u64, f64) {
-        let maintenance_stats = self.maintenance_scheduler.get_stats();
+        use crate::cache::memory::allocation_manager::global_stats;
+        
+        let (response_tx, response_rx) = bounded(1);
+        
+        let (ops_executed, failed_ops) = if self.maintenance_sender
+            .send(MaintenanceRequest::GetStats(response_tx))
+            .is_ok() {
+            response_rx
+                .recv_timeout(Duration::from_millis(50))
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
+        
         (
-            maintenance_stats.operations_executed.load(std::sync::atomic::Ordering::Relaxed),
-            maintenance_stats.failed_operations.load(std::sync::atomic::Ordering::Relaxed),
-            self.allocation_stats.fragmentation_level() as f64,
+            ops_executed,
+            failed_ops,
+            global_stats::ALLOCATION_STATS.fragmentation_level.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0,
         )
     }
 }

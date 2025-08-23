@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use blitz_cache::cache::tier::warm::{
+use goldylox::cache::tier::warm::{
     builder::WarmTierBuilder,
     core::LockFreeWarmTier,
     data_structures::WarmTierConfig,

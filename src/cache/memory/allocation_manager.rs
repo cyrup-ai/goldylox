@@ -9,8 +9,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_utils::CachePadded;
 
-use std::sync::Arc;
-
 use super::pool_manager::MemoryPoolManager;
 use super::pressure_monitor::MemoryPressureMonitor;
 use super::types::MemoryStatistics;
@@ -19,66 +17,215 @@ use crate::cache::manager::error_recovery::core::ErrorRecoverySystem;
 use crate::cache::manager::error_recovery::types::{BackoffStrategy, ErrorType, RecoveryStrategy};
 use crate::cache::manager::background::types::{MaintenanceConfig, MaintenanceScheduler};
 use crate::cache::memory::efficiency_analyzer::MemoryEfficiencyAnalyzer;
-use crate::cache::memory::pool_manager::cleanup_manager::PoolCleanupManager;
+use crate::cache::memory::pool_manager::cleanup_manager::{PoolCleanupManager, EfficiencyRequest, MaintenanceRequest};
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crossbeam_channel::{bounded, Receiver};
+
+/// Global allocation statistics module - no Arc needed
+pub mod global_stats {
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use crossbeam_utils::CachePadded;
+    
+    pub struct GlobalAllocationStats {
+        pub total_allocated: CachePadded<AtomicU64>,
+        pub peak_allocation: CachePadded<AtomicU64>,
+        pub active_allocations: CachePadded<AtomicUsize>,
+        pub allocation_operations: CachePadded<AtomicU64>,
+        pub deallocation_operations: CachePadded<AtomicU64>,
+        pub allocation_failures: CachePadded<AtomicU64>,
+        pub fragmentation_level: CachePadded<AtomicU32>,
+        pub avg_allocation_size: CachePadded<AtomicUsize>,
+    }
+    
+    impl GlobalAllocationStats {
+        const fn new() -> Self {
+            Self {
+                total_allocated: CachePadded::new(AtomicU64::new(0)),
+                peak_allocation: CachePadded::new(AtomicU64::new(0)),
+                active_allocations: CachePadded::new(AtomicUsize::new(0)),
+                allocation_operations: CachePadded::new(AtomicU64::new(0)),
+                deallocation_operations: CachePadded::new(AtomicU64::new(0)),
+                allocation_failures: CachePadded::new(AtomicU64::new(0)),
+                fragmentation_level: CachePadded::new(AtomicU32::new(0)),
+                avg_allocation_size: CachePadded::new(AtomicUsize::new(1024)),
+            }
+        }
+    }
+    
+    pub static ALLOCATION_STATS: GlobalAllocationStats = GlobalAllocationStats::new();
+    
+    pub struct GlobalPoolStats {
+        pub pool_utilizations: [CachePadded<AtomicU32>; 3], // Small, Medium, Large
+        pub pool_allocations: [CachePadded<AtomicU64>; 3],
+        pub pool_hit_rates: [CachePadded<AtomicU32>; 3],
+    }
+    
+    impl GlobalPoolStats {
+        const fn new() -> Self {
+            Self {
+                pool_utilizations: [
+                    CachePadded::new(AtomicU32::new(0)),
+                    CachePadded::new(AtomicU32::new(0)),
+                    CachePadded::new(AtomicU32::new(0)),
+                ],
+                pool_allocations: [
+                    CachePadded::new(AtomicU64::new(0)),
+                    CachePadded::new(AtomicU64::new(0)),
+                    CachePadded::new(AtomicU64::new(0)),
+                ],
+                pool_hit_rates: [
+                    CachePadded::new(AtomicU32::new(9500)),
+                    CachePadded::new(AtomicU32::new(9000)),
+                    CachePadded::new(AtomicU32::new(8500)),
+                ],
+            }
+        }
+    }
+    
+    pub static POOL_STATS: GlobalPoolStats = GlobalPoolStats::new();
+}
 
 /// Advanced memory manager with atomic allocation tracking
 #[derive(Debug)]
 pub struct AllocationManager {
-    /// Global allocation statistics
-    allocation_stats: Arc<AllocationStatistics>,
     /// Memory pool manager for efficient allocation
     pool_manager: MemoryPoolManager,
+    /// Cleanup manager owned directly
+    cleanup_manager: PoolCleanupManager,
     /// Error recovery system for sophisticated retry mechanisms
     error_recovery: ErrorRecoverySystem,
     /// Memory pressure monitor for pressure-aware retries
     pressure_monitor: MemoryPressureMonitor,
 }
 
-/// Atomic allocation statistics for performance monitoring
-#[derive(Debug)]
-pub struct AllocationStatistics {
-    /// Total allocated memory (bytes)
-    total_allocated: CachePadded<AtomicU64>,
-    /// Peak allocation reached (bytes)
-    peak_allocation: CachePadded<AtomicU64>,
-    /// Current active allocations count
-    active_allocations: CachePadded<AtomicUsize>,
-    /// Total allocation operations performed
-    allocation_operations: CachePadded<AtomicU64>,
-    /// Total deallocation operations performed
-    deallocation_operations: CachePadded<AtomicU64>,
-    /// Failed allocation attempts
-    allocation_failures: CachePadded<AtomicU64>,
-    /// Memory fragmentation level (percentage * 100)
-    fragmentation_level: CachePadded<AtomicU32>,
-    /// Average allocation size (bytes)
-    avg_allocation_size: CachePadded<AtomicUsize>,
+/// Efficiency analysis worker
+pub struct EfficiencyWorker {
+    receiver: Receiver<EfficiencyRequest>,
+    analyzer: MemoryEfficiencyAnalyzer,
+}
+
+impl EfficiencyWorker {
+    pub fn run(mut self) {
+        while let Ok(request) = self.receiver.recv() {
+            match request {
+                EfficiencyRequest::GetFragmentation(response) => {
+                    let (_, frag, _) = self.analyzer.get_efficiency_snapshot();
+                    let _ = response.send(frag);
+                }
+                EfficiencyRequest::GetSnapshot(response) => {
+                    let snapshot = self.analyzer.get_efficiency_snapshot();
+                    let _ = response.send(snapshot);
+                }
+                EfficiencyRequest::AnalyzePool(pool_id, response) => {
+                    // Calculate pool-specific fragmentation from global pool stats
+                    let fragmentation = if pool_id < 3 {
+                        // Get utilization from global pool stats (stored as percentage * 100)
+                        let utilization = global_stats::POOL_STATS.pool_utilizations[pool_id]
+                            .load(std::sync::atomic::Ordering::Relaxed) as f64 / 10000.0;
+                        // Fragmentation is inverse of utilization
+                        1.0 - utilization
+                    } else {
+                        0.0 // Invalid pool ID
+                    };
+                    let _ = response.send(fragmentation);
+                }
+            }
+        }
+    }
+}
+
+/// Maintenance scheduler worker
+pub struct MaintenanceWorker {
+    receiver: Receiver<MaintenanceRequest>,
+    scheduler: MaintenanceScheduler,
+}
+
+impl MaintenanceWorker {
+    pub fn run(mut self) {
+        while let Ok(request) = self.receiver.recv() {
+            match request {
+                MaintenanceRequest::SubmitTask(task_type, priority, response) => {
+                    let result = self.scheduler.submit_task(task_type, priority);
+                    let _ = response.send(result);
+                }
+                MaintenanceRequest::SubmitUrgentTask(task_type, response) => {
+                    let result = self.scheduler.submit_urgent_task(task_type);
+                    let _ = response.send(result);
+                }
+                MaintenanceRequest::IsHealthy(response) => {
+                    let healthy = self.scheduler.is_healthy();
+                    let _ = response.send(healthy);
+                }
+                MaintenanceRequest::GetStats(response) => {
+                    let stats = self.scheduler.get_stats();
+                    let ops = stats.operations_executed.load(std::sync::atomic::Ordering::Relaxed);
+                    let failed = stats.failed_operations.load(std::sync::atomic::Ordering::Relaxed);
+                    let _ = response.send((ops, failed));
+                }
+            }
+        }
+    }
 }
 
 impl AllocationManager {
     /// Create new allocation manager with configuration
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
-        // Create shared allocation statistics for system integration
-        let allocation_stats = Arc::new(AllocationStatistics::new());
+        // Create channels for background services
+        let (efficiency_sender, efficiency_receiver) = bounded(256);
+        let (maintenance_sender, maintenance_receiver) = bounded(256);
         
-        // Create sophisticated systems with shared references
-        let efficiency_analyzer = Arc::new(MemoryEfficiencyAnalyzer::new(config)?);
-        let maintenance_scheduler = Arc::new(MaintenanceScheduler::new(MaintenanceConfig::default())?);
         
-        // Create cleanup manager that integrates existing systems
-        let cleanup_manager = Arc::new(PoolCleanupManager::new(
-            efficiency_analyzer,
-            maintenance_scheduler,
-            allocation_stats.clone(),
-        ));
+        // Spawn efficiency analyzer worker
+        let config_clone = config.clone();
+        std::thread::Builder::new()
+            .name("efficiency-analyzer".to_string())
+            .spawn(move || {
+                let analyzer = match MemoryEfficiencyAnalyzer::new(&config_clone) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("Efficiency analyzer failed to start: {:?}", e);
+                        return;
+                    }
+                };
+                let worker = EfficiencyWorker {
+                    receiver: efficiency_receiver,
+                    analyzer,
+                };
+                worker.run();
+            })
+            .map_err(|e| CacheOperationError::InitializationFailed(e.to_string()))?;
         
-        // Create pool manager with cleanup integration
-        let pool_manager = MemoryPoolManager::new_with_cleanup(config, Some(cleanup_manager))?;
+        // Spawn maintenance scheduler worker
+        std::thread::Builder::new()
+            .name("maintenance-scheduler".to_string())
+            .spawn(move || {
+                let scheduler = match MaintenanceScheduler::new(MaintenanceConfig::default()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Maintenance scheduler failed to start: {:?}", e);
+                        return;
+                    }
+                };
+                let worker = MaintenanceWorker {
+                    receiver: maintenance_receiver,
+                    scheduler,
+                };
+                worker.run();
+            })
+            .map_err(|e| CacheOperationError::InitializationFailed(e.to_string()))?;
+        
+        // Create cleanup manager with channels
+        let cleanup_manager = PoolCleanupManager::new(
+            efficiency_sender.clone(),
+            maintenance_sender.clone(),
+        );
+        
+        // Create pool manager
+        let pool_manager = MemoryPoolManager::new(config)?;
         
         Ok(Self {
-            allocation_stats,
             pool_manager,
+            cleanup_manager,
             error_recovery: ErrorRecoverySystem::new(),
             pressure_monitor: MemoryPressureMonitor::new(config)?,
         })
@@ -89,13 +236,13 @@ impl AllocationManager {
         let _timer = Instant::now();
 
         // Update allocation statistics
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .total_allocated
             .fetch_add(size as u64, Ordering::Relaxed);
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .allocation_operations
             .fetch_add(1, Ordering::Relaxed);
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .active_allocations
             .fetch_add(1, Ordering::Relaxed);
 
@@ -120,7 +267,7 @@ impl AllocationManager {
             }
             Err(_) => {
                 // Handle allocation failure
-                self.allocation_stats
+                global_stats::ALLOCATION_STATS
                     .allocation_failures
                     .fetch_add(1, Ordering::Relaxed);
 
@@ -133,13 +280,13 @@ impl AllocationManager {
     /// Deallocate memory with pool coordination
     pub fn deallocate(&self, ptr: NonNull<u8>, size: usize) -> Result<(), CacheOperationError> {
         // Update deallocation statistics
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .total_allocated
             .fetch_sub(size as u64, Ordering::Relaxed);
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .deallocation_operations
             .fetch_add(1, Ordering::Relaxed);
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .active_allocations
             .fetch_sub(1, Ordering::Relaxed);
 
@@ -156,42 +303,30 @@ impl AllocationManager {
     /// Get current memory statistics
     pub fn get_memory_stats(&self) -> MemoryStatistics {
         MemoryStatistics {
-            total_allocated: self
-                .allocation_stats
+            total_allocated: global_stats::ALLOCATION_STATS
                 .total_allocated
                 .load(Ordering::Relaxed),
-            peak_allocation: self
-                .allocation_stats
+            peak_allocation: global_stats::ALLOCATION_STATS
                 .peak_allocation
                 .load(Ordering::Relaxed),
-            active_allocations: self
-                .allocation_stats
+            active_allocations: global_stats::ALLOCATION_STATS
                 .active_allocations
                 .load(Ordering::Relaxed),
-            allocation_operations: self
-                .allocation_stats
+            allocation_operations: global_stats::ALLOCATION_STATS
                 .allocation_operations
                 .load(Ordering::Relaxed),
-            deallocation_operations: self
-                .allocation_stats
+            deallocation_operations: global_stats::ALLOCATION_STATS
                 .deallocation_operations
                 .load(Ordering::Relaxed),
-            allocation_failures: self
-                .allocation_stats
+            allocation_failures: global_stats::ALLOCATION_STATS
                 .allocation_failures
                 .load(Ordering::Relaxed),
-            fragmentation_level: self
-                .allocation_stats
+            fragmentation_level: global_stats::ALLOCATION_STATS
                 .fragmentation_level
                 .load(Ordering::Relaxed) as f32
                 / 100.0,
             pressure_level: self.calculate_memory_pressure() as f32 / 100.0,
         }
-    }
-
-    /// Get allocation statistics reference
-    pub fn allocation_stats(&self) -> &Arc<AllocationStatistics> {
-        &self.allocation_stats
     }
 
     /// Get pool manager reference
@@ -201,17 +336,15 @@ impl AllocationManager {
 
     /// Update peak allocation atomically
     fn update_peak_allocation(&self) {
-        let current_total = self
-            .allocation_stats
+        let current_total = global_stats::ALLOCATION_STATS
             .total_allocated
             .load(Ordering::Relaxed);
-        let mut current_peak = self
-            .allocation_stats
+        let mut current_peak = global_stats::ALLOCATION_STATS
             .peak_allocation
             .load(Ordering::Relaxed);
 
         while current_total > current_peak {
-            match self.allocation_stats.peak_allocation.compare_exchange_weak(
+            match global_stats::ALLOCATION_STATS.peak_allocation.compare_exchange_weak(
                 current_peak,
                 current_total,
                 Ordering::Relaxed,
@@ -225,14 +358,13 @@ impl AllocationManager {
 
     /// Update average allocation size with exponential moving average
     fn update_avg_allocation_size(&self, size: usize) {
-        let current_avg = self
-            .allocation_stats
+        let current_avg = global_stats::ALLOCATION_STATS
             .avg_allocation_size
             .load(Ordering::Relaxed);
 
         // Exponential moving average with alpha = 0.1
         let new_avg = (current_avg * 9 + size) / 10;
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .avg_allocation_size
             .store(new_avg, Ordering::Relaxed);
     }
@@ -240,7 +372,7 @@ impl AllocationManager {
     /// Handle allocation failure with recovery strategies
     fn handle_allocation_failure(&self, size: usize) -> Result<NonNull<u8>, CacheOperationError> {
         // Record failure in existing atomic statistics (already exists)
-        self.allocation_stats
+        global_stats::ALLOCATION_STATS
             .allocation_failures
             .fetch_add(1, Ordering::Relaxed);
 
@@ -262,12 +394,10 @@ impl AllocationManager {
 
     /// Calculate current memory pressure level
     fn calculate_memory_pressure(&self) -> u32 {
-        let total_allocated = self
-            .allocation_stats
+        let total_allocated = global_stats::ALLOCATION_STATS
             .total_allocated
             .load(Ordering::Relaxed);
-        let active_allocations = self
-            .allocation_stats
+        let active_allocations = global_stats::ALLOCATION_STATS
             .active_allocations
             .load(Ordering::Relaxed);
 
@@ -381,99 +511,5 @@ impl AllocationManager {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
         let jitter = (nanos % (backoff_ms / 4 + 1)) as u32;
         Duration::from_millis((backoff_ms + jitter) as u64)
-    }
-}
-
-impl AllocationStatistics {
-    pub fn new() -> Self {
-        Self {
-            total_allocated: CachePadded::new(AtomicU64::new(0)),
-            peak_allocation: CachePadded::new(AtomicU64::new(0)),
-            active_allocations: CachePadded::new(AtomicUsize::new(0)),
-            allocation_operations: CachePadded::new(AtomicU64::new(0)),
-            deallocation_operations: CachePadded::new(AtomicU64::new(0)),
-            allocation_failures: CachePadded::new(AtomicU64::new(0)),
-            fragmentation_level: CachePadded::new(AtomicU32::new(0)),
-            avg_allocation_size: CachePadded::new(AtomicUsize::new(1024)), // 1KB default
-        }
-    }
-}
-
-impl Clone for AllocationStatistics {
-    fn clone(&self) -> Self {
-        Self {
-            total_allocated: CachePadded::new(AtomicU64::new(
-                self.total_allocated.load(Ordering::Relaxed)
-            )),
-            peak_allocation: CachePadded::new(AtomicU64::new(
-                self.peak_allocation.load(Ordering::Relaxed)
-            )),
-            active_allocations: CachePadded::new(AtomicUsize::new(
-                self.active_allocations.load(Ordering::Relaxed)
-            )),
-            allocation_operations: CachePadded::new(AtomicU64::new(
-                self.allocation_operations.load(Ordering::Relaxed)
-            )),
-            deallocation_operations: CachePadded::new(AtomicU64::new(
-                self.deallocation_operations.load(Ordering::Relaxed)
-            )),
-            allocation_failures: CachePadded::new(AtomicU64::new(
-                self.allocation_failures.load(Ordering::Relaxed)
-            )),
-            fragmentation_level: CachePadded::new(AtomicU32::new(
-                self.fragmentation_level.load(Ordering::Relaxed)
-            )),
-            avg_allocation_size: CachePadded::new(AtomicUsize::new(
-                self.avg_allocation_size.load(Ordering::Relaxed)
-            )),
-        }
-    }
-}
-
-impl AllocationStatistics {
-    /// Get total allocated memory
-    pub fn total_allocated(&self) -> u64 {
-        self.total_allocated.load(Ordering::Relaxed)
-    }
-
-    /// Get peak allocation
-    pub fn peak_allocation(&self) -> u64 {
-        self.peak_allocation.load(Ordering::Relaxed)
-    }
-
-    /// Get active allocations count
-    pub fn active_allocations(&self) -> usize {
-        self.active_allocations.load(Ordering::Relaxed)
-    }
-
-    /// Get allocation operations count
-    pub fn allocation_operations(&self) -> u64 {
-        self.allocation_operations.load(Ordering::Relaxed)
-    }
-
-    /// Get deallocation operations count
-    pub fn deallocation_operations(&self) -> u64 {
-        self.deallocation_operations.load(Ordering::Relaxed)
-    }
-
-    /// Get allocation failures count
-    pub fn allocation_failures(&self) -> u64 {
-        self.allocation_failures.load(Ordering::Relaxed)
-    }
-
-    /// Get fragmentation level
-    pub fn fragmentation_level(&self) -> f32 {
-        self.fragmentation_level.load(Ordering::Relaxed) as f32 / 100.0
-    }
-
-    /// Get average allocation size
-    pub fn avg_allocation_size(&self) -> usize {
-        self.avg_allocation_size.load(Ordering::Relaxed)
-    }
-
-    /// Update fragmentation level atomically (used by cleanup systems)
-    pub fn update_fragmentation_level(&self, level: f32) {
-        let level_as_u32 = (level * 100.0) as u32;
-        self.fragmentation_level.store(level_as_u32, Ordering::Relaxed);
     }
 }

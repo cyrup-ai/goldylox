@@ -18,7 +18,7 @@ pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     /// Inter-tier communication channels
     pub communication_hub: super::communication::CommunicationHub<K, V>,
     /// Atomic coherence statistics
-    pub coherence_stats: super::statistics::CoherenceStatistics,
+    pub coherence_stats: crate::cache::coherence::CoherenceStatistics,
     /// Protocol configuration
     pub protocol_config: ProtocolConfiguration,
     /// State transition validator
@@ -294,7 +294,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         Self {
             cache_line_states: SkipMap::new(),
             communication_hub: super::communication::CommunicationHub::new(),
-            coherence_stats: super::statistics::CoherenceStatistics::new(),
+            coherence_stats: crate::cache::coherence::CoherenceStatistics::new(),
             protocol_config: config,
             transition_validator: super::state_management::StateTransitionValidator::new(),
             invalidation_manager: super::invalidation::InvalidationManager::new(1000),

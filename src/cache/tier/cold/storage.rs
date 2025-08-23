@@ -7,14 +7,15 @@ use std::fs::{File, OpenOptions};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::thread;
+use crossbeam_channel::{bounded, Sender, Receiver};
 use std::time::Instant;
 
-use ahash::AHashMap;
+use dashmap::DashMap;
 
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::traits::CompressionAlgorithm;
+use crate::cache::traits::CompressionAlgorithm;
 
 /// Cold tier cache entry metadata
 #[derive(Debug, Clone)]
@@ -40,12 +41,38 @@ pub struct ColdTierStats {
     pub storage_bytes: u64,
 }
 
+/// File I/O operations for channel-based coordination
+enum FileOperation {
+    Read {
+        offset: u64,
+        size: usize,
+        response: crossbeam_channel::Sender<Result<Vec<u8>, std::io::Error>>,
+    },
+    Write {
+        offset: u64,
+        data: Vec<u8>,
+        response: crossbeam_channel::Sender<Result<(), std::io::Error>>,
+    },
+    Sync {
+        response: crossbeam_channel::Sender<Result<(), std::io::Error>>,
+    },
+    GetSize {
+        response: crossbeam_channel::Sender<Result<u64, std::io::Error>>,
+    },
+    Truncate {
+        size: u64,
+        response: crossbeam_channel::Sender<Result<(), std::io::Error>>,
+    },
+}
+
 /// Cold tier with persistent file-based storage
 pub struct ColdTierCache<K: CacheKey, V: CacheValue> {
-    /// File handle for cache storage
-    pub storage_file: Arc<Mutex<File>>,
+    /// Channel for file I/O operations
+    pub file_ops: Sender<FileOperation>,
+    /// Handle to I/O thread (for cleanup)
+    file_io_thread: Option<thread::JoinHandle<()>>,
     /// In-memory index for fast lookups
-    pub index: Arc<Mutex<AHashMap<K, ColdEntry>>>,
+    pub index: DashMap<K, ColdEntry>,
     /// Storage directory path
     pub storage_path: PathBuf,
     /// Maximum file size before rotation
@@ -67,6 +94,51 @@ static COLD_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 static COLD_STORAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 
 impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
+    /// Spawn dedicated I/O thread that owns the File
+    fn spawn_io_thread(mut file: File) -> (Sender<FileOperation>, thread::JoinHandle<()>) {
+        let (tx, rx) = bounded::<FileOperation>(100);
+        
+        let handle = thread::spawn(move || {
+            use std::io::{Read, Write, Seek, SeekFrom};
+            
+            while let Ok(op) = rx.recv() {
+                match op {
+                    FileOperation::Read { offset, size, response } => {
+                        let result = (|| {
+                            file.seek(SeekFrom::Start(offset))?;
+                            let mut buffer = vec![0u8; size];
+                            file.read_exact(&mut buffer)?;
+                            Ok(buffer)
+                        })();
+                        let _ = response.send(result);
+                    }
+                    FileOperation::Write { offset, data, response } => {
+                        let result = (|| {
+                            file.seek(SeekFrom::Start(offset))?;
+                            file.write_all(&data)?;
+                            Ok(())
+                        })();
+                        let _ = response.send(result);
+                    }
+                    FileOperation::Sync { response } => {
+                        let result = file.sync_all();
+                        let _ = response.send(result);
+                    }
+                    FileOperation::GetSize { response } => {
+                        let result = file.metadata().map(|m| m.len());
+                        let _ = response.send(result);
+                    }
+                    FileOperation::Truncate { size, response } => {
+                        let result = file.set_len(size);
+                        let _ = response.send(result);
+                    }
+                }
+            }
+        });
+        
+        (tx, handle)
+    }
+
     /// Create new cold tier cache
     pub fn new<P: AsRef<Path>>(
         storage_path: P,
@@ -88,9 +160,12 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
             .open(&storage_path)
             .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
 
+        let (file_ops, file_io_thread) = Self::spawn_io_thread(storage_file);
+
         let cache = Self {
-            storage_file: Arc::new(Mutex::new(storage_file)),
-            index: Arc::new(Mutex::new(AHashMap::new())),
+            file_ops,
+            file_io_thread: Some(file_io_thread),
+            index: DashMap::new(),
             storage_path,
             max_file_size: 128 * 1024 * 1024, // 128MB default
             write_offset: AtomicU64::new(0),
@@ -107,15 +182,9 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Get entry from cache - crossbeam zero-copy reference
     pub fn get(&self, key: &K) -> Result<Option<V>, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Index lock poisoned"))?;
-
-        // Connect directly to sophisticated PersistentColdTier that already exists
-        drop(index); // Release lock before calling advanced system
+        // Index operations are now lock-free with DashMap
         
-        use crate::cache::tier::cold::core::operations::PersistentColdTier;
+        use crate::cache::tier::cold::data_structures::PersistentColdTier;
         
         match PersistentColdTier::get(key) {
             Ok(Some(value)) => {
@@ -136,7 +205,7 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
     /// Put entry into cache - crossbeam owns values directly
     pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
         // Connect directly to sophisticated PersistentColdTier
-        use crate::cache::tier::cold::core::operations::PersistentColdTier;
+        use crate::cache::tier::cold::data_structures::PersistentColdTier;
         
         let result = PersistentColdTier::put(key, value);
         if result.is_ok() {
@@ -147,11 +216,12 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Sync all data to disk
     pub fn sync_to_disk(&self) -> Result<(), CacheOperationError> {
-        let file = self
-            .storage_file
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Storage file lock poisoned"))?;
-        file.sync_all()
+        let (tx, rx) = bounded(1);
+        self.file_ops
+            .send(FileOperation::Sync { response: tx })
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O thread terminated"))?;
+        rx.recv()
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O response channel closed"))?
             .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
         Ok(())
     }
@@ -182,32 +252,34 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
         use crate::cache::tier::cold::serialization::utilities::calculate_checksum;
         use std::io::{Read, Seek, SeekFrom};
         
-        let index = self.index.lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         
         let mut validation_errors = 0;
         let total_entries = index.len();
         
         // Validate each entry using existing sophisticated systems
-        for (key, entry) in index.iter() {
-            // Read data from storage file at the stored offset
-            let mut storage_file = self.storage_file.lock()
-                .map_err(|_| CacheOperationError::resource_exhausted("Storage file lock poisoned"))?;
-            
-            // Seek to entry position
-            if let Err(_) = storage_file.seek(SeekFrom::Start(entry.file_offset)) {
+        for entry_ref in index.iter() {
+            let (key, entry) = entry_ref.pair();
+            // Read data via channel
+            let (tx, rx) = bounded(1);
+            if let Err(_) = self.file_ops.send(FileOperation::Read {
+                offset: entry.file_offset,
+                size: entry.data_size as usize,
+                response: tx,
+            }) {
                 validation_errors += 1;
-                eprintln!("Failed to seek to offset {} for key validation", entry.file_offset);
+                eprintln!("Failed to send read request for key validation");
                 continue;
             }
             
-            // Read the stored data
-            let mut data = vec![0u8; entry.data_size as usize];
-            if let Err(_) = storage_file.read_exact(&mut data) {
-                validation_errors += 1;
-                eprintln!("Failed to read data for key validation");
-                continue;
-            }
+            let data = match rx.recv() {
+                Ok(Ok(data)) => data,
+                _ => {
+                    validation_errors += 1;
+                    eprintln!("Failed to read data for key validation");
+                    continue;
+                }
+            };
             
             // Validate checksum using existing sophisticated calculation
             let calculated_checksum = calculate_checksum(&data);
@@ -232,22 +304,18 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Get current file size
     pub fn get_file_size(&self) -> Result<u64, CacheOperationError> {
-        let file = self
-            .storage_file
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Storage file lock poisoned"))?;
-        let metadata = file
-            .metadata()
-            .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
-        Ok(metadata.len())
+        let (tx, rx) = bounded(1);
+        self.file_ops
+            .send(FileOperation::GetSize { response: tx })
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O thread terminated"))?;
+        rx.recv()
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O response channel closed"))?
+            .map_err(|e| CacheOperationError::io_failed(e.to_string()))
     }
 
     /// Get cache statistics
     pub fn get_stats(&self) -> Result<ColdTierStats, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         Ok(ColdTierStats {
             hits: COLD_HITS.load(Ordering::Relaxed),
             misses: COLD_MISSES.load(Ordering::Relaxed),
@@ -258,45 +326,34 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Check if key exists in cache
     pub fn contains_key(&self, key: &K) -> Result<bool, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         Ok(index.contains_key(key))
     }
 
     /// Get entry count
     pub fn len(&self) -> Result<usize, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         Ok(index.len())
     }
 
     /// Check if cache is empty
     pub fn is_empty(&self) -> Result<bool, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         Ok(index.is_empty())
     }
 
     /// Clear all entries from cache
     pub fn clear(&self) -> Result<(), CacheOperationError> {
-        let mut index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
+        let index = &self.index;
         index.clear();
 
         // Reset file to empty
-        let file = self
-            .storage_file
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Storage file lock poisoned"))?;
-        file.set_len(0)
+        let (tx, rx) = bounded(1);
+        self.file_ops
+            .send(FileOperation::Truncate { size: 0, response: tx })
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O thread terminated"))?;
+        rx.recv()
+            .map_err(|_| CacheOperationError::resource_exhausted("I/O response channel closed"))?
             .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
 
         self.write_offset.store(0, Ordering::Relaxed);
@@ -308,11 +365,8 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Remove entry from cache
     pub fn remove(&self, key: &K) -> Result<bool, CacheOperationError> {
-        let mut index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
-        if let Some(entry) = index.remove(key) {
+        let index = &self.index;
+        if let Some((_key, entry)) = index.remove(key) {
             COLD_ENTRIES.fetch_sub(1, Ordering::Relaxed);
             COLD_STORAGE_BYTES.fetch_sub(entry.data_size as u64, Ordering::Relaxed);
             Ok(true)
@@ -343,33 +397,26 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
 
     /// Get entry metadata if it exists
     pub fn get_entry_metadata(&self, key: &K) -> Result<Option<ColdEntry>, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
-        Ok(index.get(key).cloned())
+        let index = &self.index;
+        Ok(index.get(key).map(|entry_ref| entry_ref.value().clone()))
     }
 
     /// Update entry access information
     pub fn update_access(&self, key: &K) -> Result<(), CacheOperationError> {
-        let mut index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
-        if let Some(entry) = index.get_mut(key) {
-            entry.last_access = Instant::now();
-            entry.access_count += 1;
+        if let Some(mut entry_ref) = self.index.get_mut(key) {
+            entry_ref.last_access = Instant::now();
+            entry_ref.access_count += 1;
         }
         Ok(())
     }
 
     /// Get entries sorted by access frequency
     pub fn get_entries_by_frequency(&self) -> Result<Vec<(K, ColdEntry)>, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
-        let mut entries: Vec<_> = index.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let index = &self.index;
+        let mut entries: Vec<_> = index.iter().map(|entry_ref| {
+            let (k, v) = entry_ref.pair();
+            (k.clone(), v.clone())
+        }).collect();
         entries.sort_by(|a, b| b.1.access_count.cmp(&a.1.access_count));
         Ok(entries)
     }
@@ -379,11 +426,11 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
         &self,
         count: usize,
     ) -> Result<Vec<(K, ColdEntry)>, CacheOperationError> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|_| CacheOperationError::resource_exhausted("Index lock poisoned"))?;
-        let mut entries: Vec<_> = index.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let index = &self.index;
+        let mut entries: Vec<_> = index.iter().map(|entry_ref| {
+            let (k, v) = entry_ref.pair();
+            (k.clone(), v.clone())
+        }).collect();
         entries.sort_by(|a, b| a.1.last_access.cmp(&b.1.last_access));
         Ok(entries.into_iter().take(count).collect())
     }
@@ -448,9 +495,12 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
             .open(&storage_path)
             .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
 
+        let (file_ops, file_io_thread) = Self::spawn_io_thread(storage_file);
+
         let cache = Self {
-            storage_file: Arc::new(Mutex::new(storage_file)),
-            index: Arc::new(Mutex::new(AHashMap::new())),
+            file_ops,
+            file_io_thread: Some(file_io_thread),
+            index: DashMap::new(),
             storage_path,
             max_file_size,
             write_offset: AtomicU64::new(0),
@@ -507,6 +557,17 @@ impl Default for ColdTierStats {
             misses: 0,
             entries: 0,
             storage_bytes: 0,
+        }
+    }
+}
+
+impl<K: CacheKey, V: CacheValue> Drop for ColdTierCache<K, V> {
+    fn drop(&mut self) {
+        // Signal I/O thread to shutdown by dropping sender
+        // (channel will close, thread will exit)
+        // Wait for thread to finish if it exists
+        if let Some(handle) = self.file_io_thread.take() {
+            let _ = handle.join();
         }
     }
 }

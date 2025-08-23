@@ -18,15 +18,14 @@ pub mod trend_analysis;
 pub mod types;
 pub mod usage_history;
 
-// REMOVED: Backwards compatibility re-exports that hide canonical API paths
-// Users must now import from canonical module paths:
-// - Use warm::monitoring::alert_system::{AlertStats, MemoryAlertSystem}
-// - Use warm::monitoring::memory_pressure::MemoryPressureMonitor
-// - Use warm::monitoring::trend_analysis::TrendAnalysis
-// - Use warm::monitoring::types::{MemoryAlert, MemoryMonitoringStats, MonitoringTask, PressureThresholds, TierStatsSnapshot}
-// - Use warm::monitoring::usage_history::MemoryUsageHistory
-// - Use cache::traits::CacheOperationError directly
-// - Use cache::types::statistics::AtomicTierStats directly
+use crate::cache::types::results::CacheOperationError;
+use usage_history::MemoryUsageHistory;
+use types::MemoryAlertSystem;
+
+// Re-export main types
+pub use memory_pressure::MemoryPressureMonitor;
+pub use performance_stats::AtomicTierStats;
+pub use types::{MemoryAlert, MonitoringTask, TierStatsSnapshot};
 
 /// Create new memory pressure monitor with default settings
 pub fn create_memory_monitor(

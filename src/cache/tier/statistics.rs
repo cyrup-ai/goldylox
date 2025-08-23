@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use super::super::coherence::CacheTier;
+use crate::cache::coherence::CacheTier;
 use super::manager::tier_to_index;
 
 /// Atomic promotion statistics for performance monitoring

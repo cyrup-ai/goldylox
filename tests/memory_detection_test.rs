@@ -5,7 +5,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use blitz_cache::cache::memory::pressure_monitor::{
+use goldylox::cache::memory::pressure_monitor::{
     get_system_memory_with_fallback, SystemMemoryDetector,
 };
 
@@ -71,7 +71,7 @@ fn test_circuit_breaker_integration() {
     assert!(initial_memory > 0, "Should get valid memory initially");
 
     // Test that circuit breaker state can be accessed
-    use blitz_cache::cache::manager::error_recovery::types::CircuitState;
+    use goldylox::cache::manager::error_recovery::types::CircuitState;
     let state = detector.circuit_breaker.get_state(0);
     assert_eq!(state, CircuitState::Closed, "Circuit should start closed");
 }

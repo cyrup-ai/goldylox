@@ -6,16 +6,16 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::super::super::coherence::CacheTier;
-use super::super::super::config::CacheConfig;
-use super::super::super::traits::core::{CacheKey, CacheValue};
-use super::super::background::BackgroundCoordinator;
-use super::super::error_recovery::ErrorRecoverySystem;
-use super::super::performance::PerformanceMonitor;
-use super::super::policy::engine::CachePolicyEngine;
-use super::super::statistics::UnifiedCacheStatistics;
-use super::super::strategy::CacheStrategySelector;
-use super::super::tier_manager::TierPromotionManager;
+use crate::cache::coherence::CacheTier;
+use crate::cache::config::CacheConfig;
+use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
+use crate::cache::manager::error_recovery::ErrorRecoverySystem;
+use crate::cache::manager::performance::PerformanceMonitor;
+use crate::cache::eviction::policy_engine::CachePolicyEngine;
+use crate::cache::manager::UnifiedCacheStatistics;
+use crate::cache::coordinator::strategy_selector::CacheStrategySelector;
+use crate::cache::tier::manager::TierPromotionManager;
 
 /// Unified cache manager coordinating all tiers
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
     /// Cache strategy selector
     pub strategy_selector: CacheStrategySelector,
     /// Tier promotion/demotion manager
-    pub tier_manager: TierPromotionManager,
+    pub tier_manager: TierPromotionManager<K>,
     /// Unified cache statistics
     pub unified_stats: UnifiedCacheStatistics,
     /// Background operation coordinator

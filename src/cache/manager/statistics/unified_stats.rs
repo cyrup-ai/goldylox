@@ -30,15 +30,15 @@ impl UnifiedCacheStatistics {
 
     /// Record a cache hit for specific tier
     #[inline(always)]
-    pub fn record_hit(&self, tier: super::super::super::coherence::CacheTier, access_time_ns: u64) {
+    pub fn record_hit(&self, tier: crate::cache::coherence::CacheTier, access_time_ns: u64) {
         match tier {
-            super::super::super::coherence::CacheTier::Hot => {
+            crate::cache::coherence::CacheTier::Hot => {
                 self.hot_hits.fetch_add(1, Ordering::Relaxed);
             }
-            super::super::super::coherence::CacheTier::Warm => {
+            crate::cache::coherence::CacheTier::Warm => {
                 self.warm_hits.fetch_add(1, Ordering::Relaxed);
             }
-            super::super::super::coherence::CacheTier::Cold => {
+            crate::cache::coherence::CacheTier::Cold => {
                 self.cold_hits.fetch_add(1, Ordering::Relaxed);
             }
         }

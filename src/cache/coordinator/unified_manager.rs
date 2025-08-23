@@ -5,15 +5,15 @@
 
 use std::sync::Arc;
 
-use super::super::coherence::ProtocolConfiguration;
-use super::super::config::CacheConfig;
-use super::super::eviction::CachePolicyEngine;
-use super::super::manager::{
+use crate::cache::coherence::ProtocolConfiguration;
+use crate::cache::config::CacheConfig;
+use crate::cache::eviction::CachePolicyEngine;
+use crate::cache::manager::{
     ErrorRecoverySystem as ManagerErrorRecoverySystem, UnifiedStats as ManagerUnifiedStats,
 };
-use super::super::tier::TierPromotionManager;
-use super::super::traits::core::{CacheKey, CacheValue};
-use super::super::types::PrecisionTimer;
+use crate::cache::tier::TierPromotionManager;
+use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::manager::core::PrecisionTimer;
 use super::background_coordinator::BackgroundCoordinator;
 use super::strategy_selector::CacheStrategySelector;
 use super::tier_operations::TierOperations;
@@ -29,7 +29,7 @@ pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
     /// Cache strategy selector for intelligent tier decisions
     strategy_selector: CacheStrategySelector,
     /// Tier promotion/demotion manager with SIMD optimization
-    tier_manager: TierPromotionManager,
+    tier_manager: TierPromotionManager<K>,
     /// Unified cache statistics with atomic counters
     unified_stats: UnifiedCacheStatistics,
     /// Background operation coordinator with work-stealing scheduler
@@ -48,7 +48,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Create new unified cache manager with full tier coordination
     pub fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize all cache tiers with SIMD optimization
-        let hot_tier_config = super::super::tier::hot::types::HotTierConfig {
+        let hot_tier_config = crate::cache::tier::hot::types::HotTierConfig {
             max_entries: config.hot_tier.max_entries,
             enable_simd: true,
             enable_prefetch: true,
@@ -57,21 +57,21 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             cache_line_size: 64,
         };
         // Initialize hot tier with proper generic types
-        super::super::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
-        let warm_tier_config = super::super::tier::warm::config::WarmTierConfig {
+        crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
+        let warm_tier_config = crate::cache::tier::warm::WarmTierConfig {
             max_memory_bytes: config.warm_tier.max_size_bytes,
             max_entries: config.warm_tier.max_entries as usize,
             default_ttl_sec: config.warm_tier.entry_timeout_ns / 1_000_000_000,
-            pressure_thresholds: super::super::tier::warm::config::PressureConfig::default(),
-            eviction_config: super::super::tier::warm::config::EvictionConfig::default(),
-            tracking_config: super::super::tier::warm::config::TrackingConfig::default(),
-            background_config: super::super::tier::warm::config::BackgroundConfig::default(),
-            performance_config: super::super::tier::warm::config::PerformanceConfig::default(),
+            pressure_thresholds: crate::cache::tier::warm::PressureConfig::default(),
+            eviction_config: crate::cache::tier::warm::eviction::EvictionConfig::default(),
+            tracking_config: crate::cache::tier::warm::TrackingConfig::default(),
+            background_config: crate::cache::tier::warm::BackgroundConfig::default(),
+            performance_config: crate::cache::tier::warm::PerformanceConfig::default(),
         };
         // Initialize warm tier with proper generic types
-        super::super::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
+        crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
         // Initialize cold tier with proper generic types
-        super::super::tier::cold::init_cold_tier::<K, V>(config.cold_tier.storage_path.as_str())
+        crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.storage_path.as_str())
             .map_err(|e| CacheOperationError::io_error(&format!("Cold tier init failed: {}", e)))?;
 
         // Initialize coherence protocol with atomic coordination
@@ -83,7 +83,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             strict_ordering: false,
         };
         let _coherence_controller =
-            super::super::coherence::protocol::global_api::init_coherence_controller::<K, V>();
+            crate::cache::coherence::protocol::global_api::init_coherence_controller::<K, V>();
 
         // Initialize all subsystems with atomic state management
         let strategy_selector = CacheStrategySelector::new(&config)?;
@@ -118,7 +118,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Get value from unified cache with intelligent tier selection - zero-copy crossbeam reference
     pub fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
-        let mut access_path = super::super::manager::AccessPath::new();
+        let mut access_path = crate::cache::manager::AccessPath::new();
 
         // Record operation start with atomic increment
         self.unified_stats.record_miss(0); // Will be updated with actual timing later
@@ -126,7 +126,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         // Try hot tier first (SIMD-optimized, fastest access)
         if let Some(value) = self.tier_operations.try_hot_tier_get(key, &mut access_path) {
             let elapsed_ns = timer.elapsed_ns();
-            self.record_hit(super::super::coherence::CacheTier::Hot, elapsed_ns);
+            self.record_hit(crate::cache::coherence::CacheTier::Hot, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
             return Some(value);
         }
@@ -137,15 +137,15 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             .try_warm_tier_get(key, &mut access_path)
         {
             let elapsed_ns = timer.elapsed_ns();
-            self.record_hit(super::super::coherence::CacheTier::Warm, elapsed_ns);
+            self.record_hit(crate::cache::coherence::CacheTier::Warm, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
 
             // Consider intelligent promotion to hot tier
             self.consider_promotion(
                 key,
                 &value,
-                super::super::coherence::CacheTier::Warm,
-                super::super::coherence::CacheTier::Hot,
+                crate::cache::coherence::CacheTier::Warm,
+                crate::cache::coherence::CacheTier::Hot,
                 &access_path,
             );
 
@@ -158,7 +158,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             .try_cold_tier_get(key, &mut access_path)
         {
             let elapsed_ns = timer.elapsed_ns();
-            self.record_hit(super::super::coherence::CacheTier::Cold, elapsed_ns);
+            self.record_hit(crate::cache::coherence::CacheTier::Cold, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
 
             // Consider multi-tier promotion based on access patterns
@@ -185,25 +185,25 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
                 .analyze_placement(&key, &value, &self.policy_engine);
 
         match placement_decision.primary_tier {
-            super::super::coherence::CacheTier::Hot => {
+            crate::cache::coherence::CacheTier::Hot => {
                 // Place in hot tier with potential replication
                 self.tier_operations.put_with_replication(
                     key,
                     value,
-                    super::super::coherence::CacheTier::Hot,
+                    crate::cache::coherence::CacheTier::Hot,
                     placement_decision.replication_tiers,
                 )?;
             }
-            super::super::coherence::CacheTier::Warm => {
+            crate::cache::coherence::CacheTier::Warm => {
                 // Place in warm tier with selective replication
                 self.tier_operations.put_with_replication(
                     key,
                     value,
-                    super::super::coherence::CacheTier::Warm,
+                    crate::cache::coherence::CacheTier::Warm,
                     placement_decision.replication_tiers,
                 )?;
             }
-            super::super::coherence::CacheTier::Cold => {
+            crate::cache::coherence::CacheTier::Cold => {
                 // Place only in cold tier (large, infrequently accessed)
                 self.tier_operations.put_cold_tier_only(key, value)?;
             }
@@ -266,7 +266,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     }
 
     /// Record cache hit for specific tier
-    fn record_hit(&self, tier: super::super::coherence::CacheTier, elapsed_ns: u64) {
+    fn record_hit(&self, tier: crate::cache::coherence::CacheTier, elapsed_ns: u64) {
         self.unified_stats.record_hit(tier, elapsed_ns);
     }
 
@@ -280,9 +280,9 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         &self,
         key: &K,
         value: &Arc<V>,
-        from_tier: super::super::coherence::CacheTier,
-        to_tier: super::super::coherence::CacheTier,
-        access_path: &super::super::manager::AccessPath,
+        from_tier: crate::cache::coherence::CacheTier,
+        to_tier: crate::cache::coherence::CacheTier,
+        access_path: &crate::cache::manager::AccessPath,
     ) {
         let promotion_decision =
             self.tier_manager
@@ -299,7 +299,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         &self,
         key: &K,
         value: &Arc<V>,
-        _access_path: &super::super::manager::AccessPath,
+        _access_path: &crate::cache::manager::AccessPath,
     ) {
         // Analyze access pattern to determine optimal promotion strategy
         let access_pattern = self
@@ -311,8 +311,8 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         if access_pattern.frequency > 2.0 {
             let _ = self.tier_manager.schedule_promotion(
                 key.clone(),
-                super::super::coherence::CacheTier::Cold,
-                super::super::coherence::CacheTier::Warm,
+                crate::cache::coherence::CacheTier::Cold,
+                crate::cache::coherence::CacheTier::Warm,
                 7,
             );
 
@@ -320,8 +320,8 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             if access_pattern.frequency > 10.0 && value.as_ref().estimated_size() < 1024 {
                 let _ = self.tier_manager.schedule_promotion(
                     key.clone(),
-                    super::super::coherence::CacheTier::Warm,
-                    super::super::coherence::CacheTier::Hot,
+                    crate::cache::coherence::CacheTier::Warm,
+                    crate::cache::coherence::CacheTier::Hot,
                     9,
                 );
             }

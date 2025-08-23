@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::super::results::CacheResult;
+use crate::cache::types::results::CacheResult;
 use super::hasher::SimdHasher;
 use super::vectorops::SimdVectorOps;
 use crate::cache::traits::{CacheKey, CacheValue};

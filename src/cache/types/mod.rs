@@ -15,16 +15,10 @@ pub mod results;
 pub mod simd;
 pub mod statistics;
 
-// REMOVED: Backwards compatibility re-exports that hide canonical API paths
-// Users must now import from canonical module paths:
-// - Use types::atomic::{timestamp_nanos, AccessResult, AccessStats, AtomicCacheEntry, EntryFlags, EntryMetadata}
-// - Use types::batch_operations::*
-// - Use types::eviction::{CandidateAnalysis, CandidateMetadata, EvictionCandidate, EvictionSelector, SelectorConfig}
-// - Use types::performance::{OperationHandle, OperationTiming, PerformanceAnalysis, PerformanceReport, PerformanceSession, PrecisionTimer}
-// - Use types::results::{BatchResult, CacheError, CacheResult, ErrorCategory, HitStatus, OperationMetadata, RecoveryHint}
-// - Use types::simd::{AlignedAtomicCounter, BatchOperationManager, BatchPerformanceMetrics, CacheLine, SimdHasher, SimdVectorOps}
-// - Use types::statistics::{AtomicTierStats, MultiTierStatistics, TierStatistics}
-// - Use cache::traits::types_and_enums::CacheOperationError directly
+// Re-export main types
+pub use atomic::timestamp_nanos;
+pub use results::CacheResult;
+pub use statistics::tier_stats::TierStatistics;
 
 use std::fmt::Debug;
 use std::hash::Hash;

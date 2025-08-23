@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::super::synchronization::{PrecisionTimer, ReadGuard, WriteGuard};
+use crate::cache::tier::hot::synchronization::{PrecisionTimer, ReadGuard, WriteGuard};
 use super::core::SimdHotTier;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -31,7 +31,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         // Record access for prefetch learning
         self.prefetch_predictor.record_access(
             key,
-            super::super::synchronization::timestamp::now_nanos(),
+            crate::cache::tier::hot::synchronization::timestamp::now_nanos(),
             context_hash,
         );
         let primary_slot = self.memory_pool.slot_index_from_hash(key_hash);
@@ -118,7 +118,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                 self.memory_pool.update_at_slot(
                     result.slot_index,
                     value,
-                    super::super::synchronization::timestamp::now_nanos(),
+                    crate::cache::tier::hot::synchronization::timestamp::now_nanos(),
                 );
                 return Ok(());
             }
@@ -131,14 +131,14 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                 key,
                 value,
                 key_hash,
-                super::super::synchronization::timestamp::now_nanos(),
+                crate::cache::tier::hot::synchronization::timestamp::now_nanos(),
             );
             self.lru_tracker.record_access(slot_idx);
             return Ok(());
         }
 
         // Need to evict entry
-        let current_time = super::super::synchronization::timestamp::now_nanos();
+        let current_time = crate::cache::tier::hot::synchronization::timestamp::now_nanos();
         if let Some(candidate) = self.eviction_engine.find_eviction_candidate(
             &self.memory_pool.metadata,
             &self.lru_tracker,
@@ -188,6 +188,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         if let Some(search_result) = self.simd_parallel_search(key, key_hash, primary_slot) {
             if search_result.found {
                 if let Some(slot) = self.memory_pool.get_slot_mut(search_result.slot_index) {
+                    // Take the Option<V> out, replacing with None
                     let value = slot.value.take();
                     slot.clear();
 
@@ -198,7 +199,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                     }
 
                     self.memory_pool.deallocate_slot(search_result.slot_index);
-                    return value;
+                    return value;  // Already Option<V>
                 }
             }
         }

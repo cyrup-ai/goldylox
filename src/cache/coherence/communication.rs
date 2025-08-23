@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use super::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Inter-tier communication hub for coherence messages
@@ -126,8 +126,8 @@ pub enum ExclusiveResponse {
 #[derive(Debug)]
 pub enum CoherenceError {
     InvalidStateTransition {
-        from: super::data_structures::MesiState,
-        to: super::data_structures::MesiState,
+        from: crate::cache::coherence::MesiState,
+        to: crate::cache::coherence::MesiState,
     },
     CommunicationFailure,
     CacheLineNotFound,

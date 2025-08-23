@@ -6,12 +6,16 @@
 use std::io;
 use std::sync::Arc;
 
-use super::super::compression_engine::CompressedData;
-use super::super::data_structures::*;
+use crate::cache::tier::cold::compression_engine::CompressedData;
+use crate::cache::tier::cold::data_structures::*;
+use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::{CacheKey, CacheValue};
 
+#[cfg(feature = "bincode")]
+use bincode::{config, decode_from_slice};
+
 impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned>
-    super::super::PersistentColdTier<K, V>
+    PersistentColdTier<K, V>
 {
     /// Read data from storage using metadata
     pub fn read_from_storage(&self, _key: &K, metadata: &IndexEntry) -> io::Result<Arc<V>> {
@@ -37,8 +41,10 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                 )
             })?;
 
-        // Deserialize cache value using serde
-        let cache_value = bincode::deserialize::<V>(&decompressed_data).map_err(|e| {
+        // Deserialize cache value using bincode
+        let cache_value = bincode::decode_from_slice::<V, _>(&decompressed_data, bincode::config::standard())
+            .map(|(v, _)| v)
+            .map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Deserialization failed: {:?}", e),

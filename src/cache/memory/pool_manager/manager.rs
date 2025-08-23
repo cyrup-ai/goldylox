@@ -3,8 +3,6 @@
 //! This module implements the main MemoryPoolManager struct that coordinates
 //! multiple memory pools for different object sizes.
 
-use std::sync::Arc;
-
 use super::cleanup_manager::PoolCleanupManager;
 use super::configuration::PoolConfiguration;
 use super::individual_pool::MemoryPool;
@@ -25,30 +23,13 @@ pub struct MemoryPoolManager {
     pool_stats: PoolStatistics,
     /// Pool configuration parameters
     pool_config: PoolConfiguration,
-    /// Sophisticated cleanup manager (integrates with existing systems)
-    cleanup_manager: Option<Arc<PoolCleanupManager>>,
 }
 
 impl MemoryPoolManager {
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
-        Self::new_with_cleanup(_config, None)
-    }
-
-    /// Create new memory pool manager with optional cleanup manager injection
-    pub fn new_with_cleanup(
-        _config: &CacheConfig,
-        cleanup_manager: Option<Arc<PoolCleanupManager>>,
-    ) -> Result<Self, CacheOperationError> {
-        let mut small_pool = MemoryPool::new("small", 1024, 10000)?; // 1KB objects, 10K capacity
-        let mut medium_pool = MemoryPool::new("medium", 65536, 1000)?; // 64KB objects, 1K capacity
-        let mut large_pool = MemoryPool::new("large", 1048576, 100)?; // 1MB objects, 100 capacity
-        
-        // Inject cleanup manager into all pools if provided
-        if let Some(ref cleanup_mgr) = cleanup_manager {
-            small_pool.set_cleanup_manager(cleanup_mgr.clone());
-            medium_pool.set_cleanup_manager(cleanup_mgr.clone());
-            large_pool.set_cleanup_manager(cleanup_mgr.clone());
-        }
+        let small_pool = MemoryPool::new("small", 1024, 10000)?; // 1KB objects, 10K capacity
+        let medium_pool = MemoryPool::new("medium", 65536, 1000)?; // 64KB objects, 1K capacity
+        let large_pool = MemoryPool::new("large", 1048576, 100)?; // 1MB objects, 100 capacity
         
         Ok(Self {
             small_pool,
@@ -56,7 +37,6 @@ impl MemoryPoolManager {
             large_pool,
             pool_stats: PoolStatistics::new(),
             pool_config: PoolConfiguration::new(),
-            cleanup_manager,
         })
     }
 
@@ -75,28 +55,10 @@ impl MemoryPoolManager {
         &self.large_pool
     }
 
-    /// Set the cleanup manager for sophisticated cleanup operations
-    pub fn set_cleanup_manager(&mut self, cleanup_manager: Arc<PoolCleanupManager>) {
-        self.cleanup_manager = Some(cleanup_manager);
-    }
-
     /// Sophisticated emergency cleanup across all pools using existing systems
     pub fn try_emergency_cleanup(&self) -> bool {
-        // Use sophisticated cleanup manager if available
-        if let Some(ref cleanup_manager) = self.cleanup_manager {
-            // Coordinate emergency cleanup across all pools using existing systems
-            let pools = [&self.small_pool, &self.medium_pool, &self.large_pool];
-            match cleanup_manager.try_emergency_cleanup_coordination(&pools) {
-                Ok(cleanup_performed) => cleanup_performed,
-                Err(_) => {
-                    // Fallback to simple cleanup if sophisticated cleanup fails
-                    self.simple_fallback_emergency_cleanup()
-                }
-            }
-        } else {
-            // Fallback to simple cleanup if no cleanup manager
-            self.simple_fallback_emergency_cleanup()
-        }
+        // Directly perform simple cleanup since pools no longer have cleanup managers
+        self.simple_fallback_emergency_cleanup()
     }
 
     /// Simple fallback emergency cleanup (preserves original behavior)
@@ -129,6 +91,10 @@ impl MemoryPoolManager {
 
             let utilization = pool.get_utilization_percentage();
             self.pool_stats.pool_utilizations[i]
+                .store(utilization, std::sync::atomic::Ordering::Relaxed);
+            // Also update global stats
+            use crate::cache::memory::allocation_manager::global_stats;
+            global_stats::POOL_STATS.pool_utilizations[i]
                 .store(utilization, std::sync::atomic::Ordering::Relaxed);
 
             let efficiency = self.pool_stats.calculate_efficiency_score(i);

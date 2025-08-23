@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "bincode")]
+use bincode::{config, decode_from_slice, encode_to_vec, Decode, Encode};
+
 use super::core::{CacheKey, CacheValue};
 use super::supporting_types::{CompressionAlgorithm, SerializationFormat};
 use super::types_and_enums::{AccessType, TemporalPattern, TierAffinity, TierLocation};
@@ -90,6 +93,7 @@ pub struct MigrationLock {
 /// Cache entry metadata containing infrastructure data
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct CacheEntryMetadata {
     /// Exact creation timestamp
     #[cfg_attr(feature = "serde", serde(skip))]
@@ -550,6 +554,7 @@ impl TierInfo {
 /// Serialization context for persistent storage
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct SerializationContext {
     /// Serialization format to use
     pub format: SerializationFormat,
@@ -601,13 +606,14 @@ impl Default for SerializationContext {
 /// Production-quality cache entry wrapping user domain data with cache infrastructure
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(
     feature = "serde",
     serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
 )]
 #[cfg_attr(
     feature = "serde",
-    serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))
+    serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))
 )]
 pub struct CacheEntry<K: CacheKey, V: CacheValue> {
     /// User's domain key
@@ -792,13 +798,14 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
 /// Serialization envelope for persistent storage with versioning and integrity
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(
     feature = "serde",
     serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
 )]
 #[cfg_attr(
     feature = "serde",
-    serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))
+    serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))
 )]
 pub struct SerializationEnvelope<K, V>
 where
@@ -823,6 +830,7 @@ where
 /// Tier-specific serialization context for optimization
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct TierSerializationContext {
     /// Target tier for this serialization
     pub target_tier: TierLocation,
@@ -911,11 +919,11 @@ where
         };
 
         // Serialize entry first to get actual data for compression analysis
-        let serialized_data = bincode::serialize(&entry)?;
+        let serialized_data = bincode::encode_to_vec(&entry, bincode::config::standard())?;
 
         // Use compression engine to intelligently select algorithm based on data
         let compression_engine =
-            super::super::tier::cold::data_structures::CompressionEngine::new(6);
+            crate::cache::tier::cold::data_structures::CompressionEngine::new(6);
         let compression_algorithm = compression_engine.select_algorithm(&serialized_data);
 
         // Calculate checksum using the already serialized data

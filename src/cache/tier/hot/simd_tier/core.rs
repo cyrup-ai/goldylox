@@ -6,13 +6,13 @@
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use super::super::eviction::{EvictionEngine, EvictionPolicy};
-use super::super::memory_pool::MemoryPool;
-use super::super::prefetch::PrefetchPredictor;
-use super::super::synchronization::{CoordinationState, SimdHashState, SimdLruTracker};
-use super::super::types::HotTierConfig;
+use crate::cache::tier::hot::eviction::{EvictionEngine, EvictionPolicy};
+use crate::cache::tier::hot::memory_pool::MemoryPool;
+use crate::cache::tier::hot::prefetch::PrefetchPredictor;
+use crate::cache::tier::hot::synchronization::{CoordinationState, SimdHashState, SimdLruTracker};
+use crate::cache::tier::hot::types::HotTierConfig;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::statistics::AtomicTierStats;
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 /// SIMD-optimized hot tier cache with atomic coordination
 #[derive(Debug)]
@@ -40,7 +40,7 @@ pub struct SimdHotTier<K: CacheKey + Default, V: CacheValue> {
 impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     /// Create new SIMD-optimized hot tier cache
     pub fn new(config: HotTierConfig) -> Self {
-        let eviction_config = super::super::eviction::EvictionConfig {
+        let eviction_config = crate::cache::tier::hot::eviction::EvictionConfig {
             default_policy: EvictionPolicy::MachineLearning,
             learning_enabled: true,
             history_size: 1000,
@@ -48,7 +48,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
             performance_threshold: 0.8,
         };
 
-        let prefetch_config = super::super::prefetch::PrefetchConfig {
+        let prefetch_config = crate::cache::tier::hot::prefetch::PrefetchConfig {
             enabled: config.enable_prefetch,
             history_size: 1000,
             max_prefetch_distance: 5,

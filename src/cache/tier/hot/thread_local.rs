@@ -4,31 +4,31 @@
 //! to dedicated worker threads, each maintaining their own SIMD hot tier instance.
 
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_epoch::{self as epoch, Atomic, Owned, Shared};
 
 use super::simd_tier::SimdHotTier;
 use super::types::HotTierConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::statistics::TierStatistics;
+use crate::cache::manager::TierStatistics;
 
 /// Cache operation request for worker routing
 pub enum CacheRequest<K: CacheKey, V: CacheValue> {
     Get {
         key: K,
-        response: Sender<Option<Arc<V>>>,
+        response: Sender<Option<V>>,  // Must clone to send through channel
     },
     Put {
         key: K,
-        value: Arc<V>,
+        value: V,  // Take ownership
         response: Sender<Result<(), CacheOperationError>>,
     },
     Remove {
         key: K,
-        response: Sender<Option<Arc<V>>>,
+        response: Sender<Option<V>>,  // Move value out
     },
     // Maintenance operations
     CleanupExpired {
@@ -143,12 +143,12 @@ impl HotTierCoordinator {
 
 /// Blazing-fast cache get operation via worker-based routing
 #[inline]
-pub fn simd_hot_get<K: CacheKey, V: CacheValue>(key: &K) -> Option<Arc<V>> {
+pub fn simd_hot_get<K: CacheKey, V: CacheValue>(key: &K) -> Option<V> {
     let coordinator = HotTierCoordinator::get();
     let worker_id = coordinator.route_to_worker(key);
 
     // Create response channel for zero-allocation result passing
-    let (response_tx, response_rx) = bounded::<Option<Arc<V>>>(1);
+    let (response_tx, response_rx) = bounded::<Option<V>>(1);
 
     // Create cache request with key and response channel
     let request = CacheRequest::Get {
@@ -173,7 +173,7 @@ pub fn simd_hot_get<K: CacheKey, V: CacheValue>(key: &K) -> Option<Arc<V>> {
 #[inline]
 pub fn simd_hot_put<K: CacheKey, V: CacheValue>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     let coordinator = HotTierCoordinator::get();
     let worker_id = coordinator.route_to_worker(&key);
@@ -205,12 +205,12 @@ pub fn simd_hot_put<K: CacheKey, V: CacheValue>(
 #[inline]
 pub fn simd_hot_remove<K: CacheKey, V: CacheValue>(
     key: &K,
-) -> Result<Option<Arc<V>>, CacheOperationError> {
+) -> Result<Option<V>, CacheOperationError> {
     let coordinator = HotTierCoordinator::get();
     let worker_id = coordinator.route_to_worker(key);
 
     // Create response channel for result passing
-    let (response_tx, response_rx) = bounded::<Option<Arc<V>>>(1);
+    let (response_tx, response_rx) = bounded::<Option<V>>(1);
 
     // Create cache request with key and response channel
     let request = CacheRequest::Remove {
@@ -266,6 +266,7 @@ impl<K: CacheKey + Default, V: CacheValue> WorkerCacheProcessor<K, V> {
         if let Ok(request) = boxed_request.downcast::<CacheRequest<K, V>>() {
             match *request {
                 CacheRequest::Get { key, response } => {
+                    // Must clone for channel send
                     let result = self.hot_tier.get(&key);
                     let _ = response.try_send(result);
                 }
@@ -506,8 +507,9 @@ pub fn get_idle_keys<K: CacheKey>(idle_threshold: Duration) -> Vec<K> {
 }
 
 /// Remove entry from hot tier using worker-based routing
-pub fn remove_entry<K: CacheKey, V: CacheValue>(key: &K) -> Option<Arc<V>> {
+pub fn remove_entry<K: CacheKey, V: CacheValue>(key: &K) -> Option<V> {
     // Use the standard remove operation which properly routes to workers
+    // This MOVES the value out (no clone)
     match simd_hot_remove::<K, V>(key) {
         Ok(result) => result,
         Err(_) => None,
@@ -517,14 +519,14 @@ pub fn remove_entry<K: CacheKey, V: CacheValue>(key: &K) -> Option<Arc<V>> {
 /// Insert entry promoted from warm tier using worker-based routing
 pub fn insert_promoted<K: CacheKey, V: CacheValue>(
     key: K,
-    value: Arc<V>,
+    value: V,  // Take ownership from warm tier
 ) -> Result<(), CacheOperationError> {
     // Use the standard put operation which properly routes to workers
     simd_hot_put(key, value)
 }
 
 /// Cleanup expired entries from all hot tier workers
-pub fn cleanup_expired_entries(ttl: Duration) -> usize {
+pub fn cleanup_expired_entries<K: CacheKey, V: CacheValue>(ttl: Duration) -> usize {
     let coordinator = HotTierCoordinator::get();
     let mut total_cleaned = 0;
     let ttl_ns = ttl.as_nanos() as u64;

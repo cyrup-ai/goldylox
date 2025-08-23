@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::super::atomic::timestamp_nanos;
+use crate::cache::types::timestamp_nanos;
 use super::candidate::EvictionCandidate;
 use crate::cache::traits::{CacheKey, CacheValue};
 

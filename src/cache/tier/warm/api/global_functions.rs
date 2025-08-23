@@ -6,10 +6,10 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use super::super::builder::WarmTierBuilder;
-use super::super::core::LockFreeWarmTier;
-use super::super::data_structures::WarmTierConfig;
-use super::super::monitoring::{MemoryAlert, TierStatsSnapshot};
+use super::builder::WarmTierBuilder;
+use super::core::LockFreeWarmTier;
+use super::data_structures::WarmTierConfig;
+use super::monitoring::{MemoryAlert, TierStatsSnapshot};
 use super::maintenance::MaintenanceTask;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -19,43 +19,43 @@ static GLOBAL_WARM_TIER: OnceLock<Arc<dyn std::any::Any + Send + Sync>> = OnceLo
 
 /// Initialize global warm tier cache
 pub fn init_warm_tier<K: CacheKey + 'static, V: CacheValue + 'static>(config: WarmTierConfig) -> Result<(), CacheOperationError> {
-    super::super::global_api::init_warm_tier::<K, V>(config)
+    super::global_api::init_warm_tier::<K, V>(config)
 }
 
 /// Get entry from warm tier cache
 pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
-    super::super::global_api::warm_get(key)
+    super::global_api::warm_get(key)
 }
 
 /// Put entry into warm tier cache
 pub fn warm_put<K: CacheKey + 'static, V: CacheValue + 'static>(key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
-    super::super::global_api::warm_put(key, value)
+    super::global_api::warm_put(key, value)
 }
 
 /// Remove entry from warm tier cache
 pub fn warm_remove<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
-    super::super::global_api::warm_remove(key)
+    super::global_api::warm_remove(key)
 }
 
 
 /// Get memory pressure level
 pub fn get_memory_pressure<K: CacheKey + 'static, V: CacheValue + 'static>() -> Option<f64> {
-    super::super::global_api::get_memory_pressure::<K, V>()
+    super::global_api::get_memory_pressure::<K, V>()
 }
 
 /// Cleanup expired entries from warm tier
 pub fn cleanup_expired_entries<K: CacheKey + 'static, V: CacheValue + 'static>(max_age: Duration) -> Result<usize, CacheOperationError> {
-    super::super::global_api::cleanup_expired_entries(max_age)
+    super::global_api::cleanup_expired_entries(max_age)
 }
 
 /// Get all cache keys currently in warm tier
 pub fn get_warm_tier_keys<K: CacheKey + 'static, V: CacheValue + 'static>() -> Vec<K> {
-    super::super::global_api::get_warm_tier_keys()
+    super::global_api::get_warm_tier_keys()
 }
 
 /// Get idle cache keys (not accessed recently)
 pub fn get_idle_keys<K: CacheKey + 'static, V: CacheValue + 'static>(idle_threshold: Duration) -> Vec<K> {
-    super::super::global_api::get_idle_keys(idle_threshold)
+    super::global_api::get_idle_keys(idle_threshold)
 }
 
 /// Insert entry promoted from cold tier
@@ -63,7 +63,7 @@ pub fn insert_promoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
     value: Arc<V>,
 ) -> Result<(), CacheOperationError> {
-    super::super::global_api::insert_promoted(key, value)
+    super::global_api::insert_promoted(key, value)
 }
 
 /// Insert entry demoted from hot tier
@@ -71,37 +71,37 @@ pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
     value: Arc<V>,
 ) -> Result<(), CacheOperationError> {
-    super::super::global_api::insert_demoted(key, value)
+    super::global_api::insert_demoted(key, value)
 }
 
 /// Process background maintenance for warm tier
 pub fn process_background_maintenance<K: CacheKey + 'static, V: CacheValue + 'static>() -> Result<usize, CacheOperationError> {
-    super::super::global_api::process_background_maintenance::<K, V>()
+    super::global_api::process_background_maintenance::<K, V>()
 }
 
 /// Check for memory alerts in warm tier
 pub fn check_warm_tier_alerts<K: CacheKey + 'static, V: CacheValue + 'static>() -> Vec<String> {
-    super::super::global_api::check_warm_tier_alerts::<K, V>()
+    super::global_api::check_warm_tier_alerts::<K, V>()
 }
 
 /// Force eviction to reach target memory pressure
 pub fn force_eviction<K: CacheKey + 'static, V: CacheValue + 'static>(target_count: usize) -> Result<usize, CacheOperationError> {
-    super::super::global_api::force_eviction::<K, V>(target_count)
+    super::global_api::force_eviction::<K, V>(target_count)
 }
 
 /// Get current cache size (number of entries)
 pub fn get_cache_size<K: CacheKey + 'static, V: CacheValue + 'static>() -> Option<usize> {
-    super::super::global_api::get_cache_size::<K, V>()
+    super::global_api::get_cache_size::<K, V>()
 }
 
 /// Get estimated memory usage in bytes
 pub fn get_memory_usage<K: CacheKey + 'static, V: CacheValue + 'static>() -> Option<usize> {
-    super::super::global_api::get_memory_usage::<K, V>()
+    super::global_api::get_memory_usage::<K, V>()
 }
 
 /// Check if warm tier is initialized
 pub fn is_initialized() -> bool {
-    super::super::global_api::is_initialized()
+    super::global_api::is_initialized()
 }
 
 // REMOVED: get_stats() backwards compatibility alias
@@ -109,7 +109,7 @@ pub fn is_initialized() -> bool {
 
 /// Get frequently accessed keys for promotion analysis
 pub fn get_frequently_accessed_keys<K: CacheKey + 'static, V: CacheValue + 'static>(count: usize) -> Vec<K> {
-    super::super::global_api::get_frequently_accessed_keys(count)
+    super::global_api::get_frequently_accessed_keys(count)
 }
 
 // REMOVED: remove_entry() backwards compatibility alias
@@ -117,5 +117,5 @@ pub fn get_frequently_accessed_keys<K: CacheKey + 'static, V: CacheValue + 'stat
 
 /// Shutdown warm tier (cleanup resources)
 pub fn shutdown_warm_tier() -> Result<(), CacheOperationError> {
-    super::super::global_api::shutdown_warm_tier()
+    super::global_api::shutdown_warm_tier()
 }

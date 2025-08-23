@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::super::traits::*;
+use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
 #[derive(Debug, Clone)]

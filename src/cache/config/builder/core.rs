@@ -5,7 +5,7 @@
 
 use arrayvec::ArrayString;
 
-use super::super::types::{
+use crate::cache::config::types::{
     AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig, EvictionPolicy,
     HashFunction, HotTierConfig, MonitoringConfig, SkipMapConfig, WarmTierConfig, WorkerConfig,
 };

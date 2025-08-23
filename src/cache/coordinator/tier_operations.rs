@@ -3,18 +3,17 @@
 //! This module handles low-level tier access operations, placement analysis,
 //! and replication logic for the unified cache system.
 
-use std::sync::Arc;
 
-use super::super::analyzer::types::AccessPattern;
-use super::super::coherence::communication::{ReadResponse, WriteResponse};
-use super::super::coherence::data_structures::{
+use crate::cache::analyzer::types::AccessPattern;
+use crate::cache::coherence::communication::{ReadResponse, WriteResponse};
+use crate::cache::coherence::data_structures::{
     CacheTier, CoherenceController, ProtocolConfiguration,
 };
-use super::super::eviction::CachePolicyEngine;
-use super::super::manager::{AccessPath, PlacementDecision};
-use super::super::tier::cold::{cold_get, insert_demoted, remove_entry};
-use super::super::tier::hot::{simd_hot_get, simd_hot_put, simd_hot_remove};
-use super::super::tier::warm::{warm_get, warm_put, warm_remove};
+use crate::cache::eviction::CachePolicyEngine;
+use crate::cache::manager::{AccessPath, PlacementDecision};
+use crate::cache::tier::cold::{cold_get, insert_demoted, remove_entry};
+use crate::cache::tier::hot::{simd_hot_get, simd_hot_put, simd_hot_remove};
+use crate::cache::tier::warm::{warm_get, warm_put, warm_remove};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -69,7 +68,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
             .handle_read_request(key, CacheTier::Cold)
         {
             Ok(ReadResponse::Hit) | Ok(ReadResponse::SharedGranted) => {
-                match cold::cold_get::<K, V>(key) {
+                match cold_get::<K, V>(key) {
                     Ok(value) => value,
                     Err(_) => None,
                 }
@@ -83,7 +82,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     pub fn analyze_placement(
         &self,
         key: &K,
-        value: &Arc<V>,
+        value: &V,
         policy_engine: &CachePolicyEngine<K, V>,
     ) -> PlacementDecision {
         let access_pattern = policy_engine.pattern_analyzer.analyze_access_pattern(key);
@@ -192,7 +191,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
             Ok(WriteResponse::Success) => match tier {
                 CacheTier::Hot => simd_hot_put(key, value),
                 CacheTier::Warm => warm_put(key, value),
-                CacheTier::Cold => cold::insert_demoted(key, value),
+                CacheTier::Cold => insert_demoted(key, value),
             },
             Ok(WriteResponse::Conflict) => Err(CacheOperationError::ConcurrentAccess(
                 "Write conflict detected".to_string(),
@@ -245,7 +244,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
             frequency: (size as f64).log2().max(1.0),
             recency: 0.5, // Default since we don't have key
             temporal_locality: 0.5,
-            pattern_type: super::super::analyzer::types::AccessPatternType::Random,
+            pattern_type: crate::cache::analyzer::types::AccessPatternType::Random,
         };
         
         ValueCharacteristics {
@@ -258,7 +257,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     /// Calculate rendering complexity for placement optimization
     fn calculate_rendering_complexity(&self, value: &V) -> f32 {
         // Use real ML feature analysis from the sophisticated FeatureVector system
-        use super::super::tier::warm::eviction::ml::features::FeatureVector;
+        use crate::cache::tier::warm::eviction::ml::features::FeatureVector;
         let size = value.estimated_size();
         
         // Connect to real feature importance system
@@ -269,9 +268,9 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     }
 
     /// Estimate access cost for different tiers
-    fn estimate_access_cost(&self, value: &Arc<V>) -> f32 {
+    fn estimate_access_cost(&self, value: &V) -> f32 {
         // Use real ML feature system for access cost prediction
-        use super::super::tier::warm::eviction::ml::features::FeatureVector;
+        use crate::cache::tier::warm::eviction::ml::features::FeatureVector;
         let size = value.estimated_size();
         
         // Get real feature importance weights

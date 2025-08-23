@@ -5,15 +5,14 @@
 
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
-// Removed unused import super::super::traits
-use super::super::super::types::{timestamp_nanos, *};
+// Removed unused import super::traits
+use crate::cache::types::{timestamp_nanos, *};
 use super::access_tracking::ConcurrentAccessTracker;
 use super::data_structures::{MaintenanceTask, WarmTierConfig};
 use super::error::WarmTierInitError;
@@ -24,7 +23,9 @@ use crate::cache::traits::supporting_types::ValueMetadata;
 use crate::cache::traits::types_and_enums::{CompressionHint, TierLocation, VolatilityLevel};
 use crate::cache::traits::AccessType;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::statistics::AtomicTierStats;
+use crate::cache::types::results::CacheOperationError;
+use crate::cache::tier::warm::timing::PrecisionTimer;
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 /// Lock-free warm tier cache with concurrent access optimization
 #[derive(Debug)]
@@ -34,7 +35,8 @@ pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue> {
     /// Access tracking for advanced eviction policies
     pub(super) access_tracker: ConcurrentAccessTracker<K>,
     /// Eviction policy implementation
-    pub(super) eviction_policy: Arc<ConcurrentEvictionPolicy<K>>,
+    /// Note: This is a legitimate Arc use for shared trait object across threads
+    pub(super) eviction_policy: std::sync::Arc<ConcurrentEvictionPolicy<K>>,
     /// Atomic statistics
     pub(super) stats: AtomicTierStats,
     /// Configuration
@@ -51,6 +53,7 @@ pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue> {
 /// Warm cache key with efficient ordering for skiplist
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(bound = "K: serde::de::DeserializeOwned"))]
 pub struct WarmCacheKey<K: CacheKey> {
     /// Primary hash for fast comparison
     pub primary_hash: u64,
@@ -104,9 +107,10 @@ impl<K: CacheKey> CacheKey for WarmCacheKey<K> {
 /// Warm cache entry with concurrent-safe metadata
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(bound = "V: serde::de::DeserializeOwned"))]
 pub struct WarmCacheEntry<V: CacheValue> {
-    /// Cached value (Arc for zero-cost sharing)
-    pub value: Arc<V>,
+    /// Cached value (direct storage - SkipMap handles concurrent access)
+    pub value: V,
     /// Entry metadata with atomic fields
     pub metadata: WarmEntryMetadata,
     /// Creation timestamp
@@ -274,17 +278,17 @@ impl<V: CacheValue> WarmCacheEntry<V> {
     pub fn to_canonical_entry<K: CacheKey>(
         &self,
         key: &WarmCacheKey<K>,
-    ) -> crate::cache::traits::CacheEntry<WarmCacheKey<K>, Arc<V>> {
+    ) -> crate::cache::traits::CacheEntry<WarmCacheKey<K>, V> {
         crate::cache::traits::CacheEntry::new(
             key.clone(),
-            Arc::clone(&self.value),
+            self.value.clone(),
             crate::cache::traits::types_and_enums::TierLocation::Warm,
         )
     }
 
     /// Create from canonical CacheEntry
     pub fn from_canonical_entry<K: CacheKey>(
-        entry: &crate::cache::traits::CacheEntry<WarmCacheKey<K>, Arc<V>>,
+        entry: &crate::cache::traits::CacheEntry<WarmCacheKey<K>, V>,
         generation: u64,
     ) -> Self {
         Self {
@@ -300,8 +304,8 @@ impl<K: CacheKey> WarmCacheKey<K> {
     /// Convert to canonical CacheEntry wrapper with value
     pub fn to_canonical_entry<V: CacheValue>(
         &self,
-        value: Arc<V>,
-    ) -> crate::cache::traits::CacheEntry<Self, Arc<V>> {
+        value: V,
+    ) -> crate::cache::traits::CacheEntry<Self, V> {
         crate::cache::traits::CacheEntry::new(self.clone(), value, TierLocation::Warm)
     }
 }
@@ -318,7 +322,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         Ok(Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: Arc::new(ConcurrentEvictionPolicy::new()),
+            eviction_policy: std::sync::Arc::new(ConcurrentEvictionPolicy::new()),
             stats: AtomicTierStats::new(),
             config,
             memory_monitor,
@@ -335,7 +339,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         Ok(Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: Arc::new(ConcurrentEvictionPolicy::new()),
+            eviction_policy: std::sync::Arc::new(ConcurrentEvictionPolicy::new()),
             stats: AtomicTierStats::new(),
             config,
             memory_monitor: MemoryMonitorImpl::new_noop(), // No-op implementation
@@ -380,7 +384,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     }
 
     /// Concurrent cache lookup with lock-free access
-    pub fn get(&self, key: &K) -> Option<Arc<V>> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
         let warm_key = WarmCacheKey::from_cache_key(key);
 
@@ -406,7 +410,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
             let elapsed_ns = timer.elapsed_ns();
             self.stats.record_hit(elapsed_ns);
 
-            Some(Arc::clone(&entry.value))
+            Some(entry.value.clone())
         } else {
             // Record miss for pattern analysis
             self.access_tracker
@@ -420,8 +424,30 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         }
     }
 
+    /// Zero-copy reference access for read-heavy workloads
+    /// Returns a reference guard that maintains the entry's lifetime
+    pub fn get_ref<'a>(&'a self, key: &K) -> Option<impl std::ops::Deref<Target = V> + 'a> {
+        let warm_key = WarmCacheKey::from_cache_key(key);
+        
+        self.storage.get(&warm_key).map(|entry_ref| {
+            // Update access metadata atomically
+            let entry = entry_ref.value();
+            let now_ns = timestamp_nanos(Instant::now());
+            entry.metadata.last_access_ns.store(now_ns, Ordering::Relaxed);
+            entry.metadata.access_count.fetch_add(1, Ordering::Relaxed);
+            
+            // Record access patterns
+            self.access_tracker.record_access(&warm_key, AccessType::SequentialRead, true);
+            self.eviction_policy.on_access(&warm_key, true);
+            self.stats.record_hit(0);
+            
+            // Return a wrapper that derefs to V
+            ValueRef { _entry: entry_ref }
+        })
+    }
+
     /// Concurrent cache insertion with adaptive eviction
-    pub fn put(&self, key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
+    pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
         let warm_key = WarmCacheKey::from_cache_key(&key);
         let generation = self.generation_counter.fetch_add(1, Ordering::Relaxed);
@@ -433,7 +459,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
 
         // Create new entry
         let entry = WarmCacheEntry {
-            value: Arc::clone(&value),
+            value,
             metadata: WarmEntryMetadata::new(&value),
             created_at: Instant::now(),
             generation,
@@ -478,13 +504,13 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     }
 
     /// Remove entry from cache and return the removed value
-    pub fn remove(&self, key: &K) -> Option<Arc<V>> {
+    pub fn remove(&self, key: &K) -> Option<V> {
         let warm_key = WarmCacheKey::from_cache_key(key);
 
         if let Some(entry) = self.storage.remove(&warm_key) {
             let entry_value = entry.value();
             let entry_size = entry_value.value.estimated_size() as i64;
-            let removed_value = Arc::clone(&entry_value.value);
+            let removed_value = entry_value.value.clone();
 
             self.stats.update_entry_count(-1);
             self.stats.update_memory_usage(-entry_size);
@@ -553,7 +579,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
 
 impl<V: CacheValue> WarmCacheEntry<V> {
     /// Create new warm cache entry
-    pub fn new(value: Arc<V>, generation: u64) -> Self {
+    pub fn new(value: V, generation: u64) -> Self {
         Self {
             metadata: WarmEntryMetadata::new(&value),
             value,
@@ -567,8 +593,8 @@ impl<V: CacheValue> WarmCacheEntry<V> {
         self.value.estimated_size() + std::mem::size_of::<WarmCacheEntry<V>>()
     }
 
-    /// Convert warm cache entry back to Arc<V>
-    pub fn into_value(self) -> Arc<V> {
+    /// Convert warm cache entry back to V
+    pub fn into_value(self) -> V {
         self.value
     }
 
@@ -832,5 +858,18 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         }
 
         alerts
+    }
+}
+
+/// Zero-copy value reference wrapper for SkipMap entries
+/// This maintains the entry's lifetime while providing deref access to the value
+struct ValueRef<'a, K: CacheKey, V: CacheValue> {
+    _entry: crossbeam_skiplist::map::Entry<'a, WarmCacheKey<K>, WarmCacheEntry<V>>,
+}
+
+impl<'a, K: CacheKey, V: CacheValue> std::ops::Deref for ValueRef<'a, K, V> {
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        &self._entry.value().value
     }
 }

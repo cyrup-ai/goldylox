@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use super::super::traits::{CacheKey, CacheValue};
+use crate::cache::traits::{CacheKey, CacheValue};
 use super::core_types::CacheResult;
 
 /// Timed result wrapper that captures operation timing alongside the result

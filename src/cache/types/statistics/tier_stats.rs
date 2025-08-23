@@ -3,7 +3,7 @@
 //! This module provides zero-allocation statistics snapshots
 //! and trait implementations for cache tier monitoring.
 
-use super::super::super::traits::TierStats;
+use crate::cache::traits::TierStats;
 
 /// Tier statistics snapshot (zero allocation)
 #[derive(Debug, Clone, Copy)]

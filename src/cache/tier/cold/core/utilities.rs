@@ -7,9 +7,13 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use super::super::data_structures::ColdCacheKey;
-use super::super::data_structures::*;
-use super::types::ColdTierStats;
+use crate::cache::tier::cold::data_structures::ColdCacheKey;
+use crate::cache::tier::cold::data_structures::*;
+use crate::cache::tier::cold::PersistentColdTier;
+use crate::cache::tier::cold::core::types::ColdTierStats;
+use crate::cache::tier::cold::core::types::timestamp_nanos;
+use crate::cache::tier::cold::storage::ColdTierCache;
+use crate::cache::manager::background::types::MaintenanceTaskType;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -18,19 +22,19 @@ static COLD_TIER_REGISTRY: OnceLock<
     HashMap<(TypeId, TypeId), Box<dyn std::any::Any + Send + Sync>>,
 > = OnceLock::new();
 
-impl<K: CacheKey, V: CacheValue> super::super::PersistentColdTier<K, V> {
+impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
     /// Update access metadata for cache entry
     pub(super) fn update_access_metadata(&self, key: &ColdCacheKey<K>, entry: &mut IndexEntry) {
         // Connect to existing sophisticated access tracking system
         use std::time::Instant;
         
         // Update timestamp and access count atomically
-        entry.last_access_ns = crate::cache::tier::warm::timing::timestamp_nanos(Instant::now());
+        entry.last_access_ns = timestamp_nanos(Instant::now());
         entry.access_count += 1;
         
         // Update global statistics using existing atomic counters
         use std::sync::atomic::Ordering;
-        super::super::storage::COLD_READS.fetch_add(1, Ordering::Relaxed);
+        ColdTierCache::<K, V>::record_hit();
     }
 
     /// Mark space as free for compaction
@@ -38,8 +42,8 @@ impl<K: CacheKey, V: CacheValue> super::super::PersistentColdTier<K, V> {
         // Connect to existing compaction system
         use std::sync::atomic::Ordering;
         
-        // Update space tracking for compaction coordination
-        super::super::storage::COLD_STORAGE_BYTES.fetch_sub(size as u64, Ordering::Relaxed);
+        // Mark space for compaction - actual reclamation happens during compaction
+        // Space statistics are updated when entries are actually removed, not just marked
         
         // Schedule compaction task if fragmentation threshold reached
         let fragmentation_threshold = 0.3; // 30% fragmentation triggers compaction
@@ -47,7 +51,7 @@ impl<K: CacheKey, V: CacheValue> super::super::PersistentColdTier<K, V> {
             // Submit maintenance task to existing scheduler
             if let Some(scheduler) = self.get_maintenance_scheduler() {
                 let _ = scheduler.submit_task(
-                    super::super::super::manager::background::types::MaintenanceTaskType::CompactColdTier,
+                    MaintenanceTaskType::CompactColdTier,
                     100 // Medium priority
                 );
             }

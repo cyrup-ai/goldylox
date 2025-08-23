@@ -4,9 +4,10 @@
 //! with type-erased storage following the same pattern as the hot tier implementation.
 
 use std::any::{Any, TypeId};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
@@ -16,22 +17,22 @@ use super::data_structures::WarmTierConfig;
 use super::monitoring::TierStatsSnapshot;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::statistics::TierStatistics;
+use crate::cache::manager::TierStatistics;
 
 /// Cache operation request for warm tier routing
 pub enum WarmCacheRequest<K: CacheKey, V: CacheValue> {
     Get {
         key: K,
-        response: Sender<Option<Arc<V>>>,
+        response: Sender<Option<V>>,
     },
     Put {
         key: K,
-        value: Arc<V>,
+        value: V,
         response: Sender<Result<(), CacheOperationError>>,
     },
     Remove {
         key: K,
-        response: Sender<Option<Arc<V>>>,
+        response: Sender<Option<V>>,
     },
     // Maintenance operations
     CleanupExpired {
@@ -189,10 +190,27 @@ pub fn shutdown_warm_tier() -> Result<(), CacheOperationError> {
 }
 
 /// Get a value from the warm tier cache
-pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
+pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<V> {
     let coordinator = WarmTierCoordinator::get().ok()?;
     coordinator
-        .execute_operation::<K, V, Option<Arc<V>>>(|tier| Ok(tier.get(key)))
+        .execute_operation::<K, V, Option<V>>(|tier| Ok(tier.get(key)))
+        .ok()
+        .flatten()
+}
+
+/// Get a reference to a value from the warm tier cache using zero-copy access
+pub fn warm_get_ref<K: CacheKey + 'static, V: CacheValue + 'static, F, R>(
+    key: &K,
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&V) -> R,
+{
+    let coordinator = WarmTierCoordinator::get().ok()?;
+    coordinator
+        .execute_operation::<K, V, Option<R>>(|tier| {
+            tier.get_ref(key).map(|value_ref| Ok(f(&*value_ref))).transpose()
+        })
         .ok()
         .flatten()
 }
@@ -200,24 +218,24 @@ pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Opti
 /// Put a value into the warm tier cache
 pub fn warm_put<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     let coordinator = WarmTierCoordinator::get()?;
     coordinator.execute_operation::<K, V, ()>(|tier| tier.put(key, value))
 }
 
 /// Remove a value from the warm tier cache
-pub fn warm_remove<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
+pub fn warm_remove<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<V> {
     let coordinator = WarmTierCoordinator::get().ok()?;
     coordinator
-        .execute_operation::<K, V, Option<Arc<V>>>(|tier| Ok(tier.remove(key)))
+        .execute_operation::<K, V, Option<V>>(|tier| Ok(tier.remove(key)))
         .ok()
         .flatten()
 }
 /// Insert a promoted entry from cold tier
 pub fn insert_promoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     warm_put(key, value)
 }
@@ -225,7 +243,7 @@ pub fn insert_promoted<K: CacheKey + 'static, V: CacheValue + 'static>(
 /// Insert a demoted entry from hot tier
 pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     warm_put(key, value)
 }

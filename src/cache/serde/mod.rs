@@ -30,8 +30,8 @@ where
         std::mem::size_of::<T>() + std::mem::size_of::<SerdeCacheKey<T>>()
     }
 
-    fn tier_affinity(&self) -> crate::traits::types_and_enums::TierAffinity {
-        crate::traits::types_and_enums::TierAffinity::Auto
+    fn tier_affinity(&self) -> super::traits::types_and_enums::TierAffinity {
+        super::traits::types_and_enums::TierAffinity::Auto
     }
 
     fn hash_context(&self) -> Self::HashContext {

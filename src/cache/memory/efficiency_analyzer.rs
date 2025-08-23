@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
 
-use super::super::config::CacheConfig;
+use crate::cache::config::CacheConfig;
 use super::types::{EfficiencyAnalysisResult, OptimizationRecommendation};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 

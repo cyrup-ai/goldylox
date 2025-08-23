@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use super::super::config::CacheConfig;
-use super::super::manager::UnifiedStats as ManagerUnifiedStats;
+use crate::cache::config::CacheConfig;
+use crate::cache::manager::UnifiedStats as ManagerUnifiedStats;
 use super::unified_manager::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};

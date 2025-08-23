@@ -6,11 +6,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::super::communication::{CoherenceError, WriteResponse};
-use super::super::data_structures::{CacheTier, CoherenceKey, MesiState};
-use super::super::invalidation::InvalidationPriority;
-use super::super::state_management::{StateTransitionRequest, TransitionReason};
-use super::super::write_propagation::WritePriority;
+use crate::cache::coherence::communication::{CoherenceError, WriteResponse};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, MesiState};
+use crate::cache::coherence::invalidation::InvalidationPriority;
+use crate::cache::coherence::state_management::{StateTransitionRequest, TransitionReason};
+use crate::cache::coherence::write_propagation::WritePriority;
 use super::types::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -28,7 +28,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         // Get or create cache line state
         let cache_line = self.cache_line_states.get_or_insert(
             coherence_key.clone(),
-            super::super::data_structures::CacheLineState::new(),
+            crate::cache::coherence::CacheLineState::new(),
         );
 
         let current_state = cache_line.value().get_mesi_state();
@@ -89,7 +89,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         self.invalidation_manager.submit_invalidation(
             key.clone(),
             self.get_other_tier(requesting_tier),
-            super::super::data_structures::InvalidationReason::WriteConflict,
+            crate::cache::coherence::InvalidationReason::WriteConflict,
             InvalidationPriority::High,
         );
 

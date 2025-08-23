@@ -541,6 +541,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "crossbeam-deque",
+ "crossbeam-epoch",
  "crossbeam-queue",
  "crossbeam-skiplist",
  "crossbeam-utils",

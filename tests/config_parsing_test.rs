@@ -1,4 +1,4 @@
-use blitz_cache::cache::config::loader::ConfigLoader;
+use goldylox::cache::config::loader::ConfigLoader;
 
 #[test]
 fn test_toml_config_parsing() {
@@ -96,7 +96,7 @@ fn test_config_serialization_roundtrip() {
 
 #[test]
 fn test_config_validation_errors() {
-    use blitz_cache::cache::config::types::{CacheConfig, ConfigError};
+    use goldylox::cache::config::types::{CacheConfig, ConfigError};
 
     // Test invalid power of 2 validation
     let mut invalid_config = CacheConfig::default();

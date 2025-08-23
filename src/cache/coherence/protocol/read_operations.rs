@@ -5,9 +5,9 @@
 
 use std::time::Instant;
 
-use super::super::communication::{CoherenceError, CoherenceMessage, ReadResponse};
-use super::super::data_structures::{CacheTier, CoherenceKey, MesiState};
-use super::super::state_management::{StateTransitionRequest, TransitionReason};
+use crate::cache::coherence::communication::{CoherenceError, CoherenceMessage, ReadResponse};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, MesiState};
+use crate::cache::coherence::state_management::{StateTransitionRequest, TransitionReason};
 use super::types::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -24,7 +24,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         // Get or create cache line state
         let cache_line = self.cache_line_states.get_or_insert(
             coherence_key.clone(),
-            super::super::data_structures::CacheLineState::new(),
+            crate::cache::coherence::CacheLineState::new(),
         );
 
         let current_state = cache_line.value().get_mesi_state();

@@ -55,7 +55,7 @@ impl BackgroundWorkerState {
 
     /// Shutdown workers (placeholder for comprehensive shutdown)
     #[inline(always)]
-    pub fn shutdown_workers(&self, scheduler: &crate::cache::manager::background::scheduler::MaintenanceScheduler) -> Result<(), super::super::super::types::CacheOperationError> {
+    pub fn shutdown_workers(&self, scheduler: &crate::cache::manager::MaintenanceScheduler) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Update local status to shutdown
         self.status.store(WorkerStatus::Shutdown);
         

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 use dashmap::DashMap;
 
-use super::super::config::CacheConfig;
+use crate::cache::config::CacheConfig;
 use super::ml_policies::MLPredictivePolicy;
 use super::types::{AccessEvent, PolicyType};
 use crate::cache::tier::warm::core::WarmCacheKey;

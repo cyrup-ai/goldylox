@@ -5,10 +5,10 @@
 
 use std::time::Instant;
 
-use super::super::communication::{CoherenceError, ExclusiveResponse};
-use super::super::data_structures::{CacheTier, CoherenceKey, MesiState};
-use super::super::invalidation::InvalidationPriority;
-use super::super::state_management::{StateTransitionRequest, TransitionReason};
+use crate::cache::coherence::communication::{CoherenceError, ExclusiveResponse};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, MesiState};
+use crate::cache::coherence::invalidation::InvalidationPriority;
+use crate::cache::coherence::state_management::{StateTransitionRequest, TransitionReason};
 use super::types::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -36,7 +36,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
                     self.invalidation_manager.submit_invalidation(
                         coherence_key,
                         self.get_other_tier(requesting_tier),
-                        super::super::data_structures::InvalidationReason::WriteConflict,
+                        crate::cache::coherence::InvalidationReason::WriteConflict,
                         InvalidationPriority::High,
                     );
                     Ok(ExclusiveResponse::Granted)
@@ -48,7 +48,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
             }
         } else {
             // Cache line doesn't exist, create it
-            let cache_line = super::super::data_structures::CacheLineState::new();
+            let cache_line = crate::cache::coherence::CacheLineState::new();
             cache_line.set_mesi_state(MesiState::Exclusive);
             self.cache_line_states.insert(coherence_key, cache_line);
             Ok(ExclusiveResponse::Granted)
@@ -60,7 +60,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &K,
         target_tier: CacheTier,
-        reason: super::super::data_structures::InvalidationReason,
+        reason: crate::cache::coherence::InvalidationReason,
     ) -> Result<(), CoherenceError> {
         let coherence_key = CoherenceKey::from_cache_key(key);
 

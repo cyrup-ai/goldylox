@@ -10,7 +10,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::CachePadded;
 
-use super::super::coherence::CacheTier;
+use crate::cache::coherence::CacheTier;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::CacheKey;
 

@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
-use super::super::super::traits::{CacheKey, CacheValue};
+use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Trait for processing background tasks
 pub trait TaskProcessor: Send + Sync {
@@ -20,7 +20,7 @@ pub trait TaskProcessor: Send + Sync {
 }
 
 /// Background task generic wrapper for type-erased operations
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BackgroundTask {
     /// Eviction task
     Eviction {

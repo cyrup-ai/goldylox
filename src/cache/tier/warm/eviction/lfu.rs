@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::atomic::AtomicCell;
 
-use super::super::core::WarmCacheKey;
+use crate::cache::tier::warm::core::WarmCacheKey;
 use super::types::*;
 use crate::cache::traits::CacheKey;
 use crate::telemetry::cache::types::timestamp_nanos;

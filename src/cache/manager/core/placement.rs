@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use super::super::super::traits::{CacheKey, CacheValue};
-use super::super::super::types::{AccessPath, CacheTier, PlacementDecision};
+use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::types::{AccessPath, CacheTier, PlacementDecision};
 use super::types::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 

@@ -4,8 +4,8 @@
 //! and maintenance operations for the cold tier persistent storage.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use crossbeam_channel::select;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,8 +54,8 @@ pub struct SyncCoordinator {
     result_receiver: Receiver<SyncResult>,
     /// Background thread handle
     thread_handle: Option<thread::JoinHandle<()>>,
-    /// Running flag
-    running: Arc<AtomicBool>,
+    /// Shutdown signal sender
+    shutdown_sender: Option<Sender<()>>,
     /// Statistics
     stats: SyncStats,
 }
@@ -102,20 +102,19 @@ impl Default for SyncConfig {
 impl SyncCoordinator {
     /// Create new sync coordinator
     pub fn new<K: CacheKey, V: CacheValue>(
-        cache: Arc<ColdTierCache<K, V>>,
+        cache: ColdTierCache<K, V>,
         config: SyncConfig,
     ) -> Result<Self, CacheOperationError> {
         let (task_sender, task_receiver) = unbounded();
         let (result_sender, result_receiver) = unbounded();
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
+        let (shutdown_sender, shutdown_receiver) = bounded(0);
 
         // Spawn background thread
         let thread_handle = thread::Builder::new()
             .name("cold-tier-sync".to_string())
             .spawn(move || {
                 let mut worker =
-                    SyncWorker::new(cache, config, task_receiver, result_sender, running_clone);
+                    SyncWorker::new(cache, config, task_receiver, result_sender, shutdown_receiver);
                 worker.run();
             })
             .map_err(|e| {
@@ -126,7 +125,7 @@ impl SyncCoordinator {
             task_sender,
             result_receiver,
             thread_handle: Some(thread_handle),
-            running,
+            shutdown_sender: Some(shutdown_sender),
             stats: SyncStats::default(),
         })
     }
@@ -186,11 +185,10 @@ impl SyncCoordinator {
 
     /// Shutdown sync coordinator
     pub fn shutdown(&mut self) -> Result<(), CacheOperationError> {
-        // Signal shutdown
-        self.running.store(false, Ordering::Relaxed);
-
-        // Send shutdown task
-        let _ = self.task_sender.try_send(SyncTask::Shutdown);
+        // Send shutdown signal via channel
+        if let Some(sender) = self.shutdown_sender.take() {
+            let _ = sender.send(()); // Channel close signals shutdown
+        }
 
         // Wait for thread to complete
         if let Some(handle) = self.thread_handle.take() {
@@ -215,40 +213,53 @@ pub struct SyncStatsSnapshot {
 
 /// Background sync worker
 struct SyncWorker<K: CacheKey, V: CacheValue> {
-    cache: Arc<ColdTierCache<K, V>>,
+    cache: ColdTierCache<K, V>,
     config: SyncConfig,
     task_receiver: Receiver<SyncTask>,
     result_sender: Sender<SyncResult>,
-    running: Arc<AtomicBool>,
+    shutdown_receiver: Receiver<()>,
     last_auto_sync: Instant,
     _phantom: PhantomData<V>,
 }
 
 impl<K: CacheKey, V: CacheValue> SyncWorker<K, V> {
     fn new(
-        cache: Arc<ColdTierCache<K, V>>,
+        cache: ColdTierCache<K, V>,
         config: SyncConfig,
         task_receiver: Receiver<SyncTask>,
         result_sender: Sender<SyncResult>,
-        running: Arc<AtomicBool>,
+        shutdown_receiver: Receiver<()>,
     ) -> Self {
         Self {
             cache,
             config,
             task_receiver,
             result_sender,
-            running,
+            shutdown_receiver,
             last_auto_sync: Instant::now(),
             _phantom: PhantomData,
         }
     }
 
     fn run(&mut self) {
-        while self.running.load(Ordering::Relaxed) {
-            // Check for incoming tasks
-            if let Ok(task) = self.task_receiver.recv_timeout(Duration::from_millis(100)) {
-                let result = self.execute_task(task);
-                let _ = self.result_sender.try_send(result);
+        loop {
+            select! {
+                recv(self.task_receiver) -> task => {
+                    match task {
+                        Ok(task) => {
+                            let result = self.execute_task(task);
+                            let _ = self.result_sender.try_send(result);
+                        }
+                        Err(_) => break, // Task channel closed
+                    }
+                }
+                recv(self.shutdown_receiver) -> _ => {
+                    break; // Shutdown signal received
+                }
+                default(Duration::from_millis(100)) => {
+                    // Timeout for periodic operations
+                    self.check_auto_operations();
+                }
             }
         }
     }
@@ -257,12 +268,12 @@ impl<K: CacheKey, V: CacheValue> SyncWorker<K, V> {
         let start_time = Instant::now();
 
         let (success, error_message, items_processed) = match &task {
-            SyncTask::SyncToDisk => match self.cache.as_ref().sync_to_disk() {
+            SyncTask::SyncToDisk => match self.cache.sync_to_disk() {
                 Ok(_) => (true, None, 0),
                 Err(e) => (false, Some(e.to_string()), 0),
             },
             SyncTask::CleanupExpired { max_age_sec: _ } => {
-                match self.cache.as_ref().cleanup_expired() {
+                match self.cache.cleanup_expired() {
                     Ok(count) => (true, None, count),
                     Err(e) => (false, Some(e.to_string()), 0),
                 }
@@ -276,7 +287,7 @@ impl<K: CacheKey, V: CacheValue> SyncWorker<K, V> {
                 Err(e) => (false, Some(e.to_string()), 0),
             },
             SyncTask::Shutdown => {
-                self.running.store(false, Ordering::Relaxed);
+                // Shutdown is now handled via channel, not task
                 (true, None, 0)
             }
         };

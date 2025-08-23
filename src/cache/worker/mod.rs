@@ -10,7 +10,7 @@ pub mod tier_transitions;
 pub mod types;
 
 // Re-export key types for convenience
-use std::sync::Arc;
+use log::{info, debug};
 
 // NO RE-EXPORTS
 // Applications must use direct imports:
@@ -35,36 +35,42 @@ use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 pub fn initialize_worker_system_with_config<K: CacheKey, V: CacheValue>(
     config: &CacheConfig,
     max_command_queue_size: usize,
-) -> Result<Arc<TaskCoordinator<K, V>>, CacheOperationError> {
-    let mut background_coordinator = BackgroundCoordinator::new(config)?;
+) -> Result<TaskCoordinator<K, V>, CacheOperationError> {
+    info!("Initializing worker system");
     
-    // Create and wire up memory monitoring processor if enabled
+    // Create appropriate coordinator based on monitoring config
     if config.memory_config.monitoring_enabled {
-        let memory_manager = Arc::new(MemoryManager::new(config)?);
-        let processor = Arc::new(MemoryMonitoringProcessor::new(memory_manager));
-        background_coordinator.set_task_processor(processor);
-    }
-    
-    let background_coordinator = Arc::new(background_coordinator);
-    background_coordinator.start_worker_threads()?;
-    
-    // Start periodic memory monitoring if enabled
-    if config.memory_config.monitoring_enabled {
+        info!("Memory monitoring enabled, creating monitoring processor");
+        
+        // Create coordinator with memory monitoring processor
+        let mut background_coordinator = BackgroundCoordinator::<K, V, MemoryMonitoringProcessor>::new(config)?;
+        
+        // Create processor that will be OWNED by processor thread
+        let memory_manager = MemoryManager::new(config)?;
+        let processor = MemoryMonitoringProcessor::new(memory_manager);
+        
+        // Start processor thread that OWNS the processor
+        background_coordinator.start_processor(processor)?;
+        background_coordinator.start_worker_threads()?;
+        
+        // Start periodic memory monitoring
         let monitoring_task = crate::cache::manager::background::types::BackgroundTask::Statistics {
             stats_type: 2, // Memory monitoring type
             interval_ms: config.memory_config.sample_interval_ms,
         };
+        
+        debug!("Submitting periodic memory monitoring task");
         background_coordinator.submit_task(monitoring_task)?;
+        
+        Ok(TaskCoordinator::new(background_coordinator, max_command_queue_size))
+    } else {
+        info!("Memory monitoring disabled, creating basic coordinator");
+        
+        // Create coordinator without processor
+        let background_coordinator = BackgroundCoordinator::<K, V>::new(config)?;
+        background_coordinator.start_worker_threads()?;
+        Ok(TaskCoordinator::new(background_coordinator, max_command_queue_size))
     }
-    
-    let coordinator = Arc::new(TaskCoordinator::new(background_coordinator, max_command_queue_size));
-    Ok(coordinator)
 }
 
 
-/// Shutdown the worker system gracefully
-pub fn shutdown_worker_system<K: CacheKey, V: CacheValue>(
-    coordinator: Arc<TaskCoordinator<K, V>>,
-) -> Result<(), CacheOperationError> {
-    coordinator.shutdown()
-}

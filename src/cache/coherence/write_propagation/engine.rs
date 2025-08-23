@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossbeam_channel::unbounded;
 
-use super::super::data_structures::{CacheTier, CoherenceKey};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey};
 use super::types::{
     PropagationConfig, PropagationPolicy, PropagationStatistics, PropagationStatisticsSnapshot,
     WorkerHealth, WriteBackRequest, WritePriority, WritePropagationSystem,

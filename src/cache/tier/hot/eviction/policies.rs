@@ -6,8 +6,8 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use super::super::memory_pool::SlotMetadata;
-use super::super::synchronization::SimdLruTracker;
+use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
 use crate::cache::traits::EvictionReason;

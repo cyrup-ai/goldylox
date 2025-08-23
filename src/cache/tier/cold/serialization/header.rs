@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::config::{MAGIC_BYTES, SERIALIZATION_VERSION};
 use crate::cache::traits::CacheOperationError;
-use crate::traits::CompressionAlgorithm;
+use crate::cache::traits::CompressionAlgorithm;
 
 /// Unified storage header supporting multiple format versions
 #[derive(Debug, Clone, PartialEq)]

@@ -3,7 +3,7 @@
 //! This module provides builder methods for configuring monitoring, worker, and analyzer
 //! systems of the cache with fluent API patterns.
 
-use super::super::types::AlertThresholdsConfig;
+use crate::cache::config::types::AlertThresholdsConfig;
 use super::core::CacheConfigBuilder;
 
 impl CacheConfigBuilder {

@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::super::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
 use crate::cache::traits::CacheKey;
 
 /// Invalidation request with retry logic

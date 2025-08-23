@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use super::super::super::traits::core::{CacheKey, CacheValue};
+use crate::cache::traits::core::{CacheKey, CacheValue};
 use super::types::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 

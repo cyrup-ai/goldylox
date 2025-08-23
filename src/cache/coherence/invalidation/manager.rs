@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use crossbeam_skiplist::SkipMap;
 
-use super::super::communication::CoherenceMessage;
-use super::super::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
+use crate::cache::coherence::communication::CoherenceMessage;
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
 use super::configuration::InvalidationConfig;
-use super::statistics::InvalidationStatistics;
+use crate::cache::coherence::InvalidationStatistics;
 use super::types::{InvalidationPriority, InvalidationRequest};
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -199,8 +199,8 @@ impl<K: CacheKey> InvalidationManager<K> {
     }
 
     /// Get invalidation statistics
-    pub fn get_statistics(&self) -> super::statistics::InvalidationStatisticsSnapshot {
-        use super::statistics::InvalidationStatisticsSnapshot;
+    pub fn get_statistics(&self) -> crate::cache::coherence::InvalidationStatisticsSnapshot {
+        use crate::cache::coherence::InvalidationStatisticsSnapshot;
 
         InvalidationStatisticsSnapshot {
             total_requested: self

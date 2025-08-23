@@ -4,45 +4,38 @@
 //! management, task submission, and worker thread spawning.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crossbeam::channel::{unbounded, Receiver};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
-use super::types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStats};
+use super::types::{CacheMaintenanceWorker, MaintenanceTask, StatUpdate};
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crate::cache::traits::{CacheKey, CacheValue};
 
-impl CacheMaintenanceWorker {
-    /// Create new maintenance worker
-    pub fn new() -> Self {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (task_sender, task_receiver) = unbounded();
-        let stats = Arc::new(Mutex::new(WorkerStats::new()));
-
-        let worker_handle = Some(Self::spawn_worker(
-            shutdown.clone(),
-            task_receiver,
-            stats.clone(),
-        ));
-
-        Self {
-            worker_handle,
-            shutdown,
-            task_sender,
-            stats,
-        }
-    }
+impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
+    // Create new maintenance worker - already defined in types.rs
 
     /// Start the maintenance worker
     pub fn start(&mut self) -> Result<(), CacheOperationError> {
         if self.worker_handle.is_none() {
-            let (task_sender, task_receiver) = unbounded();
-            self.task_sender = task_sender;
+            // Take the task_receiver - it can only be used once
+            let task_receiver = self.task_receiver.take()
+                .ok_or_else(|| CacheOperationError::resource_exhausted(
+                    "Worker already started - task_receiver already taken"
+                ))?;
+            
+            // Clone stat_sender for the worker thread
+            let stat_sender = self.stat_sender.clone();
+            
             self.shutdown.store(false, Ordering::Relaxed);
 
             let worker_handle =
-                Self::spawn_worker(self.shutdown.clone(), task_receiver, self.stats.clone());
+                Self::spawn_worker(
+                    &self.shutdown as *const AtomicBool,
+                    task_receiver,
+                    stat_sender,
+                );
 
             self.worker_handle = Some(worker_handle);
         }
@@ -55,7 +48,7 @@ impl CacheMaintenanceWorker {
             self.shutdown.store(true, Ordering::Relaxed);
 
             // Send shutdown signal through channel
-            let _ = self.task_sender.send(MaintenanceTask::UpdateStatistics);
+            let _ = self.task_sender.send(MaintenanceTask::<K, V>::UpdateStatistics);
 
             // Wait for worker to finish
             if let Err(_) = handle.join() {
@@ -67,97 +60,74 @@ impl CacheMaintenanceWorker {
         Ok(())
     }
 
-    /// Submit maintenance task
-    pub fn submit_task(&self, task: MaintenanceTask) -> Result<(), CacheOperationError> {
-        self.task_sender.send(task).map_err(|_| {
-            CacheOperationError::resource_exhausted("Failed to send task to worker")
-        })?;
-
-        // Update queued task count
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.tasks_queued += 1;
-        }
-
-        Ok(())
-    }
-
-    /// Get worker statistics
-    pub fn stats(&self) -> Result<WorkerStats, CacheOperationError> {
-        let stats = self.stats.lock().map_err(|_| {
-            CacheOperationError::resource_exhausted("Worker stats lock poisoned")
-        })?;
-        Ok(stats.clone())
-    }
+    // Submit maintenance task - already defined in types.rs
+    // Get worker statistics - already defined in types.rs as stats(&mut self)
 
     /// Schedule automatic maintenance
     pub fn schedule_maintenance(&self) -> Result<(), CacheOperationError> {
-        self.submit_task(MaintenanceTask::CleanupExpired)?;
-        self.submit_task(MaintenanceTask::OptimizeLayout)?;
-        self.submit_task(MaintenanceTask::UpdateStatistics)?;
+        self.submit_task(MaintenanceTask::<K, V>::CleanupExpired)?;
+        self.submit_task(MaintenanceTask::<K, V>::OptimizeLayout)?;
+        self.submit_task(MaintenanceTask::<K, V>::UpdateStatistics)?;
         Ok(())
     }
 
     /// Spawn worker thread
     pub fn spawn_worker(
-        shutdown: Arc<AtomicBool>,
-        task_receiver: Receiver<MaintenanceTask>,
-        stats: Arc<Mutex<WorkerStats>>,
+        shutdown_ptr: *const AtomicBool,
+        task_receiver: Receiver<MaintenanceTask<K, V>>,
+        stat_sender: Sender<StatUpdate>,
     ) -> JoinHandle<()> {
         thread::spawn(move || {
+            // SAFETY: The shutdown flag lives as long as the CacheMaintenanceWorker
+            // and we only read from it. The worker thread is joined before Drop.
+            let shutdown = unsafe { &*shutdown_ptr };
+            
             let start_time = Instant::now();
-            let mut last_maintenance = None;
 
             while !shutdown.load(Ordering::Relaxed) {
                 // Try to receive task with timeout
                 match task_receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(task) => {
                         let task_start = Instant::now();
-                        super::task_processor::process_task(task, &stats);
+                        super::task_processor::process_task(task, &stat_sender);
                         let task_duration = task_start.elapsed();
 
-                        // Update statistics
-                        if let Ok(mut worker_stats) = stats.lock() {
-                            worker_stats.tasks_processed += 1;
-                            worker_stats.tasks_queued = worker_stats.tasks_queued.saturating_sub(1);
-                            worker_stats.uptime_seconds = start_time.elapsed().as_secs();
-
-                            // Update average task time
-                            let current_avg = worker_stats.avg_task_time_ns;
-                            let new_time = task_duration.as_nanos() as u64;
-                            worker_stats.avg_task_time_ns = if current_avg == 0 {
-                                new_time
-                            } else {
-                                (current_avg * 3 + new_time) / 4 // Exponential moving average
-                            };
-                        }
+                        // Send statistics updates through channel
+                        let _ = stat_sender.send(StatUpdate::TaskProcessed);
+                        let _ = stat_sender.send(StatUpdate::TaskTime(
+                            task_duration.as_nanos() as u64
+                        ));
+                        let _ = stat_sender.send(StatUpdate::UpdateUptime(
+                            start_time.elapsed().as_secs()
+                        ));
                     }
                     Err(_) => {
                         // Timeout - perform periodic maintenance
-                        if last_maintenance
-                            .map_or(true, |t: Instant| t.elapsed() > Duration::from_secs(60))
-                        {
-                            super::task_processor::perform_periodic_maintenance(&stats);
-                            last_maintenance = Some(Instant::now());
-                        }
+                        super::task_processor::perform_periodic_maintenance::<K, V>(&stat_sender);
+                        
+                        // Update uptime periodically
+                        let _ = stat_sender.send(StatUpdate::UpdateUptime(
+                            start_time.elapsed().as_secs()
+                        ));
                     }
                 }
             }
 
             // Final statistics update
-            if let Ok(mut worker_stats) = stats.lock() {
-                worker_stats.uptime_seconds = start_time.elapsed().as_secs();
-            }
+            let _ = stat_sender.send(StatUpdate::UpdateUptime(
+                start_time.elapsed().as_secs()
+            ));
         })
     }
 }
 
-impl Drop for CacheMaintenanceWorker {
+impl<K: CacheKey, V: CacheValue> Drop for CacheMaintenanceWorker<K, V> {
     fn drop(&mut self) {
         let _ = self.stop();
     }
 }
 
-impl Default for CacheMaintenanceWorker {
+impl<K: CacheKey, V: CacheValue> Default for CacheMaintenanceWorker<K, V> {
     fn default() -> Self {
         Self::new()
     }

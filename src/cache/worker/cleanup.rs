@@ -15,9 +15,9 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 //
 // Users must now call tier cleanup methods directly with explicit generic types:
 // 
-// For hot tier: use super::super::tier::hot::cleanup_expired_entries::<K, V>(ttl)
-// For warm tier: use super::super::tier::warm::cleanup_expired_entries::<K, V>(ttl)  
-// For cold tier: use super::super::tier::cold::cleanup_expired::<K, V>(ttl_secs)
+// For hot tier: use super::tier::hot::cleanup_expired_entries::<K, V>(ttl)
+// For warm tier: use super::tier::warm::cleanup_expired_entries::<K, V>(ttl)  
+// For cold tier: use super::tier::cold::cleanup_expired::<K, V>(ttl_secs)
 //
 // This forces proper type safety and eliminates hidden String dependencies.
 // Workers should be instantiated for specific cache key/value type combinations.

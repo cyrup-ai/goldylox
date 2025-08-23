@@ -3,8 +3,8 @@
 //! This module implements ML-based eviction using utility scoring,
 //! temporal pattern analysis, and adaptive weight adjustment.
 
-use super::super::memory_pool::SlotMetadata;
-use super::super::synchronization::SimdLruTracker;
+use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
 use crate::cache::traits::EvictionReason;

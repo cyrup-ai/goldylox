@@ -53,9 +53,9 @@ pub fn create_ml_policy<K: CacheKey>() -> Result<MLPredictivePolicy<K>, CacheOpe
 }
 
 /// Create write policy manager with configuration
-pub fn create_write_policy_manager(
+pub fn create_write_policy_manager<K: CacheKey>(
     config: &CacheConfig,
-) -> Result<WritePolicyManager, CacheOperationError> {
+) -> Result<WritePolicyManager<K>, CacheOperationError> {
     WritePolicyManager::new(config)
 }
 

@@ -5,19 +5,25 @@
 
 use std::sync::Arc;
 
-use super::super::super::super::types::*;
-use super::super::compression_engine::CompressedData;
-use super::super::data_structures::*;
+use crate::cache::tier::cold::core::types::*;
+use crate::cache::tier::cold::compression_engine::CompressedData;
+use crate::cache::tier::cold::data_structures::*;
+use crate::cache::tier::cold::PersistentColdTier;
+use crate::cache::types::results::CacheOperationError;
+use crate::cache::manager::TierStatistics;
 use super::types::{timestamp_nanos, PrecisionTimer};
 use crate::cache::traits::{CacheKey, CacheValue};
 
+#[cfg(feature = "bincode")]
+use bincode::{config, decode_from_slice, encode_to_vec};
+
 impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned>
-    super::super::PersistentColdTier<K, V>
+    PersistentColdTier<K, V>
 {
     /// Get value from persistent storage
     pub fn get(&self, key: &K) -> Option<Arc<V>> {
         let timer = PrecisionTimer::start();
-        let cold_key = super::super::data_structures::ColdCacheKey::from_cache_key(key);
+        let cold_key = ColdCacheKey::from_cache_key(key);
 
         // Check bloom filter first (fast negative lookup)
         if !self.metadata_index.bloom_filter.might_contain(&cold_key) {
@@ -47,8 +53,9 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
 
                     match self.compression_engine.decompress(&compressed_data_struct) {
                         Ok(decompressed_data) => {
-                            // Deserialize cache value using serde
-                            match bincode::deserialize::<V>(&decompressed_data) {
+                            // Deserialize cache value using bincode
+                            match bincode::decode_from_slice::<V, _>(&decompressed_data, bincode::config::standard())
+                                .map(|(v, _)| v) {
                                 Ok(cache_value) => {
                                     // Update access metadata
                                     self.update_access_metadata(&cold_key, &index_entry);
@@ -113,10 +120,10 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
     /// Put value in persistent storage
     pub fn put(&mut self, key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
-        let cold_key = super::super::data_structures::ColdCacheKey::from_cache_key(&key);
+        let cold_key = ColdCacheKey::from_cache_key(&key);
 
         // Serialize value using CacheValue trait
-        let serialized_data = match bincode::serialize(value.as_ref()) {
+        let serialized_data = match bincode::encode_to_vec(value.as_ref(), bincode::config::standard()) {
             Ok(data) => data,
             Err(_) => {
                 let elapsed_ns = timer.elapsed_ns();
@@ -212,7 +219,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
 
     /// Remove entry from persistent storage
     pub fn remove(&mut self, key: &K) -> bool {
-        let cold_key = super::super::data_structures::ColdCacheKey::from_cache_key(key);
+        let cold_key = ColdCacheKey::from_cache_key(key);
 
         if let Some(index_entry) = self.metadata_index.remove_entry(&cold_key) {
             // Mark space as free (actual cleanup happens during compaction)

@@ -3,12 +3,11 @@
 //! This module provides the core TierPromotionManager implementation with
 //! intelligent promotion/demotion decisions and adaptive learning capabilities.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::super::coherence::CacheTier;
-use super::super::config::CacheConfig;
-use super::super::manager::AccessPath;
+use crate::cache::coherence::CacheTier;
+use crate::cache::config::CacheConfig;
+use crate::cache::types::AccessPath;
 use super::criteria::{AccessCharacteristics, DemotionCriteria, PromotionCriteria};
 use super::queue::{PromotionPriority, PromotionQueue, PromotionTask};
 use super::statistics::PromotionStatistics;
@@ -17,7 +16,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Intelligent tier promotion/demotion manager with SIMD optimization
 #[derive(Debug)]
-pub struct TierPromotionManager {
+pub struct TierPromotionManager<K: CacheKey> {
     /// Promotion criteria with machine learning scoring
     promotion_criteria: PromotionCriteria,
     /// Demotion criteria with graceful data preservation  
@@ -43,7 +42,7 @@ pub struct PromotionDecision {
     pub expected_benefit: f32,
 }
 
-impl TierPromotionManager {
+impl<K: CacheKey> TierPromotionManager<K> {
     /// Create new tier promotion manager with adaptive algorithms
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
         Ok(Self {
@@ -55,10 +54,10 @@ impl TierPromotionManager {
     }
 
     /// Determine if entry should be promoted with SIMD-accelerated scoring
-    pub fn should_promote<K: CacheKey, V: CacheValue>(
+    pub fn should_promote<V: CacheValue>(
         &self,
         key: &K,
-        value: &Arc<V>,
+        value: &V,
         from_tier: CacheTier,
         to_tier: CacheTier,
         access_path: &AccessPath,
@@ -103,7 +102,7 @@ impl TierPromotionManager {
     }
 
     /// Schedule promotion task in lock-free queue
-    pub fn schedule_promotion<K: CacheKey>(
+    pub fn schedule_promotion(
         &self,
         key: K,
         from_tier: CacheTier,
@@ -130,7 +129,7 @@ impl TierPromotionManager {
 
     /// Process next promotion task from queue (work-stealing compatible)
     /// NOTE: This method is now generic and requires explicit type parameters
-    pub fn process_next_promotion<K: CacheKey + Clone, V: CacheValue>(
+    pub fn process_next_promotion<V: CacheValue>(
         &self,
         key: &K,
     ) -> Result<Option<PromotionTask<K>>, CacheOperationError> {
@@ -152,7 +151,7 @@ impl TierPromotionManager {
     }
 
     /// Execute promotion with coherence protocol coordination
-    fn execute_promotion<K: CacheKey, V: CacheValue>(
+    fn execute_promotion<V: CacheValue>(
         &self,
         task: &PromotionTask<K>,
         key: &K,
@@ -183,11 +182,11 @@ impl TierPromotionManager {
     }
 
     /// Read value from specific tier with error handling
-    fn read_from_tier<K: CacheKey, V: CacheValue>(
+    fn read_from_tier<V: CacheValue>(
         &self,
         key: &K,
         tier: CacheTier,
-    ) -> Result<Option<Arc<V>>, CacheOperationError> {
+    ) -> Result<Option<V>, CacheOperationError> {
         match tier {
             CacheTier::Hot => {
                 // For hot tier, use the worker-based routing system
@@ -208,10 +207,10 @@ impl TierPromotionManager {
     }
 
     /// Write value to specific tier with coherence protocol
-    fn write_to_tier<K: CacheKey, V: CacheValue>(
+    fn write_to_tier<V: CacheValue>(
         &self,
         key: K,
-        value: Arc<V>,
+        value: V,
         tier: CacheTier,
     ) -> Result<(), CacheOperationError> {
         match tier {
@@ -231,7 +230,7 @@ impl TierPromotionManager {
     }
 
     /// Remove value from specific tier - FIXED: Now properly generic over both K and V
-    fn remove_from_tier<K: CacheKey, V: CacheValue>(
+    fn remove_from_tier<V: CacheValue>(
         &self,
         key: &K,
         tier: CacheTier,
@@ -254,16 +253,16 @@ impl TierPromotionManager {
             }
             CacheTier::Cold => {
                 // For cold tier, use the Result-based API
-                super::cold::cold_remove(key)
+                super::cold::remove_entry(key)
             }
         }
     }
 
     /// Extract access characteristics from key, value, and access path
-    fn extract_access_characteristics<K: CacheKey, V: CacheValue>(
+    fn extract_access_characteristics<V: CacheValue>(
         &self,
         _key: &K,
-        _value: &Arc<V>,
+        _value: &V,
         access_path: &AccessPath,
     ) -> AccessCharacteristics {
         // Extract characteristics based on access patterns and value properties
@@ -314,10 +313,10 @@ impl TierPromotionManager {
     }
 
     /// Check if entry should be demoted based on criteria
-    pub fn should_demote<K: CacheKey, V: CacheValue>(
+    pub fn should_demote<V: CacheValue>(
         &self,
         _key: &K,
-        _value: &Arc<V>,
+        _value: &V,
         current_tier: CacheTier,
         idle_time_ns: u64,
         memory_pressure_percent: u32,

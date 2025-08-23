@@ -4,9 +4,8 @@
 //! slot management, and memory tracking capabilities.
 
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 
-use super::super::types::HotTierConfig;
+use crate::cache::tier::hot::HotTierConfig;
 use super::statistics::MemoryPoolStats;
 use super::types::{CacheSlot, SlotMetadata};
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -134,7 +133,7 @@ impl<K: CacheKey + Default, V: CacheValue> MemoryPool<K, V> {
         &mut self,
         slot_idx: usize,
         key: K,
-        value: Arc<V>,
+        value: V,
         key_hash: u64,
         timestamp_ns: u64,
     ) {
@@ -163,7 +162,7 @@ impl<K: CacheKey + Default, V: CacheValue> MemoryPool<K, V> {
     }
 
     /// Update existing entry at slot
-    pub fn update_at_slot(&mut self, slot_idx: usize, value: Arc<V>, timestamp_ns: u64) {
+    pub fn update_at_slot(&mut self, slot_idx: usize, value: V, timestamp_ns: u64) {
         if slot_idx <= self.capacity_mask {
             let old_size = self.metadata[slot_idx].size_bytes as usize;
             let new_size = value.estimated_size();

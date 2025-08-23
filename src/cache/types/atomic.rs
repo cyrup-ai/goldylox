@@ -4,6 +4,7 @@
 //! cache-line aligned data structures for maximum performance.
 
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
+use crossbeam_utils::atomic::AtomicCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,17 @@ pub fn timestamp_nanos(instant: Instant) -> u64 {
     instant
         .duration_since(Instant::now() - Duration::from_nanos(1_000_000_000))
         .as_nanos() as u64
+}
+
+/// Atomic update operation result
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateError {
+    /// Concurrent modification prevented update after max retries
+    ConcurrentModification,
+    /// Generation counter would overflow
+    GenerationOverflow,
+    /// Value size exceeds maximum allowed
+    ValueTooLarge,
 }
 
 /// Access result from atomic entry update
@@ -47,8 +59,8 @@ pub struct AccessStats {
 pub struct AtomicCacheEntry<K: CacheKey, V: CacheValue> {
     /// Entry key (immutable after creation)
     key: K,
-    /// Entry value (Arc for zero-cost cloning)
-    value: Arc<V>,
+    /// Entry value (AtomicCell for lock-free access)
+    value: AtomicCell<V>,
     /// Creation timestamp for age calculations
     created_at: Instant,
     /// Last access timestamp (atomic for lock-free updates)
@@ -68,13 +80,13 @@ pub struct AtomicCacheEntry<K: CacheKey, V: CacheValue> {
 impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
     /// Create new cache entry with atomic metadata
     #[inline(always)]
-    pub fn new(key: K, value: Arc<V>) -> Self {
+    pub fn new(key: K, value: V) -> Self {
         let now = Instant::now();
         let size = value.estimated_size() as u32;
 
         Self {
             key,
-            value,
+            value: AtomicCell::new(value),
             created_at: now,
             last_accessed: AtomicU64::new(timestamp_nanos(now)),
             access_count: AtomicU64::new(1),
@@ -91,10 +103,10 @@ impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
         &self.key
     }
 
-    /// Get entry value (zero-cost Arc clone)
+    /// Get entry value (atomic load)
     #[inline(always)]
-    pub fn value(&self) -> Arc<V> {
-        Arc::clone(&self.value)
+    pub fn value(&self) -> V {
+        self.value.load()
     }
 
     /// Record access atomically
@@ -129,10 +141,11 @@ impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
     /// Calculate access frequency (accesses per second)
     #[inline(always)]
     fn calculate_frequency(count: u64, age: Duration) -> f64 {
-        if age.as_secs() == 0 {
-            count as f64 // Very new entries
+        let age_secs = age.as_secs_f64();
+        if age_secs < 0.001 { // Less than 1ms old
+            count as f64 * 1000.0 // Extrapolate to per-second rate
         } else {
-            count as f64 / age.as_secs_f64()
+            count as f64 / age_secs
         }
     }
 
@@ -154,14 +167,45 @@ impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
         self.generation.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Update entry value (with generation increment)
+    /// Update entry value atomically with coordinated metadata updates
+    /// 
+    /// Ensures atomic visibility of value, size, and generation changes using
+    /// generation-based compare-and-swap with proper memory ordering guarantees.
+    /// Prevents race conditions where readers observe inconsistent entry state.
     #[inline(always)]
-    pub fn update_value(&self, new_value: Arc<V>) -> u32 {
-        // Note: This is a simplified implementation
-        // In a real system, you'd need more sophisticated atomic updates
-        let new_size = new_value.estimated_size() as u32;
-        self.size_bytes.store(new_size, Ordering::Relaxed);
-        self.increment_generation()
+    pub fn update_value(&self, new_value: V) -> Result<u32, UpdateError> {
+        const MAX_RETRIES: u32 = 1000;
+        
+        let new_size = new_value.estimated_size();
+        if new_size > u32::MAX as usize {
+            return Err(UpdateError::ValueTooLarge);
+        }
+        let new_size = new_size as u32;
+        
+        for _ in 0..MAX_RETRIES {
+            let current_gen = self.generation.load(Ordering::Acquire);
+            let next_gen = current_gen.wrapping_add(1);
+            
+            if next_gen == 0 {
+                return Err(UpdateError::GenerationOverflow);
+            }
+            
+            match self.generation.compare_exchange_weak(
+                current_gen,
+                next_gen,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.value.store(new_value);
+                    self.size_bytes.store(new_size, Ordering::Release);
+                    return Ok(next_gen);
+                }
+                Err(_) => continue,
+            }
+        }
+        
+        Err(UpdateError::ConcurrentModification)
     }
 
     /// Check if entry is expired based on age
@@ -271,6 +315,32 @@ impl EntryFlags {
     }
 }
 
+impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
+    /// Set entry flags atomically
+    #[inline(always)]
+    pub fn set_flags(&self, flags: EntryFlags) -> EntryFlags {
+        let old_flags = self.flags.load(Ordering::Acquire);
+        let new_flags = EntryFlags(old_flags).set(flags);
+        self.flags.store(new_flags.0, Ordering::Release);
+        new_flags
+    }
+    
+    /// Clear entry flags atomically  
+    #[inline(always)]
+    pub fn clear_flags(&self, flags: EntryFlags) -> EntryFlags {
+        let old_flags = self.flags.load(Ordering::Acquire);
+        let new_flags = EntryFlags(old_flags).clear(flags);
+        self.flags.store(new_flags.0, Ordering::Release);
+        new_flags
+    }
+    
+    /// Check if flags are set
+    #[inline(always)]
+    pub fn has_flags(&self, flags: EntryFlags) -> bool {
+        EntryFlags(self.flags.load(Ordering::Acquire)).contains(flags)
+    }
+}
+
 /// Generic atomic cache entry utilities
 ///
 /// Provides factory functions and utilities for creating AtomicCacheEntry
@@ -283,17 +353,20 @@ where
     K: CacheKey,
     V: CacheValue,
 {
-    AtomicCacheEntry::new(key, Arc::new(value))
+    AtomicCacheEntry::new(key, value)
 }
 
-/// Create atomic cache entry from Arc value (zero-cost)
+/// Create atomic cache entry from Arc value (extracts inner value)
 #[inline(always)]
-pub fn create_atomic_entry_arc<K, V>(key: K, value: Arc<V>) -> AtomicCacheEntry<K, V>
+pub fn create_atomic_entry_from_arc<K, V>(key: K, value: Arc<V>) -> AtomicCacheEntry<K, V>
 where
     K: CacheKey,
     V: CacheValue,
 {
-    AtomicCacheEntry::new(key, value)
+    match Arc::try_unwrap(value) {
+        Ok(inner_value) => AtomicCacheEntry::new(key, inner_value),
+        Err(arc_value) => AtomicCacheEntry::new(key, (*arc_value).clone()),
+    }
 }
 
 

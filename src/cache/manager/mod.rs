@@ -19,9 +19,10 @@ pub use core::{
 };
 
 pub use background::{
-    BackgroundCoordinator, BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
+    BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
     MaintenanceStats, MaintenanceTask, MaintenanceTaskType, WorkerStatus,
 };
+pub use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 pub use error_recovery::{
     CircuitBreaker, CircuitState, ErrorDetector, ErrorRecoverySystem, ErrorStatistics, ErrorType,
     HealthStatus, RecoveryStrategies, RecoveryStrategy,
@@ -34,7 +35,7 @@ pub use policy::{
     AccessType, CachePolicyEngine, PatternType, PrefetchPredictor, ReplacementAlgorithm,
     ReplacementPolicies, WritePolicy, WritePolicyManager,
 };
-pub use statistics::{
+pub use statistics::types::{
     CachePerformanceMetrics, StatisticsConfig, TierStatistics, UnifiedCacheStatistics,
 };
 pub use strategy::{

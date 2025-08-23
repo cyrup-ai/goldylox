@@ -3,16 +3,16 @@
 //! This module implements the constructor and initialization logic for
 //! the unified cache management system.
 
-use super::super::super::config::CacheConfig;
-use super::super::super::tier::hot::init_simd_hot_tier;
-use super::super::super::traits::core::{CacheKey, CacheValue};
-use crate::cache::background::coordinator::BackgroundCoordinator;
-use super::super::error_recovery::ErrorRecoverySystem;
-use super::super::performance::PerformanceMonitor;
-use super::super::policy::engine::CachePolicyEngine;
-use super::super::statistics::UnifiedCacheStatistics;
-use super::super::strategy::CacheStrategySelector;
-use super::super::tier_manager::TierPromotionManager;
+use crate::cache::config::CacheConfig;
+use crate::cache::tier::hot::init_simd_hot_tier;
+use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
+use crate::cache::manager::error_recovery::ErrorRecoverySystem;
+use crate::cache::manager::performance::PerformanceMonitor;
+use crate::cache::eviction::policy_engine::CachePolicyEngine;
+use crate::cache::manager::UnifiedCacheStatistics;
+use crate::cache::coordinator::strategy_selector::CacheStrategySelector;
+use crate::cache::tier::manager::TierPromotionManager;
 use super::types::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
@@ -26,13 +26,13 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         crate::cache::tier::hot::thread_local::init_simd_hot_tier::<K, V>(hot_tier_config);
         
         // Initialize warm tier with existing sophisticated implementation
-        crate::cache::tier::warm::api::global_functions::init_warm_tier::<K, V>(config.warm_tier.clone())?;
+        crate::cache::tier::warm::init_warm_tier::<K, V>(config.warm_tier.clone())?;
         
         // Initialize cold tier with existing persistent storage implementation  
-        crate::cache::tier::cold::core::utilities::init_cold_tier::<K, V>(config.cold_tier.clone())?;
+        crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.clone())?;
 
         // Initialize coherence protocol
-        let _coherence_config = super::super::super::coherence::ProtocolConfiguration {
+        let _coherence_config = crate::cache::coherence::ProtocolConfiguration {
             optimistic_concurrency: true,
             write_through: false,
             max_invalidation_retries: 16,
@@ -40,7 +40,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             strict_ordering: false,
         };
         let _coherence_controller =
-            super::super::super::coherence::protocol::global_api::init_coherence_controller::<K, V>(
+            crate::cache::coherence::protocol::global_api::init_coherence_controller::<K, V>(
             );
 
         // Initialize all subsystems

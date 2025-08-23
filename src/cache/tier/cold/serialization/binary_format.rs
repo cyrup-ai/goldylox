@@ -2,7 +2,7 @@
 //! that implements the CacheValue trait, making the cache truly generic.
 
 #[cfg(feature = "cold-tier")]
-use bincode;
+use bincode::{config, decode_from_slice, encode_to_vec};
 #[cfg(feature = "cold-tier")]
 use lz4_flex;
 use serde::{de::DeserializeOwned, Serialize};
@@ -18,7 +18,7 @@ use crate::cache::traits::CacheValue;
 // Supporting traits removed - using simplified trait system
 // Note: CompressionAlgorithm is defined in both supporting_types and types_and_enums
 // We need to use the one from types_and_enums to match SerializationContext
-use crate::traits::CompressionAlgorithm;
+use crate::cache::traits::CompressionAlgorithm;
 
 // Constants removed - now handled by config module and header.rs
 
@@ -30,7 +30,7 @@ use crate::traits::CompressionAlgorithm;
 #[cfg(feature = "cold-tier")]
 #[inline]
 fn serialize_with_bincode<V: Serialize>(value: &V) -> Result<Vec<u8>, String> {
-    bincode::serialize(value).map_err(|e| format!("Bincode serialization failed: {}", e))
+    encode_to_vec(value, config::standard()).map_err(|e| format!("Bincode serialization failed: {}", e))
 }
 
 /// Fallback serialization when bincode is not available
@@ -44,7 +44,9 @@ fn serialize_with_bincode<V: Serialize>(_value: &V) -> Result<Vec<u8>, String> {
 #[cfg(feature = "cold-tier")]
 #[inline]
 fn deserialize_with_bincode<V: DeserializeOwned>(data: &[u8]) -> Result<V, String> {
-    bincode::deserialize(data).map_err(|e| format!("Bincode deserialization failed: {}", e))
+    decode_from_slice(data, config::standard())
+        .map(|(v, _)| v)
+        .map_err(|e| format!("Bincode deserialization failed: {}", e))
 }
 
 /// Fallback deserialization when bincode is not available
@@ -66,7 +68,7 @@ pub fn serialize_cache_value<V: CacheValue + Serialize>(
     // Compression algorithm is now passed as parameter
 
     // Serialize the value using bincode for cold tier
-    let serialized_data = bincode::serialize(value).map_err(|e| {
+    let serialized_data = encode_to_vec(value, config::standard()).map_err(|e| {
         CacheOperationError::SerializationError(format!("Bincode serialization failed: {}", e))
     })?;
 

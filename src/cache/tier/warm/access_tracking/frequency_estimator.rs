@@ -5,7 +5,7 @@
 
 use crossbeam_utils::atomic::AtomicCell;
 
-use super::super::core::WarmCacheKey;
+use crate::cache::tier::warm::core::WarmCacheKey;
 use crate::cache::traits::CacheKey;
 
 /// Frequency estimator with exponential moving averages

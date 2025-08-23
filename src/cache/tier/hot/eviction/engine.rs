@@ -3,8 +3,8 @@
 //! This module implements the adaptive eviction engine with machine learning
 //! capabilities and policy management.
 
-use super::super::memory_pool::SlotMetadata;
-use super::super::synchronization::SimdLruTracker;
+use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::types::{
     AccessEvent, AccessType, EvictionCandidate, EvictionConfig, EvictionMetrics, EvictionPolicy,
     EvictionStats, FeatureWeights,

@@ -3,11 +3,12 @@
 //! This module implements the core TierPromotionManager with public API
 //! for promotion/demotion decisions and queue management.
 
+use crate::cache::CacheKey;
 use super::types::{
     DemotionCriteria, PromotionCriteria, PromotionQueue, PromotionStatistics, TierPromotionManager,
 };
 
-impl TierPromotionManager {
+impl<K: CacheKey> TierPromotionManager<K> {
     /// Create new tier promotion manager
     pub fn new() -> Self {
         Self {
@@ -36,7 +37,7 @@ impl TierPromotionManager {
 
     /// Get promotion queue
     #[inline]
-    pub fn get_promotion_queue(&self) -> &PromotionQueue {
+    pub fn get_promotion_queue(&self) -> &PromotionQueue<K> {
         &self.promotion_queue
     }
 
@@ -56,10 +57,10 @@ impl TierPromotionManager {
     pub fn consider_promotion<K, V>(
         &self,
         _key: &K,
-        _current_tier: super::super::super::types::CacheTier,
-        _to: super::super::super::types::CacheTier,
-        _path: &super::super::core::types::AccessPath,
-    ) -> Option<super::super::super::types::CacheTier> {
+        _current_tier: crate::cache::coherence::CacheTier,
+        _to: crate::cache::coherence::CacheTier,
+        _path: &crate::cache::manager::AccessPath,
+    ) -> Option<crate::cache::coherence::CacheTier> {
         // Implementation would analyze access patterns and decide on promotion
         None
     }
@@ -68,7 +69,7 @@ impl TierPromotionManager {
     pub fn consider_multi_tier_promotion<K>(
         &self,
         _key: &K,
-        _path: &super::super::core::types::AccessPath,
+        _path: &crate::cache::manager::AccessPath,
     ) {
         // Implementation would analyze which tier would be optimal for promotion
     }
@@ -80,7 +81,7 @@ impl TierPromotionManager {
     }
 }
 
-impl Default for TierPromotionManager {
+impl<K: CacheKey> Default for TierPromotionManager<K> {
     fn default() -> Self {
         Self::new()
     }

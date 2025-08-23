@@ -5,9 +5,10 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use log::{warn, debug};
 use dashmap::DashMap;
 
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -17,7 +18,7 @@ use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask};
 
 /// Command queue for safe cache mutations from async contexts
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CacheCommandQueue<K: CacheKey, V: CacheValue> {
     /// Pending commands to execute
     commands: Mutex<VecDeque<CacheCommand<K, V>>>,
@@ -91,9 +92,9 @@ pub struct CommandQueueStats {
 #[derive(Debug)]
 pub struct TaskCoordinator<K: CacheKey, V: CacheValue> {
     /// Background coordinator for task processing
-    background_coordinator: Arc<BackgroundCoordinator<K, V>>,
+    background_coordinator: BackgroundCoordinator<K, V>,
     /// Command queue for safe mutations
-    command_queue: Arc<CacheCommandQueue<K, V>>,
+    command_queue: CacheCommandQueue<K, V>,
     /// Active task tracking
     active_tasks: DashMap<u64, TaskInfo>,
     /// Task ID generator
@@ -101,7 +102,7 @@ pub struct TaskCoordinator<K: CacheKey, V: CacheValue> {
     /// Coordination statistics
     stats: CoordinatorStats,
     /// Shutdown flag
-    shutdown: Arc<AtomicBool>,
+    shutdown: AtomicBool,
 }
 
 /// Information about active tasks
@@ -288,8 +289,8 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
 
 impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
     /// Create new task coordinator
-    pub fn new(background_coordinator: Arc<BackgroundCoordinator<K, V>>, max_command_queue_size: usize) -> Self {
-        let command_queue = Arc::new(CacheCommandQueue::new(max_command_queue_size));
+    pub fn new(background_coordinator: BackgroundCoordinator<K, V>, max_command_queue_size: usize) -> Self {
+        let command_queue = CacheCommandQueue::new(max_command_queue_size);
 
         Self {
             background_coordinator,
@@ -297,7 +298,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
             active_tasks: DashMap::new(),
             next_task_id: AtomicU64::new(1),
             stats: CoordinatorStats::new(),
-            shutdown: Arc::new(AtomicBool::new(false)),
+            shutdown: AtomicBool::new(false),
         }
     }
 

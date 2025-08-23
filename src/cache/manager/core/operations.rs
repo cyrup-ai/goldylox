@@ -6,8 +6,8 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::super::super::traits::core::{CacheKey, CacheValue};
-use super::super::super::types::CacheTier;
+use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::types::CacheTier;
 use super::types::{AccessPath, UnifiedCacheManager, UnifiedStats};
 use super::utilities::PrecisionTimer;
 use crate::cache::traits::types_and_enums::CacheOperationError;

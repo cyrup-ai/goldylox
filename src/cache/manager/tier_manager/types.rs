@@ -9,11 +9,12 @@ use std::time::Instant;
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::CachePadded;
 
+use crate::cache::traits::CacheKey;
 pub use crate::cache::traits::TierLocation;
 
 /// Tier promotion/demotion manager
 #[derive(Debug)]
-pub struct TierPromotionManager {
+pub struct TierPromotionManager<K: CacheKey> {
     /// Promotion criteria
     pub promotion_criteria: PromotionCriteria,
     /// Demotion criteria
@@ -21,7 +22,7 @@ pub struct TierPromotionManager {
     /// Promotion statistics
     pub promotion_stats: PromotionStatistics,
     /// Promotion task queue
-    pub promotion_queue: PromotionQueue,
+    pub promotion_queue: PromotionQueue<K>,
 }
 
 /// SIMD-optimized promotion criteria for cache tier advancement
@@ -77,7 +78,7 @@ pub struct PromotionStatistics {
 
 /// Lock-free promotion queue using crossbeam-skiplist for ordered operations
 #[derive(Debug)]
-pub struct PromotionQueue {
+pub struct PromotionQueue<K: CacheKey> {
     /// Priority-ordered promotion tasks
     pub task_queue: SkipMap<PromotionPriority, PromotionTask<K>>,
     /// Queue statistics

@@ -5,7 +5,6 @@
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
-use std::sync::Arc;
 
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -18,7 +17,7 @@ pub struct CacheSlot<K: CacheKey, V: CacheValue> {
     /// Full key (for collision resolution)
     pub key: K,
     /// Cached value
-    pub value: Option<Arc<V>>,
+    pub value: Option<V>,
     /// Access timestamp (for LRU)
     pub last_access_ns: u64,
 }

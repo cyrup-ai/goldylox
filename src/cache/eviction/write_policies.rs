@@ -5,15 +5,15 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 use dashmap::DashMap;
 
-use super::super::coherence::CacheTier;
-use super::super::config::CacheConfig;
+use crate::cache::coherence::CacheTier;
+use crate::cache::config::CacheConfig;
 use super::policy_engine::{WriteResult, WriteStats};
 use super::types::{ConsistencyLevel, WriteStrategy};
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -31,15 +31,15 @@ pub struct WritePolicyManager<K: CacheKey> {
     /// Write operation statistics
     write_stats: WriteStatistics,
     /// Dirty entry tracking for write-back
-    dirty_entries: Arc<DashMap<K, DirtyEntry<K>>>,
+    dirty_entries: DashMap<K, DirtyEntry<K>>,
     /// Write-behind queue
-    write_behind_queue: Arc<Mutex<VecDeque<PendingWrite<K>>>>,
+    // Queue removed - using channels directly
     /// Write-behind sender for async processing
     write_behind_sender: Sender<PendingWrite<K>>,
     /// Write-behind receiver for async processing
     write_behind_receiver: Receiver<PendingWrite<K>>,
     /// Flush coordinator
-    flush_coordinator: Arc<FlushCoordinator>,
+    flush_coordinator: FlushCoordinator,
 }
 
 /// Write batching configuration
@@ -150,11 +150,10 @@ impl<K: CacheKey> WritePolicyManager<K> {
             batch_config: WriteBatchConfig::new(),
             consistency_level: ConsistencyLevel::default(),
             write_stats: WriteStatistics::new(),
-            dirty_entries: Arc::new(DashMap::new()),
-            write_behind_queue: Arc::new(Mutex::new(VecDeque::new())),
+            dirty_entries: DashMap::new(),
             write_behind_sender: sender,
             write_behind_receiver: receiver,
-            flush_coordinator: Arc::new(FlushCoordinator::new()),
+            flush_coordinator: FlushCoordinator::new(),
         })
     }
 
@@ -252,22 +251,20 @@ impl<K: CacheKey> WritePolicyManager<K> {
 
     /// Write to cache tier
     fn write_to_cache_tier(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
-        use std::sync::Arc;
-
         use crate::cache::tier::hot::simd_hot_put;
         use crate::cache::tier::warm::core::WarmCacheKey;
 
         match tier {
             CacheTier::Hot => {
                 // Write to hot tier using SIMD operations
-                let value = Arc::new(format!("cached_value_{:?}", key));
+                let value = format!("cached_value_{:?}", key);
                 simd_hot_put(key.clone(), value)?;
                 log::debug!("Wrote key to hot tier: {:?}", key);
             }
             CacheTier::Warm => {
                 // Write to warm tier using lock-free skiplist
                 let warm_key = WarmCacheKey::from_cache_key(key);
-                let _value = Arc::new(format!("cached_value_{:?}", key));
+                let _value = format!("cached_value_{:?}", key);
                 // Note: Would need access to warm tier instance here
                 // For now, log the operation
                 log::debug!("Would write key to warm tier: {:?}", warm_key);

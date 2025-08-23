@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use super::super::coherence::CacheTier;
+use crate::cache::coherence::CacheTier;
 pub use crate::cache::traits::AccessType;
 use crate::cache::traits::CacheKey;
 

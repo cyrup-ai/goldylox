@@ -3,16 +3,17 @@
 //! This module manages background tasks, maintenance scheduling, and worker coordination
 //! for the unified cache system using lock-free channels and atomic state management.
 
-use std::sync::Arc;
+use std::marker::PhantomData;
 use std::thread;
 use std::time::Duration;
+use log::{error, warn, debug};
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use super::super::config::CacheConfig;
-use super::super::manager::background::{
+use crate::cache::config::CacheConfig;
+use crate::cache::manager::background::{
     types::{BackgroundTask, TaskProcessor}, BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
 };
-use super::super::traits::core::{CacheKey, CacheValue};
+use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Timer control commands
@@ -25,13 +26,15 @@ enum TimerCommand {
 }
 
 /// Background operation coordinator with work-stealing task queue
-pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue> {
+pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue, P: TaskProcessor = DefaultProcessor> {
     /// Background task queue (lock-free channel)
     task_queue: Sender<BackgroundTask>,
     /// Task receiver for processing
     task_receiver: Receiver<BackgroundTask>,
-    /// Optional task processor for handling tasks
-    task_processor: Option<Arc<dyn TaskProcessor>>,
+    /// Sender to processor thread (processor owns the TaskProcessor)
+    processor_sender: Option<Sender<BackgroundTask>>,
+    /// Processor thread handle
+    processor_thread: Option<thread::JoinHandle<()>>,
     /// Timer thread for scheduling periodic tasks
     timer_thread: Option<thread::JoinHandle<()>>,
     /// Worker thread for task processing
@@ -43,10 +46,19 @@ pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue> {
     /// Background worker state with atomic coordination
     worker_state: BackgroundWorkerState,
     /// Phantom data for generics
-    _phantom: std::marker::PhantomData<(K, V)>,
+    _phantom: PhantomData<(K, V, P)>,
 }
 
-impl<K: CacheKey, V: CacheValue> BackgroundCoordinator<K, V> {
+/// Default no-op processor for when no processor is set
+pub struct DefaultProcessor;
+
+impl TaskProcessor for DefaultProcessor {
+    fn process_task(&self, _task: &BackgroundTask) -> Result<(), CacheOperationError> {
+        Ok(())
+    }
+}
+
+impl<K: CacheKey, V: CacheValue, P: TaskProcessor + Send + 'static> BackgroundCoordinator<K, V, P> {
     /// Create new background coordinator with configuration
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
         let (task_queue, task_receiver) = bounded(1000); // Bounded queue for backpressure
@@ -63,7 +75,7 @@ impl<K: CacheKey, V: CacheValue> BackgroundCoordinator<K, V> {
                     TimerCommand::Schedule { delay_ms, task } => {
                         thread::sleep(Duration::from_millis(delay_ms));
                         if let Err(e) = task_tx.try_send(task) {
-                            eprintln!("Failed to send scheduled task: {:?}", e);
+                            error!("Failed to send scheduled task: {:?}", e);
                         }
                     }
                     TimerCommand::Shutdown => break,
@@ -74,60 +86,89 @@ impl<K: CacheKey, V: CacheValue> BackgroundCoordinator<K, V> {
         Ok(Self {
             task_queue,
             task_receiver,
-            task_processor: None,
+            processor_sender: None,
+            processor_thread: None,
             timer_thread: Some(timer_thread),
             worker_thread: None,
             timer_sender,
             maintenance_scheduler,
             worker_state,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         })
     }
     
-    /// Set task processor for handling background tasks
-    pub fn set_task_processor(&mut self, processor: Arc<dyn TaskProcessor>) {
-        self.task_processor = Some(processor);
+    /// Start processor thread with owned TaskProcessor
+    pub fn start_processor(&mut self, processor: P) -> Result<(), CacheOperationError> {
+        if self.processor_thread.is_some() {
+            debug!("Processor thread already started");
+            return Ok(());
+        }
+        
+        let (sender, receiver) = bounded::<BackgroundTask>(1000);
+        self.processor_sender = Some(sender);
+        
+        let timer_tx = self.timer_sender.clone();
+        
+        let handle = thread::Builder::new()
+            .name("cache-processor".to_string())
+            .spawn(move || {
+                debug!("Starting processor thread");
+                // Processor OWNS the TaskProcessor - no Arc!
+                while let Ok(task) = receiver.recv() {
+                    match &task {
+                        BackgroundTask::Statistics { stats_type: 2, interval_ms } => {
+                            if let Err(e) = processor.process_task(&task) {
+                                error!("Memory monitoring task failed: {:?}", e);
+                            }
+                            // Reschedule periodic task
+                            if let Err(e) = timer_tx.send(TimerCommand::Schedule {
+                                delay_ms: *interval_ms,
+                                task: task.clone(),
+                            }) {
+                                error!("Failed to reschedule monitoring task: {:?}", e);
+                                break;
+                            }
+                        }
+                        _ => {
+                            // Process other task types
+                            if let Err(e) = processor.process_task(&task) {
+                                warn!("Background task failed: {:?}", e);
+                            }
+                        }
+                    }
+                }
+                debug!("Processor thread shutting down");
+            })
+            .map_err(|_| CacheOperationError::InitializationFailed)?;
+            
+        self.processor_thread = Some(handle);
+        Ok(())
     }
 
     /// Start background worker threads
     pub fn start_worker_threads(&self) -> Result<(), CacheOperationError> {
         // Only start if not already started
         if self.worker_thread.is_some() {
+            debug!("Worker threads already started");
             return Ok(());
         }
         
         let rx = self.task_receiver.clone();
-        let processor = self.task_processor.clone();
-        let timer_tx = self.timer_sender.clone();
+        let processor_sender = self.processor_sender.clone();
         
         let _handle = thread::Builder::new()
             .name("cache-worker".to_string())
             .spawn(move || {
+                debug!("Starting cache worker thread");
                 while let Ok(task) = rx.recv() {
-                    if let Some(ref proc) = processor {
-                        match &task {
-                            BackgroundTask::Statistics { stats_type: 2, interval_ms } => {
-                                if let Err(e) = proc.process_task(&task) {
-                                    eprintln!("Memory monitoring task failed: {:?}", e);
-                                }
-                                // Reschedule periodic task
-                                if let Err(e) = timer_tx.send(TimerCommand::Schedule {
-                                    delay_ms: *interval_ms,
-                                    task: task.clone(),
-                                }) {
-                                    eprintln!("Failed to reschedule monitoring task: {:?}", e);
-                                    break;
-                                }
-                            }
-                            _ => {
-                                // Process other task types
-                                if let Err(e) = proc.process_task(&task) {
-                                    eprintln!("Background task failed: {:?}", e);
-                                }
-                            }
+                    // Forward to processor thread if available
+                    if let Some(ref sender) = processor_sender {
+                        if let Err(e) = sender.try_send(task) {
+                            warn!("Failed to forward task to processor: {:?}", e);
                         }
                     }
                 }
+                debug!("Cache worker thread shutting down");
             })
             .map_err(|_| CacheOperationError::InitializationFailed)?;
         

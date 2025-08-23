@@ -3,7 +3,7 @@
 //! This module provides builder methods for advanced cache configuration options
 //! including hash functions, eviction policies, and version management.
 
-use super::super::types::{EvictionPolicy, HashFunction};
+use crate::cache::config::types::{EvictionPolicy, HashFunction};
 use super::core::CacheConfigBuilder;
 
 impl CacheConfigBuilder {

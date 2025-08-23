@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use super::super::config::CacheConfig;
+use crate::cache::config::CacheConfig;
 use super::types::PoolAllocationStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 

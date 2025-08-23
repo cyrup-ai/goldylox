@@ -1,7 +1,7 @@
 //! Integration tests for memory pressure monitoring system
 
-use blitz_cache::cache::config::types::{CacheConfig, MemoryConfig};
-use blitz_cache::cache::memory::{MemoryManager, create_advanced_pressure_monitor, get_system_memory_with_fallback};
+use goldylox::cache::config::types::{CacheConfig, MemoryConfig};
+use goldylox::cache::memory::{MemoryManager, create_advanced_pressure_monitor, get_system_memory_with_fallback};
 
 #[test]
 fn test_memory_config_validation() {

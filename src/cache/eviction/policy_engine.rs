@@ -9,9 +9,9 @@ use std::time::Instant;
 
 use crate::cache::analyzer::types::AccessPattern;
 use crate::cache::analyzer::analyzer_core::AccessPatternAnalyzer;
-use super::super::coherence::CacheTier;
-use super::super::config::CacheConfig;
-use super::super::manager::policy::types::WritePolicy;
+use crate::cache::coherence::CacheTier;
+use crate::cache::config::CacheConfig;
+use crate::cache::manager::policy::types::WritePolicy;
 use super::prefetch::PrefetchPredictor;
 use super::traditional_policies::ReplacementPolicies;
 use super::types::{AccessEvent, PolicyType};

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
 
-use super::super::data_structures::CoherenceKey;
+use crate::cache::coherence::data_structures::CoherenceKey;
 use super::types::WriteBackRequest;
 use crate::cache::traits::{CacheKey, CacheValue};
 

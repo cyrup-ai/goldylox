@@ -5,9 +5,9 @@
 
 use std::time::Instant;
 
-use super::super::communication::{CoherenceError, CoherenceMessage};
-use super::super::data_structures::{CacheTier, CoherenceKey};
-use super::super::invalidation::InvalidationPriority;
+use crate::cache::coherence::communication::{CoherenceError, CoherenceMessage};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey};
+use crate::cache::coherence::invalidation::InvalidationPriority;
 use super::types::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -83,7 +83,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         self.invalidation_manager.submit_invalidation(
             key,
             self.get_other_tier(requester_tier),
-            super::super::data_structures::InvalidationReason::WriteConflict,
+            crate::cache::coherence::InvalidationReason::WriteConflict,
             InvalidationPriority::High,
         );
 
@@ -112,7 +112,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: CoherenceKey<K>,
         _target_tier: CacheTier,
-        _reason: super::super::data_structures::InvalidationReason,
+        _reason: crate::cache::coherence::InvalidationReason,
     ) -> Result<(), CoherenceError> {
         // Mark invalidation as completed
         self.invalidation_manager.mark_completed(&key, true);

@@ -3,12 +3,12 @@
 //! This module defines the fundamental types used throughout the coherence protocol
 //! implementation including controller structure and configuration.
 
-use super::super::communication::CommunicationHub;
-use super::super::data_structures::{CacheTier, CoherenceKey, ProtocolConfiguration};
-use super::super::invalidation::InvalidationManager;
-use super::super::state_management::StateTransitionValidator;
-use super::super::statistics::CoherenceStatistics;
-use super::super::write_propagation::WritePropagationSystem;
+use crate::cache::coherence::communication::CommunicationHub;
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, ProtocolConfiguration};
+use crate::cache::coherence::invalidation::InvalidationManager;
+use crate::cache::coherence::state_management::StateTransitionValidator;
+use crate::cache::coherence::statistics::CoherenceStatistics;
+use crate::cache::coherence::write_propagation::WritePropagationSystem;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Main coherence controller coordinating all coherence operations
@@ -16,7 +16,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     /// Cache line states indexed by coherence key
     pub cache_line_states:
-        crossbeam_skiplist::SkipMap<CoherenceKey<K>, super::super::data_structures::CacheLineState>,
+        crossbeam_skiplist::SkipMap<CoherenceKey<K>, crate::cache::coherence::CacheLineState>,
     /// Communication hub for inter-tier messaging
     pub communication_hub: CommunicationHub<K, V>,
     /// Statistics collection
@@ -46,7 +46,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
     }
 
     /// Get coherence statistics
-    pub fn get_statistics(&self) -> super::super::statistics::CoherenceStatisticsSnapshot {
+    pub fn get_statistics(&self) -> crate::cache::coherence::CoherenceStatisticsSnapshot {
         self.coherence_stats.get_snapshot()
     }
 
@@ -69,31 +69,31 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
     }
 
     /// Validate schema version compatibility
-    pub fn validate_schema_version(&self, version: u32) -> Result<(), super::super::communication::CoherenceError> {
+    pub fn validate_schema_version(&self, version: u32) -> Result<(), crate::cache::coherence::CoherenceError> {
         let current_schema_version = self.protocol_config.schema_version;
         if version > current_schema_version {
-            return Err(super::super::communication::CoherenceError::UnsupportedSchemaVersion(version));
+            return Err(crate::cache::coherence::CoherenceError::UnsupportedSchemaVersion(version));
         }
         Ok(())
     }
     
     /// Validate data integrity checksum using coherence invalidation sequence
-    pub fn validate_checksum(&self, key: &K, expected: u64) -> Result<(), super::super::communication::CoherenceError> {
+    pub fn validate_checksum(&self, key: &K, expected: u64) -> Result<(), crate::cache::coherence::CoherenceError> {
         // Use coherence invalidation sequence as checksum (matches SerializationEnvelope implementation)
-        let coherence_key = super::super::data_structures::CoherenceKey::from_cache_key(key);
+        let coherence_key = crate::cache::coherence::CoherenceKey::from_cache_key(key);
         
         if let Some(cache_line_entry) = self.cache_line_states.get(&coherence_key) {
             let cache_line = cache_line_entry.value();
             let actual_sequence = cache_line.metadata.invalidation_seq.load(std::sync::atomic::Ordering::Acquire) as u64;
             
             if actual_sequence != expected {
-                return Err(super::super::communication::CoherenceError::ChecksumMismatch { 
+                return Err(crate::cache::coherence::CoherenceError::ChecksumMismatch { 
                     expected, 
                     actual: actual_sequence 
                 });
             }
         } else {
-            return Err(super::super::communication::CoherenceError::CacheLineNotFound);
+            return Err(crate::cache::coherence::CoherenceError::CacheLineNotFound);
         }
         Ok(())
     }

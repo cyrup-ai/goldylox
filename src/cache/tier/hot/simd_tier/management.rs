@@ -3,12 +3,12 @@
 //! This module contains statistics collection, maintenance operations,
 //! and configuration access for the SIMD hot tier cache.
 
-use super::super::memory_pool::MemoryPool;
-use super::super::synchronization::WriteGuard;
-use super::super::types::HotTierConfig;
+use crate::cache::tier::hot::memory_pool::MemoryPool;
+use crate::cache::tier::hot::synchronization::WriteGuard;
+use crate::cache::tier::hot::types::HotTierConfig;
 use super::core::SimdHotTier;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::statistics::TierStatistics;
+use crate::cache::manager::TierStatistics;
 
 impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     /// Get cache statistics
@@ -17,17 +17,17 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     }
 
     /// Get detailed memory pool statistics
-    pub fn memory_stats(&self) -> super::super::memory_pool::MemoryPoolStats {
+    pub fn memory_stats(&self) -> crate::cache::tier::hot::memory_pool::MemoryPoolStats {
         self.memory_pool.stats()
     }
 
     /// Get eviction statistics
-    pub fn eviction_stats(&self) -> super::super::eviction::EvictionStats {
+    pub fn eviction_stats(&self) -> crate::cache::tier::hot::eviction::EvictionStats {
         self.eviction_engine.get_stats()
     }
 
     /// Get prefetch statistics
-    pub fn prefetch_stats(&self) -> super::super::prefetch::PrefetchStats {
+    pub fn prefetch_stats(&self) -> crate::cache::tier::hot::prefetch::PrefetchStats {
         self.prefetch_predictor.get_stats()
     }
 
@@ -37,10 +37,10 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
 
         while let Some(request) = self.prefetch_predictor.get_next_prefetch() {
             // Hardware prefetch hint
-            super::super::prefetch::hardware::HardwarePrefetcher::prefetch_for_access(
+            crate::cache::tier::hot::prefetch::hardware::HardwarePrefetcher::prefetch_for_access(
                 &request.key,
                 &self.memory_pool.entries
-                    as &[super::super::memory_pool::types::CacheSlot<K, V>; 256],
+                    as &[crate::cache::tier::hot::memory_pool::types::CacheSlot<K, V>; 256],
             );
             processed += 1;
 
@@ -67,10 +67,10 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         let stats = self.stats();
         let memory_stats = self.memory_stats();
 
-        stats.hit_rate < super::super::types::thresholds::MIN_HIT_RATE
+        stats.hit_rate < crate::cache::tier::hot::types::thresholds::MIN_HIT_RATE
             || memory_stats.fragmentation_ratio > 0.3
             || stats.avg_access_time_ns
-                > super::super::types::thresholds::MAX_ACCESS_LATENCY.as_nanos() as u64
+                > crate::cache::tier::hot::types::thresholds::MAX_ACCESS_LATENCY.as_nanos() as u64
     }
 
     /// Get configuration

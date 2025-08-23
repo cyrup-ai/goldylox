@@ -6,12 +6,10 @@
 use std::alloc::{alloc, Layout};
 use std::ptr::{null_mut, NonNull};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use crossbeam_utils::CachePadded;
 
-use super::super::types::PoolAllocationStats;
-use super::cleanup_manager::PoolCleanupManager;
+use crate::cache::memory::types::PoolAllocationStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Individual memory pool with lock-free allocation
@@ -31,8 +29,6 @@ pub struct MemoryPool {
     pool_allocation_stats: PoolAllocationStats,
     /// Pool memory layout
     memory_layout: Layout,
-    /// Sophisticated cleanup manager (integrates with existing systems)
-    cleanup_manager: Option<Arc<PoolCleanupManager>>,
 }
 
 /// Pool entry for lock-free free list
@@ -60,7 +56,6 @@ impl MemoryPool {
             free_list_head: AtomicPtr::new(null_mut()),
             pool_allocation_stats: PoolAllocationStats::new(),
             memory_layout: layout,
-            cleanup_manager: None, // Will be set later via set_cleanup_manager
         })
     }
 
@@ -109,28 +104,11 @@ impl MemoryPool {
         }
     }
 
-    /// Set the cleanup manager for sophisticated cleanup operations
-    pub fn set_cleanup_manager(&mut self, cleanup_manager: Arc<PoolCleanupManager>) {
-        self.cleanup_manager = Some(cleanup_manager);
-    }
-
     /// Sophisticated cleanup that integrates with existing fragmentation analysis,
     /// maintenance scheduling, and allocation statistics systems
     pub fn try_cleanup(&self) -> bool {
-        // Use sophisticated cleanup manager if available
-        if let Some(ref cleanup_manager) = self.cleanup_manager {
-            // Integrate with existing sophisticated systems
-            match cleanup_manager.try_sophisticated_cleanup(self) {
-                Ok(cleanup_performed) => cleanup_performed,
-                Err(_) => {
-                    // Fallback to simple cleanup if sophisticated cleanup fails
-                    self.simple_fallback_cleanup()
-                }
-            }
-        } else {
-            // Fallback to simple cleanup if no cleanup manager
-            self.simple_fallback_cleanup()
-        }
+        // Directly use simple cleanup since we removed the Arc dependency
+        self.simple_fallback_cleanup()
     }
 
     /// Simple fallback cleanup (preserves original behavior)

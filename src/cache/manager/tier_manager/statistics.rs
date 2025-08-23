@@ -54,7 +54,7 @@ impl PromotionStatistics {
     }
 }
 
-impl PromotionQueue {
+impl<K: crate::cache::traits::CacheKey> PromotionQueue<K> {
     /// Create new promotion queue
     pub fn new(max_size: u32) -> Self {
         Self {
@@ -69,7 +69,7 @@ impl PromotionQueue {
 
     /// Submit task to promotion queue
     #[inline]
-    pub fn submit_task(&self, task: PromotionTask) -> Result<(), PromotionTask> {
+    pub fn submit_task(&self, task: PromotionTask<K>) -> Result<(), PromotionTask<K>> {
         let current_size = self.queue_size.load(Ordering::Relaxed);
         let max_size = self.max_queue_size.load(Ordering::Relaxed);
 
@@ -92,7 +92,7 @@ impl PromotionQueue {
 
     /// Get next task from queue
     #[inline]
-    pub fn get_next_task(&self) -> Option<PromotionTask> {
+    pub fn get_next_task(&self) -> Option<PromotionTask<K>> {
         if let Some(entry) = self.task_queue.pop_front() {
             self.queue_size.fetch_sub(1, Ordering::Relaxed);
             self.tasks_processed.fetch_add(1, Ordering::Relaxed);

@@ -15,8 +15,8 @@ use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use memmap2::MmapMut;
 
-use super::super::super::config::ColdTierConfig;
-use super::super::super::traits::*;
+use crate::cache::config::ColdTierConfig;
+use crate::cache::traits::*;
 
 /// Binary format constants for cache value serialization
 /// These constants define a stable, versioned binary format for persistent storage

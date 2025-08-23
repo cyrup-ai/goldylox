@@ -6,7 +6,7 @@
 use std::marker::PhantomData;
 use std::time::Instant;
 
-use super::super::super::traits::types_and_enums::SelectionReason;
+use crate::cache::traits::types_and_enums::SelectionReason;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::timestamp_nanos;
 
@@ -155,7 +155,7 @@ impl<K: CacheKey, V: CacheValue> EvictionCandidate<K, V> {
     }
 }
 
-impl<K, V> crate::traits::entry_and_stats::EvictionCandidate<K, V> for EvictionCandidate<K, V>
+impl<K, V> crate::cache::traits::entry_and_stats::EvictionCandidate<K, V> for EvictionCandidate<K, V>
 where
     K: CacheKey + crate::cache::traits::core::CacheKey,
     V: CacheValue + crate::cache::traits::core::CacheValue,

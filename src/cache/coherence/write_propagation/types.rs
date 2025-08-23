@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossbeam_skiplist::SkipMap;
 
-use super::super::data_structures::{CacheTier, CoherenceKey};
+use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey};
 use super::worker_system::WorkerChannels;
 use crate::cache::traits::{CacheKey, CacheValue};
 

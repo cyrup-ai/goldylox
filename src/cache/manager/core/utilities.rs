@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use super::super::super::tier::cold::cold_get;
-use super::super::super::tier::hot::simd_hot_get;
-use super::super::super::tier::warm::warm_get;
-use super::super::super::types::CacheTier;
+use crate::cache::tier::cold::cold_get;
+use crate::cache::tier::hot::simd_hot_get;
+use crate::cache::tier::warm::warm_get;
+use crate::cache::types::CacheTier;
 use super::types::{AccessPath, UnifiedCacheManager};
 use crate::cache::traits::{CacheKey, CacheValue};
 
@@ -28,7 +28,7 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Try to get value from cold tier
     pub fn try_cold_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<Arc<V>> {
         access_path.tried_cold = true;
-        cold::cold_get::<K, V>(key).ok().flatten()
+        crate::cache::tier::cold::cold_get::<K, V>(key).ok().flatten()
     }
 
     /// Record cache hit for statistics
@@ -80,7 +80,7 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
         match tier {
             CacheTier::Hot => {
                 // Calculate hot tier utilization from memory pool stats
-                let stats = super::super::super::tier::hot::hot_tier_memory_stats::<K, V>();
+                let stats = crate::cache::tier::hot::hot_tier_memory_stats::<K, V>();
                 if stats.total_slots > 0 {
                     stats.occupied_slots as f32 / stats.total_slots as f32
                 } else {
@@ -89,17 +89,17 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
             }
             CacheTier::Warm => {
                 // Calculate warm tier utilization from actual stats
-                super::super::super::tier::warm::get_utilization().unwrap_or(0.3) as f32
+                crate::cache::tier::warm::get_memory_pressure::<K, V>().unwrap_or(0.3) as f32
                 // Fallback to 30% if stats unavailable
             }
             CacheTier::Cold => {
                 // Calculate cold tier utilization from actual stats
-                super::super::super::tier::cold::get_stats::<K, V>()
+                crate::cache::tier::cold::get_stats::<K, V>()
                     .map(|stats| {
                         // Calculate utilization as ratio of hits to total accesses
-                        let total_accesses = stats.hits + stats.misses;
+                        let total_accesses = stats.total_hits() + stats.total_misses();
                         if total_accesses > 0 {
-                            stats.hits as f32 / total_accesses as f32
+                            stats.total_hits() as f32 / total_accesses as f32
                         } else {
                             0.0
                         }

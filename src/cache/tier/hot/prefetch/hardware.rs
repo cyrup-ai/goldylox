@@ -6,7 +6,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use super::super::memory_pool::CacheSlot;
+use crate::cache::tier::hot::memory_pool::CacheSlot;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Hardware prefetch operations

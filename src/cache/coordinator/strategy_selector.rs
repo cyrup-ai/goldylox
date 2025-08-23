@@ -5,8 +5,8 @@
 
 use crossbeam_utils::atomic::AtomicCell;
 
-use super::super::config::CacheConfig;
-use super::super::manager::{CacheStrategy, StrategyMetrics, StrategySwitcher, StrategyThresholds};
+use crate::cache::config::CacheConfig;
+use crate::cache::manager::{CacheStrategy, StrategyMetrics, StrategySwitcher, StrategyThresholds};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Cache strategy selector for optimal tier placement decisions

@@ -15,6 +15,5 @@ pub mod management;
 pub mod operations;
 pub mod simd_helpers;
 
-// REMOVED: Compatibility re-export that hides canonical API path
-// Users must now import from canonical module path:
-// - Use tier::hot::simd_tier::core::SimdHotTier
+// Re-export main types
+pub use core::SimdHotTier;

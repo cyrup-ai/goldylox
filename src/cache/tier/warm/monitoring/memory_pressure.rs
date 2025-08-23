@@ -295,7 +295,7 @@ impl MemoryPressureMonitor {
     }
 }
 
-impl super::super::memory_monitor_trait::MemoryMonitor for MemoryPressureMonitor {
+impl crate::cache::tier::warm::memory_monitor_trait::MemoryMonitor for MemoryPressureMonitor {
     fn record_allocation(&self, size: usize) {
         self.record_allocation(size)
     }

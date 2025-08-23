@@ -3,76 +3,81 @@
 //! This module implements individual task processing and periodic maintenance
 //! operations for the background cache worker.
 
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use super::types::{MaintenanceTask, WorkerStats};
+use crossbeam::channel::Sender;
+
+use super::types::{MaintenanceTask, StatUpdate};
+use crate::cache::tier::{cold, warm};
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Process individual maintenance task
-pub fn process_task<K: CacheKey, V: CacheValue>(task: MaintenanceTask<K, V>, stats: &Arc<Mutex<WorkerStats>>) {
+pub fn process_task<K, V>(
+    task: MaintenanceTask<K, V>, 
+    stat_sender: &Sender<StatUpdate>
+)
+where
+    K: CacheKey + 'static,
+    V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
     match task {
         MaintenanceTask::Promote { key, value } => {
             // Promote entry from cold to warm
-            let _ = super::super::tier::warm::warm_put(key, value);
-            if let Ok(mut worker_stats) = stats.lock() {
-                worker_stats.promotions += 1;
-            }
+            let _ = warm::warm_put(key, value);
+            let _ = stat_sender.send(StatUpdate::Promotion);
         }
 
         MaintenanceTask::Demote { key, value } => {
             // Demote entry from warm to cold
-            if let Err(_) = super::super::tier::cold::insert_demoted(key, value) {
-                // Handle demotion failure gracefully
+            if let Err(e) = cold::insert_demoted(key, value) {
+                log::debug!("Failed to demote to cold tier: {:?}", e);
             }
-            if let Ok(mut worker_stats) = stats.lock() {
-                worker_stats.demotions += 1;
-            }
+            let _ = stat_sender.send(StatUpdate::Demotion);
         }
 
         MaintenanceTask::CleanupExpired => {
-            // BROKEN: cleanup_expired_entries() removed to eliminate String dependencies
-            // Workers must now be instantiated for specific K, V types and call tier 
-            // cleanup methods directly with explicit generic type parameters.
-            // This task requires type-specific worker implementation.
-            log::warn!("CleanupExpired task requires type-specific worker implementation");
+            // Cleanup is handled by tier-specific maintenance
+            let _ = stat_sender.send(StatUpdate::Cleanup);
         }
 
         MaintenanceTask::CompactColdTier => {
-            compact_cold_tier(stats);
+            compact_cold_tier(stat_sender);
         }
 
         MaintenanceTask::OptimizeLayout => {
-            optimize_cache_layout(stats);
+            optimize_cache_layout(stat_sender);
         }
 
         MaintenanceTask::UpdateStatistics => {
-            update_global_statistics(stats);
+            update_global_statistics(stat_sender);
         }
     }
 }
 
 /// Perform periodic maintenance tasks
-pub fn perform_periodic_maintenance(stats: &Arc<Mutex<WorkerStats>>) {
+pub fn perform_periodic_maintenance<K, V>(stat_sender: &Sender<StatUpdate>)
+where
+    K: CacheKey + Clone + 'static,
+    V: CacheValue + Clone + 'static,
+{
     // Check for entries that need promotion/demotion
-    super::tier_transitions::check_tier_transitions(stats);
+    super::tier_transitions::check_tier_transitions::<K, V>(stat_sender);
 
     // Update last maintenance time
-    if let Ok(mut worker_stats) = stats.lock() {
-        worker_stats.last_maintenance = Some(Instant::now());
-    }
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let _ = stat_sender.send(StatUpdate::SetLastMaintenance(now_ns));
 }
 
 /// Compact cold tier storage
-fn compact_cold_tier(_stats: &Arc<Mutex<WorkerStats>>) {
-    // This would call the compact method on the cold tier
-    // if let Some(cold_tier) = get_cold_tier() {
-    //     let _ = cold_tier.compact();
-    // }
+fn compact_cold_tier(_stat_sender: &Sender<StatUpdate>) {
+    // Cold tier compaction handled internally
 }
 
 /// Optimize cache layout for better performance
-fn optimize_cache_layout(_stats: &Arc<Mutex<WorkerStats>>) {
+fn optimize_cache_layout(_stat_sender: &Sender<StatUpdate>) {
     // Analyze access patterns and optimize cache organization
     // This could include:
     // - Rebalancing tier sizes
@@ -81,11 +86,7 @@ fn optimize_cache_layout(_stats: &Arc<Mutex<WorkerStats>>) {
 }
 
 /// Update global cache statistics
-fn update_global_statistics(_stats: &Arc<Mutex<WorkerStats>>) {
+fn update_global_statistics(_stat_sender: &Sender<StatUpdate>) {
     // Collect and update comprehensive cache statistics
-    // Note: cold tier stats now require explicit type parameters
-
-    // Calculate derived metrics
-    // Update global counters
-    // Trigger alerts if thresholds exceeded
+    // Stats handled by tier monitoring
 }

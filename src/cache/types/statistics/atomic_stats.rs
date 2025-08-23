@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crossbeam_utils::CachePadded;
 
-use super::super::atomic::timestamp_nanos;
+use crate::cache::types::timestamp_nanos;
 use super::tier_stats::TierStatistics;
 
 /// Atomic tier statistics with cache-line alignment
