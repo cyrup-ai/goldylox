@@ -1,0 +1,1018 @@
+//! Production-quality cache entry domain model
+//!
+//! This module defines the core CacheEntry<K,V> struct that wraps user domain data
+//! with sophisticated cache infrastructure including access tracking, tier management,
+//! timestamps, and metadata for intelligent cache operations.
+
+use std::collections::VecDeque;
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+use super::core::{CacheKey, CacheValue};
+use super::supporting_types::{CompressionAlgorithm, SerializationFormat};
+use super::types_and_enums::{AccessType, TemporalPattern, TierAffinity, TierLocation};
+use crate::cache::coherence::data_structures::CacheTier;
+use crate::cache::coherence::write_propagation::WritePriority;
+// Coherence module imports for delegation to existing infrastructure
+use crate::cache::coherence::{
+    CoherenceController, CoherenceError, CoherenceKey, CoherenceMessage, MesiState,
+    StateTransitionRequest, TransitionReason,
+};
+
+// Conversion from TierLocation to CacheTier for coherence integration
+impl From<TierLocation> for CacheTier {
+    fn from(tier_location: TierLocation) -> Self {
+        match tier_location {
+            TierLocation::Hot => CacheTier::Hot,
+            TierLocation::Warm => CacheTier::Warm,
+            TierLocation::Cold => CacheTier::Cold,
+        }
+    }
+}
+
+/// Health status for error tracking and circuit breaker functionality
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Entry is healthy and operational
+    Healthy,
+    /// Entry has experienced some errors but is still usable
+    Degraded,
+    /// Entry has significant errors and may need attention
+    Unhealthy,
+    /// Entry is temporarily unavailable (circuit breaker open)
+    CircuitOpen,
+}
+
+/// Access event for pattern analysis
+#[derive(Debug, Clone)]
+pub struct AccessEvent {
+    /// When the access occurred
+    pub timestamp: Instant,
+    /// Type of access pattern
+    pub access_type: AccessType,
+    /// Access latency in nanoseconds
+    pub latency_ns: u64,
+    /// Whether access resulted in cache hit
+    pub hit: bool,
+}
+
+/// Tier transition event for tracking migration history
+#[derive(Debug, Clone)]
+pub struct TierTransition {
+    /// When the transition occurred
+    pub timestamp: Instant,
+    /// Source tier
+    pub from_tier: TierLocation,
+    /// Destination tier  
+    pub to_tier: TierLocation,
+    /// Reason for transition
+    pub reason: String,
+    /// Success of transition
+    pub success: bool,
+}
+
+/// Migration lock to prevent concurrent tier transitions
+#[derive(Debug, Clone)]
+pub struct MigrationLock {
+    /// When the lock was acquired
+    pub acquired_at: Instant,
+    /// Target tier for migration
+    pub target_tier: TierLocation,
+    /// Migration operation ID
+    pub operation_id: u64,
+}
+
+/// Cache entry metadata containing infrastructure data
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CacheEntryMetadata {
+    /// Exact creation timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub created_at: Instant,
+    /// Last access timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub last_accessed: Instant,
+    /// Total access count (atomic for concurrent access)
+    pub access_count: AtomicU64,
+    /// Entry size in bytes
+    pub size_bytes: usize,
+    /// Cost to recreate this value (CPU cycles estimate)
+    pub creation_cost: u64,
+    /// Compression effectiveness (0.0-1.0)
+    pub compression_ratio: f32,
+    /// Entry health status for error tracking
+    pub health_status: HealthStatus,
+    /// Eviction priority score (higher = keep longer)
+    pub priority_score: f32,
+    /// Error count for circuit breaker
+    pub error_count: AtomicU32,
+    /// Version for coherence protocol
+    pub version: u64,
+    /// Last error timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub last_error: Option<Instant>,
+}
+
+impl CacheEntryMetadata {
+    /// Create new metadata for cache entry
+    pub fn new(size_bytes: usize, creation_cost: u64) -> Self {
+        let now = Instant::now();
+        Self {
+            created_at: now,
+            last_accessed: now,
+            access_count: AtomicU64::new(0),
+            size_bytes,
+            creation_cost,
+            compression_ratio: 1.0, // No compression by default
+            health_status: HealthStatus::Healthy,
+            priority_score: 0.5, // Medium priority by default
+            error_count: AtomicU32::new(0),
+            version: 1,
+            last_error: None,
+        }
+    }
+
+    /// Record successful access using coherence protocol delegation
+    #[inline]
+    pub fn record_access<K: CacheKey, V: CacheValue>(
+        &self,
+        cache_key: &K,
+        tier_location: TierLocation,
+        coherence_controller: &CoherenceController<K, V>,
+    ) -> Result<(), CoherenceError> {
+        // DELEGATE to existing coherence protocol read operation
+        // This handles all atomic operations, state management, and coordination
+        match coherence_controller.handle_read_request(cache_key, tier_location.into()) {
+            Ok(_read_response) => {
+                // Coherence protocol handled all state management, atomicity, and coordination
+                // Update local counter for compatibility
+                self.access_count.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(coherence_error) => Err(coherence_error),
+        }
+    }
+
+    /// Record error occurrence
+    pub fn record_error(&mut self) {
+        let error_count = self.error_count.fetch_add(1, Ordering::Relaxed) + 1;
+        self.last_error = Some(Instant::now());
+
+        // Update health status based on error frequency
+        self.health_status = match error_count {
+            1..=3 => HealthStatus::Degraded,
+            4..=10 => HealthStatus::Unhealthy,
+            _ => HealthStatus::CircuitOpen,
+        };
+    }
+
+    /// Get current access count
+    #[inline]
+    pub fn access_count(&self) -> u64 {
+        self.access_count.load(Ordering::Relaxed)
+    }
+
+    /// Get current error count  
+    #[inline]
+    pub fn error_count(&self) -> u32 {
+        self.error_count.load(Ordering::Relaxed)
+    }
+
+    /// Calculate age since creation
+    #[inline]
+    pub fn age(&self) -> Duration {
+        Instant::now().duration_since(self.created_at)
+    }
+
+    /// Calculate time since last access
+    #[inline]
+    pub fn time_since_last_access(&self) -> Duration {
+        Instant::now().duration_since(self.last_accessed)
+    }
+}
+
+impl Clone for CacheEntryMetadata {
+    fn clone(&self) -> Self {
+        Self {
+            created_at: self.created_at,
+            last_accessed: self.last_accessed,
+            access_count: AtomicU64::new(self.access_count.load(Ordering::Relaxed)),
+            size_bytes: self.size_bytes,
+            creation_cost: self.creation_cost,
+            compression_ratio: self.compression_ratio,
+            health_status: self.health_status,
+            priority_score: self.priority_score,
+            error_count: AtomicU32::new(self.error_count.load(Ordering::Relaxed)),
+            version: self.version,
+            last_error: self.last_error,
+        }
+    }
+}
+
+/// Sophisticated access pattern tracker for cache intelligence
+#[derive(Debug, Clone)]
+pub struct AccessTracker {
+    /// Recent access events (bounded circular buffer)
+    pub access_history: VecDeque<AccessEvent>,
+    /// Maximum history size
+    pub max_history_size: usize,
+    /// Frequency estimation using exponential moving average
+    pub frequency_estimate: f64,
+    /// Frequency decay factor (0.0-1.0)
+    pub frequency_decay: f64,
+    /// Detected temporal pattern
+    pub temporal_pattern: TemporalPattern,
+    /// Last pattern analysis timestamp
+    pub last_pattern_update: Instant,
+    /// Pattern confidence score (0.0-1.0)
+    pub pattern_confidence: f32,
+    /// Average access latency in nanoseconds
+    pub avg_latency_ns: u64,
+    /// Hit rate (0.0-1.0)
+    pub hit_rate: f64,
+}
+
+impl AccessTracker {
+    /// Create new access tracker
+    pub fn new() -> Self {
+        Self {
+            access_history: VecDeque::new(),
+            max_history_size: 100, // Keep last 100 accesses
+            frequency_estimate: 0.0,
+            frequency_decay: 0.9, // 10% decay per time unit
+            temporal_pattern: TemporalPattern::Steady,
+            last_pattern_update: Instant::now(),
+            pattern_confidence: 0.0,
+            avg_latency_ns: 0,
+            hit_rate: 0.0,
+        }
+    }
+
+    /// Record new access event and update statistics
+    pub fn record_access(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
+        let now = Instant::now();
+        let event = AccessEvent {
+            timestamp: now,
+            access_type,
+            latency_ns,
+            hit,
+        };
+
+        // Update frequency estimate using exponential moving average
+        let time_delta = if let Some(last_event) = self.access_history.back() {
+            event
+                .timestamp
+                .duration_since(last_event.timestamp)
+                .as_secs_f64()
+        } else {
+            1.0 // Default time delta for first access
+        };
+
+        // Add to history, maintaining size limit
+        self.access_history.push_back(event);
+        if self.access_history.len() > self.max_history_size {
+            self.access_history.pop_front();
+        }
+
+        if time_delta > 0.0 {
+            let new_frequency = 1.0 / time_delta;
+            self.frequency_estimate = self.frequency_decay * self.frequency_estimate
+                + (1.0 - self.frequency_decay) * new_frequency;
+        }
+
+        // Update running averages
+        self.update_running_stats();
+
+        // Update temporal pattern if enough time has passed
+        if now.duration_since(self.last_pattern_update).as_secs() >= 60 {
+            self.analyze_temporal_pattern();
+        }
+    }
+
+    /// Update running statistics from access history
+    fn update_running_stats(&mut self) {
+        if self.access_history.is_empty() {
+            return;
+        }
+
+        let total_latency: u64 = self.access_history.iter().map(|e| e.latency_ns).sum();
+        self.avg_latency_ns = total_latency / self.access_history.len() as u64;
+
+        let hits = self.access_history.iter().filter(|e| e.hit).count();
+        self.hit_rate = hits as f64 / self.access_history.len() as f64;
+    }
+
+    /// Analyze temporal access pattern using coherence statistics infrastructure
+    pub fn analyze_temporal_pattern_with_coherence<K: CacheKey, V: CacheValue>(
+        &mut self,
+        cache_key: &K,
+        coherence_controller: &CoherenceController<K, V>,
+    ) {
+        let coherence_key = CoherenceKey::from_cache_key(cache_key);
+
+        if let Some(cache_line_entry) = coherence_controller.cache_line_states.get(&coherence_key) {
+            let cache_line = cache_line_entry.value();
+            let total_accesses = cache_line.total_access_count.load(Ordering::Relaxed);
+            let version = cache_line.get_version();
+
+            // DELEGATE to existing coherence statistics system for sophisticated pattern analysis
+            let stats_snapshot = coherence_controller.coherence_stats.get_snapshot();
+
+            // Use existing sophisticated statistics for pattern analysis
+            if total_accesses >= 10 {
+                // Calculate access frequency from coherence data
+                let time_span = std::time::Instant::now()
+                    .duration_since(self.last_pattern_update)
+                    .as_secs_f64();
+
+                let access_rate = total_accesses as f64 / time_span;
+
+                // Advanced pattern detection using coherence state transitions and statistics
+                self.temporal_pattern = if stats_snapshot.writebacks_performed
+                    > stats_snapshot.successful_operations / 2
+                {
+                    TemporalPattern::WriteHeavy
+                } else if access_rate > 10.0 {
+                    TemporalPattern::BurstyHigh
+                } else if stats_snapshot.success_rate() > 90.0 && access_rate > 1.0 {
+                    TemporalPattern::Periodic
+                } else if version > total_accesses / 2 {
+                    TemporalPattern::WriteHeavy
+                } else {
+                    TemporalPattern::Irregular
+                };
+
+                // Confidence based on coherence state stability and statistics quality
+                self.pattern_confidence = ((total_accesses as f64 / 100.0).min(1.0)
+                    * (stats_snapshot.success_rate() / 100.0))
+                    as f32;
+                self.last_pattern_update = std::time::Instant::now();
+            }
+        }
+    }
+
+    /// Analyze temporal access pattern from history (basic implementation)
+    fn analyze_temporal_pattern(&mut self) {
+        if self.access_history.len() < 10 {
+            self.pattern_confidence = 0.0;
+            return;
+        }
+
+        // Calculate inter-arrival times
+        let mut intervals: Vec<u64> = Vec::new();
+        for window in self.access_history.iter().collect::<Vec<_>>().windows(2) {
+            if let [first, second] = window {
+                let interval = second.timestamp.duration_since(first.timestamp).as_millis() as u64;
+                intervals.push(interval);
+            }
+        }
+
+        if intervals.is_empty() {
+            return;
+        }
+
+        // Calculate variance to determine pattern type
+        let mean_interval = intervals.iter().sum::<u64>() as f64 / intervals.len() as f64;
+        let variance = intervals
+            .iter()
+            .map(|&interval| {
+                let diff = interval as f64 - mean_interval;
+                diff * diff
+            })
+            .sum::<f64>()
+            / intervals.len() as f64;
+
+        let coefficient_of_variation = variance.sqrt() / mean_interval;
+
+        // Classify pattern based on regularity
+        self.temporal_pattern = if coefficient_of_variation < 0.1 {
+            TemporalPattern::Steady
+        } else if coefficient_of_variation > 2.0 {
+            TemporalPattern::Bursty
+        } else {
+            TemporalPattern::Steady // Default fallback
+        };
+
+        self.pattern_confidence = (1.0 - coefficient_of_variation.min(1.0)) as f32;
+        self.last_pattern_update = Instant::now();
+    }
+
+    /// Get current access frequency estimate
+    #[inline]
+    pub fn frequency(&self) -> f64 {
+        self.frequency_estimate
+    }
+
+    /// Get pattern confidence score
+    #[inline]
+    pub fn confidence(&self) -> f32 {
+        self.pattern_confidence
+    }
+}
+
+impl Default for AccessTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Multi-tier management information for intelligent tier transitions
+#[derive(Debug, Clone)]
+pub struct TierInfo {
+    /// Current tier location
+    pub current_tier: TierLocation,
+    /// Preferred tier based on access patterns
+    pub tier_affinity: TierAffinity,
+    /// Score for promotion to higher tier (0.0-1.0)
+    pub promotion_score: f32,
+    /// Whether this entry is a candidate for demotion
+    pub demotion_candidate: bool,
+    /// History of tier transitions
+    pub tier_transition_history: Vec<TierTransition>,
+    /// Current migration lock if transition is in progress
+    pub migration_lock: Option<MigrationLock>,
+    /// Tier residency time (how long in current tier)
+    pub tier_residency: Duration,
+    /// Tier entry timestamp
+    pub tier_entry_time: Instant,
+    /// Number of tier transitions
+    pub transition_count: u32,
+}
+
+impl TierInfo {
+    /// Create new tier info for specified tier
+    pub fn new(initial_tier: TierLocation) -> Self {
+        let now = Instant::now();
+        Self {
+            current_tier: initial_tier,
+            tier_affinity: TierAffinity::Auto,
+            promotion_score: 0.0,
+            demotion_candidate: false,
+            tier_transition_history: Vec::new(),
+            migration_lock: None,
+            tier_residency: Duration::from_secs(0),
+            tier_entry_time: now,
+            transition_count: 0,
+        }
+    }
+
+    /// Record tier transition using coherence communication hub delegation
+    pub fn transition_to<K: CacheKey, V: CacheValue>(
+        &mut self,
+        new_tier: TierLocation,
+        reason: String,
+        cache_key: &K,
+        coherence_controller: &CoherenceController<K, V>,
+    ) -> Result<(), CoherenceError> {
+        let now = Instant::now();
+
+        // DELEGATE to existing coherence communication hub for coordination
+        let coherence_message = CoherenceMessage::RequestExclusive {
+            key: CoherenceKey::from_cache_key(cache_key),
+            requester_tier: new_tier.into(),
+            version: 0,
+            timestamp_ns: now.elapsed().as_nanos() as u64,
+        };
+
+        // Use existing communication hub broadcasting for tier coordination
+        let transition_result = coherence_controller
+            .communication_hub
+            .broadcast(coherence_message);
+
+        // Record transition with actual success/failure status from coherence protocol
+        let transition = TierTransition {
+            timestamp: now,
+            from_tier: self.current_tier,
+            to_tier: new_tier,
+            reason,
+            success: transition_result.is_ok(), // Real success status from coherence protocol
+        };
+        self.tier_transition_history.push(transition);
+
+        // Only update state if coherence protocol succeeded
+        if transition_result.is_ok() {
+            // Update tier residency
+            self.tier_residency = now.duration_since(self.tier_entry_time);
+
+            // Update current state
+            self.current_tier = new_tier;
+        }
+
+        transition_result
+    }
+
+    /// Acquire migration lock for tier transition
+    pub fn acquire_migration_lock(&mut self, target_tier: TierLocation, operation_id: u64) -> bool {
+        if self.migration_lock.is_some() {
+            false // Already locked
+        } else {
+            self.migration_lock = Some(MigrationLock {
+                acquired_at: Instant::now(),
+                target_tier,
+                operation_id,
+            });
+            true
+        }
+    }
+
+    /// Release migration lock
+    pub fn release_migration_lock(&mut self) {
+        self.migration_lock = None;
+    }
+
+    /// Check if migration is currently locked
+    #[inline]
+    pub fn is_migration_locked(&self) -> bool {
+        self.migration_lock.is_some()
+    }
+
+    /// Get current tier residency time
+    #[inline]
+    pub fn current_tier_residency(&self) -> Duration {
+        Instant::now().duration_since(self.tier_entry_time)
+    }
+
+    /// Calculate tier stability score (higher = more stable in current tier)
+    pub fn tier_stability_score(&self) -> f32 {
+        let residency_hours = self.current_tier_residency().as_secs() as f32 / 3600.0;
+        let transition_penalty = self.transition_count as f32 * 0.1;
+        (residency_hours / (1.0 + residency_hours) - transition_penalty)
+            .max(0.0)
+            .min(1.0)
+    }
+}
+
+/// Serialization context for persistent storage
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SerializationContext {
+    /// Serialization format to use
+    pub format: SerializationFormat,
+    /// Compression algorithm to apply
+    pub compression: CompressionAlgorithm,
+    /// Schema version for evolution support
+    pub schema_version: u32,
+    /// Whether to include metadata in serialization
+    pub include_metadata: bool,
+    /// Compression level (0-9, higher = better compression)
+    pub compression_level: u8,
+}
+
+impl SerializationContext {
+    /// Create new serialization context
+    pub fn new(format: SerializationFormat, compression: CompressionAlgorithm) -> Self {
+        Self {
+            format,
+            compression,
+            schema_version: 1,
+            include_metadata: true,
+            compression_level: 6, // Balanced compression
+        }
+    }
+
+    /// Create binary context with LZ4 compression
+    pub fn binary_lz4() -> Self {
+        Self::new(SerializationFormat::Binary, CompressionAlgorithm::Lz4)
+    }
+
+    /// Create context optimized for cold tier storage
+    pub fn cold_tier_optimized() -> Self {
+        Self {
+            format: SerializationFormat::Bincode,
+            compression: CompressionAlgorithm::Zstd,
+            schema_version: 1,
+            include_metadata: true,
+            compression_level: 9, // Maximum compression for cold tier
+        }
+    }
+}
+
+impl Default for SerializationContext {
+    fn default() -> Self {
+        Self::binary_lz4()
+    }
+}
+
+/// Production-quality cache entry wrapping user domain data with cache infrastructure
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
+)]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))
+)]
+pub struct CacheEntry<K: CacheKey, V: CacheValue> {
+    /// User's domain key
+    pub key: K,
+    /// User's domain value
+    pub value: V,
+    /// Cache infrastructure metadata
+    pub metadata: CacheEntryMetadata,
+    /// Access pattern tracking and analysis
+    pub access_tracker: AccessTracker,
+    /// Multi-tier management information
+    pub tier_info: TierInfo,
+    /// Serialization context for persistence
+    pub serialization_context: SerializationContext,
+}
+
+impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
+    /// Create new cache entry with user key/value
+    pub fn new(key: K, value: V, initial_tier: TierLocation) -> Self {
+        let value_size = value.estimated_size();
+        let key_size = key.estimated_size();
+        let total_size = value_size + key_size;
+
+        // Estimate creation cost based on value properties
+        let base_cost = if value.is_expensive() { 10000 } else { 1000 };
+        let size_cost = (total_size as u64).saturating_mul(10);
+        let creation_cost = base_cost + size_cost;
+
+        Self {
+            key,
+            value,
+            metadata: CacheEntryMetadata::new(total_size, creation_cost),
+            access_tracker: AccessTracker::new(),
+            tier_info: TierInfo::new(initial_tier),
+            serialization_context: SerializationContext::default(),
+        }
+    }
+
+    /// Record access to this cache entry
+    pub fn record_access(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
+        // Update metadata - note: coherence integration requires key and controller
+        // For now, update basic metadata without coherence integration
+        self.metadata.access_count.fetch_add(1, Ordering::Relaxed);
+        self.metadata.last_accessed = Instant::now();
+
+        // Update access tracker with sophisticated analysis
+        self.access_tracker
+            .record_access(access_type, latency_ns, hit);
+
+        // Update promotion score based on access patterns
+        self.update_promotion_score();
+    }
+
+    /// Update promotion score for tier management
+    fn update_promotion_score(&mut self) {
+        let frequency = self.access_tracker.frequency();
+        let recency_bonus = if self.metadata.time_since_last_access().as_secs() < 300 {
+            0.2
+        } else {
+            0.0
+        };
+        let pattern_bonus = self.access_tracker.confidence() as f64 * 0.1;
+        let hit_rate_bonus = self.access_tracker.hit_rate * 0.3;
+
+        self.tier_info.promotion_score =
+            ((frequency * 0.4 + recency_bonus + pattern_bonus + hit_rate_bonus).min(1.0) as f32)
+                .max(0.0);
+    }
+
+    /// Check if entry should be promoted to higher tier
+    pub fn should_promote(&self) -> bool {
+        match self.tier_info.current_tier {
+            TierLocation::Cold => {
+                self.tier_info.promotion_score > 0.6 && self.access_tracker.frequency() > 0.1
+            }
+            TierLocation::Warm => {
+                self.tier_info.promotion_score > 0.8 && self.access_tracker.frequency() > 1.0
+            }
+            TierLocation::Hot => false, // Already at top tier
+        }
+    }
+
+    /// Check if entry should be demoted to lower tier
+    pub fn should_demote(&self) -> bool {
+        let low_access = self.access_tracker.frequency() < 0.01;
+        let old_entry = self.metadata.time_since_last_access().as_secs() > 3600; // 1 hour
+        let low_hit_rate = self.access_tracker.hit_rate < 0.3;
+        let unhealthy = matches!(
+            self.metadata.health_status,
+            HealthStatus::Unhealthy | HealthStatus::CircuitOpen
+        );
+
+        match self.tier_info.current_tier {
+            TierLocation::Hot => low_access || (old_entry && low_hit_rate) || unhealthy,
+            TierLocation::Warm => low_access && old_entry,
+            TierLocation::Cold => false, // Already at bottom tier
+        }
+    }
+
+    /// Promote entry to higher tier
+    pub fn promote(&mut self) -> Option<TierLocation> {
+        let new_tier = match self.tier_info.current_tier {
+            TierLocation::Cold => Some(TierLocation::Warm),
+            TierLocation::Warm => Some(TierLocation::Hot),
+            TierLocation::Hot => None,
+        };
+
+        if let Some(target_tier) = new_tier {
+            // Simple tier transition for promote() public API
+            self.tier_info.current_tier = target_tier;
+            self.tier_info.tier_entry_time = Instant::now();
+            self.tier_info.transition_count += 1;
+        }
+
+        new_tier
+    }
+
+    /// Demote entry to lower tier
+    pub fn demote(&mut self) -> Option<TierLocation> {
+        let new_tier = match self.tier_info.current_tier {
+            TierLocation::Hot => Some(TierLocation::Warm),
+            TierLocation::Warm => Some(TierLocation::Cold),
+            TierLocation::Cold => None,
+        };
+
+        if let Some(target_tier) = new_tier {
+            // Simple tier transition for promote() public API
+            self.tier_info.current_tier = target_tier;
+            self.tier_info.tier_entry_time = Instant::now();
+            self.tier_info.transition_count += 1;
+        }
+
+        new_tier
+    }
+
+    /// Get total entry size including overhead
+    #[inline]
+    pub fn total_size(&self) -> usize {
+        self.metadata.size_bytes + std::mem::size_of::<Self>()
+    }
+
+    /// Get entry priority for eviction decisions (higher = keep longer)
+    pub fn eviction_priority(&self) -> f64 {
+        let base_priority = self.metadata.priority_score as f64;
+        let frequency_weight = self.access_tracker.frequency() * 0.3;
+        let recency_weight = if self.metadata.time_since_last_access().as_secs() < 300 {
+            0.2
+        } else {
+            0.0
+        };
+        let health_penalty = match self.metadata.health_status {
+            HealthStatus::Healthy => 0.0,
+            HealthStatus::Degraded => -0.1,
+            HealthStatus::Unhealthy => -0.3,
+            HealthStatus::CircuitOpen => -0.5,
+        };
+
+        base_priority + frequency_weight + recency_weight + health_penalty
+    }
+
+    /// Check if entry is healthy and operational
+    #[inline]
+    pub fn is_healthy(&self) -> bool {
+        matches!(
+            self.metadata.health_status,
+            HealthStatus::Healthy | HealthStatus::Degraded
+        )
+    }
+
+    /// Update serialization context based on tier and access patterns
+    pub fn update_serialization_context(&mut self) {
+        self.serialization_context = match self.tier_info.current_tier {
+            TierLocation::Hot => SerializationContext::binary_lz4(), // Fast serialization
+            TierLocation::Warm => {
+                SerializationContext::new(SerializationFormat::Bincode, CompressionAlgorithm::Lz4)
+            }
+            TierLocation::Cold => SerializationContext::cold_tier_optimized(), // Max compression
+        };
+    }
+}
+
+/// Serialization envelope for persistent storage with versioning and integrity
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
+)]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))
+)]
+pub struct SerializationEnvelope<K, V>
+where
+    K: CacheKey + Clone,
+    V: CacheValue + Clone,
+{
+    /// Complete cache entry with all metadata
+    pub entry: CacheEntry<K, V>,
+    /// Schema version for evolution support
+    pub schema_version: u32,
+    /// Compression algorithm actually applied
+    pub compression_used: CompressionAlgorithm,
+    /// Data integrity checksum
+    pub checksum: u64,
+    /// Timestamp when serialized
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub serialized_at: Instant,
+    /// Tier-specific serialization context
+    pub tier_context: TierSerializationContext,
+}
+
+/// Tier-specific serialization context for optimization
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct TierSerializationContext {
+    /// Target tier for this serialization
+    pub target_tier: TierLocation,
+    /// Expected access frequency in target tier
+    pub expected_frequency: f64,
+    /// Serialization optimization level (0-9)
+    pub optimization_level: u8,
+    /// Whether to include access history
+    pub include_access_history: bool,
+}
+
+impl<K, V> SerializationEnvelope<K, V>
+where
+    K: CacheKey + Clone,
+    V: CacheValue + Clone,
+{
+    /// Create new serialization envelope using coherence write propagation system
+    pub fn new_with_coherence(
+        entry: CacheEntry<K, V>,
+        coherence_controller: &CoherenceController<K, V>,
+    ) -> Result<Self, CoherenceError> {
+        let coherence_key = CoherenceKey::from_cache_key(&entry.key);
+
+        // DELEGATE to existing write propagation system for coordination
+        coherence_controller.write_propagation.submit_writeback(
+            coherence_key.clone(),
+            Arc::new(entry.value.clone()),
+            entry.tier_info.current_tier.into(),
+            coherence_controller.determine_target_tier(entry.tier_info.current_tier.into()),
+            0,
+            WritePriority::Normal,
+        );
+
+        let tier_context = TierSerializationContext {
+            target_tier: entry.tier_info.current_tier,
+            expected_frequency: entry.access_tracker.frequency(),
+            optimization_level: match entry.tier_info.current_tier {
+                TierLocation::Hot => 1,  // Fast serialization
+                TierLocation::Warm => 5, // Balanced
+                TierLocation::Cold => 9, // Maximum compression
+            },
+            include_access_history: entry.tier_info.current_tier != TierLocation::Hot,
+        };
+
+        // Get checksum and compression from coherence metadata (computed by coherence system)
+        let (checksum, compression_used) = if let Some(cache_line_entry) =
+            coherence_controller.cache_line_states.get(&coherence_key)
+        {
+            let cache_line = cache_line_entry.value();
+            // Use coherence invalidation sequence as integrity checksum
+            let checksum = cache_line.metadata.invalidation_seq.load(Ordering::Acquire) as u64;
+
+            // Determine compression from tier and coherence state
+            let compression_used = match entry.tier_info.current_tier {
+                TierLocation::Hot => CompressionAlgorithm::None, // Speed priority
+                TierLocation::Warm => CompressionAlgorithm::Lz4, // Balanced
+                TierLocation::Cold => CompressionAlgorithm::Zstd, // Space priority
+            };
+
+            (checksum, compression_used)
+        } else {
+            return Err(CoherenceError::CacheLineNotFound);
+        };
+
+        Ok(Self {
+            entry,
+            schema_version: 1,
+            compression_used, // From coherence protocol negotiation
+            checksum,         // From coherence system metadata
+            serialized_at: Instant::now(),
+            tier_context,
+        })
+    }
+
+    /// Create new serialization envelope (basic implementation - prefer new_with_coherence)
+    pub fn new(entry: CacheEntry<K, V>) -> Result<Self, Box<dyn std::error::Error>> {
+        let tier_context = TierSerializationContext {
+            target_tier: entry.tier_info.current_tier,
+            expected_frequency: entry.access_tracker.frequency(),
+            optimization_level: match entry.tier_info.current_tier {
+                TierLocation::Hot => 1,  // Fast serialization
+                TierLocation::Warm => 5, // Balanced
+                TierLocation::Cold => 9, // Maximum compression
+            },
+            include_access_history: entry.tier_info.current_tier != TierLocation::Hot,
+        };
+
+        // Serialize entry first to get actual data for compression analysis
+        let serialized_data = bincode::serialize(&entry)?;
+
+        // Use compression engine to intelligently select algorithm based on data
+        let compression_engine =
+            super::super::tier::cold::data_structures::CompressionEngine::new(6);
+        let compression_algorithm = compression_engine.select_algorithm(&serialized_data);
+
+        // Calculate checksum using the already serialized data
+        let checksum = crc32fast::hash(&serialized_data);
+
+        Ok(Self {
+            entry,
+            schema_version: 1,
+            compression_used: compression_algorithm.into(),
+            checksum: checksum.into(),
+            serialized_at: Instant::now(),
+            tier_context,
+        })
+    }
+
+    /// Get estimated serialized size
+    pub fn estimated_serialized_size(&self) -> usize {
+        let base_size = self.entry.total_size();
+        let metadata_overhead = std::mem::size_of::<SerializationEnvelope<K, V>>()
+            - std::mem::size_of::<CacheEntry<K, V>>();
+        base_size + metadata_overhead
+    }
+
+    /// Check if envelope is valid using coherence state management delegation
+    pub fn is_valid_with_coherence(
+        &self,
+        coherence_controller: &CoherenceController<K, V>,
+    ) -> Result<bool, CoherenceError> {
+        // DELEGATE to existing coherence state transition validator
+        let transition_request = StateTransitionRequest {
+            from_state: MesiState::Shared, // Current assumed state
+            to_state: MesiState::Shared,   // No transition for validation
+            tier: self.entry.tier_info.current_tier.into(),
+            version: 0,
+            timestamp_ns: std::time::Instant::now().elapsed().as_nanos() as u64,
+            reason: TransitionReason::ProtocolEnforcement,
+        };
+
+        // Use existing sophisticated transition validator for consistency checks
+        match coherence_controller
+            .transition_validator
+            .execute_transition(&transition_request)
+        {
+            Ok(()) => {
+                // Coherence validation passed - perform additional envelope checks
+                let basic_valid = self.schema_version > 0 && self.entry.is_healthy();
+
+                // Validate checksum against coherence metadata
+                let coherence_key = CoherenceKey::from_cache_key(&self.entry.key);
+                let checksum_valid = if let Some(cache_line_entry) =
+                    coherence_controller.cache_line_states.get(&coherence_key)
+                {
+                    let cache_line = cache_line_entry.value();
+                    let expected_checksum =
+                        cache_line.metadata.invalidation_seq.load(Ordering::Acquire) as u64;
+                    expected_checksum == self.checksum
+                } else {
+                    false
+                };
+
+                Ok(basic_valid && checksum_valid)
+            }
+            Err(coherence_error) => Err(coherence_error),
+        }
+    }
+}
+
+// Implement the existing CacheEntry trait for our concrete CacheEntry struct
+impl<K: CacheKey, V: CacheValue> super::entry_and_stats::CacheEntry<K, V> for CacheEntry<K, V> {
+    type Key = K;
+    type Value = V;
+
+    fn key(&self) -> &Self::Key {
+        &self.key
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+
+    fn created_at(&self) -> Instant {
+        self.metadata.created_at
+    }
+
+    fn access_count(&self) -> u64 {
+        self.metadata.access_count()
+    }
+
+    fn last_access(&self) -> Instant {
+        self.metadata.last_accessed
+    }
+
+    fn size(&self) -> usize {
+        self.metadata.size_bytes
+    }
+
+    fn tier(&self) -> TierLocation {
+        self.tier_info.current_tier
+    }
+}

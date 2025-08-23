@@ -1,0 +1,300 @@
+//! Background operation types and coordination structures
+//!
+//! This module defines the fundamental types used throughout the background
+//! operation system including coordinators, workers, and task definitions.
+
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::Arc;
+use std::time::Instant;
+
+use crossbeam_channel::{Receiver, Sender};
+use crossbeam_utils::atomic::AtomicCell;
+use crate::cache::traits::types_and_enums::CacheOperationError;
+
+use super::super::super::traits::{CacheKey, CacheValue};
+
+/// Trait for processing background tasks
+pub trait TaskProcessor: Send + Sync {
+    /// Process a background task
+    fn process_task(&self, task: &BackgroundTask) -> Result<(), CacheOperationError>;
+}
+
+/// Background task generic wrapper for type-erased operations
+#[derive(Debug)]
+pub enum BackgroundTask {
+    /// Eviction task
+    Eviction {
+        /// Target tier for eviction
+        tier: u8,
+        /// Number of entries to evict
+        count: u32,
+        /// Priority level
+        priority: u16,
+    },
+    /// Compression task
+    Compression {
+        /// Compression algorithm
+        algorithm: u8,
+        /// Target compression ratio
+        ratio: f32,
+    },
+    /// Statistics collection task
+    Statistics {
+        /// Statistics type
+        stats_type: u8,
+        /// Collection interval
+        interval_ms: u64,
+    },
+    /// Maintenance task
+    Maintenance(MaintenanceTask),
+    /// Prefetch task
+    Prefetch {
+        /// Number of entries to prefetch
+        count: u32,
+        /// Prefetch strategy
+        strategy: u8,
+    },
+}
+
+/// Background task priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskPriority {
+    /// Critical system tasks
+    Critical = 0,
+    /// High priority tasks
+    High = 1,
+    /// Normal priority tasks
+    Normal = 2,
+    /// Low priority background tasks
+    Low = 3,
+}
+
+/// Background task execution status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStatus {
+    /// Task is pending execution
+    Pending,
+    /// Task is currently executing
+    Executing,
+    /// Task completed successfully
+    Completed,
+    /// Task failed with error
+    Failed,
+    /// Task was cancelled
+    Cancelled,
+}
+
+/// Statistics collection types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatisticsType {
+    /// Basic hit/miss statistics
+    Basic,
+    /// Detailed performance metrics
+    Detailed,
+    /// Comprehensive statistics with analysis
+    Comprehensive,
+}
+
+/// Maintenance task structure for scheduler
+#[derive(Debug, Clone)]
+pub struct MaintenanceTask {
+    /// Task type
+    pub task_type: MaintenanceTaskType,
+    /// Task priority (lower = higher priority)
+    pub priority: u16,
+    /// Task creation timestamp
+    pub created_at: Instant,
+    /// Task timeout in nanoseconds
+    pub timeout_ns: u64,
+    /// Current retry count
+    pub retry_count: u8,
+    /// Maximum retry attempts
+    pub max_retries: u8,
+}
+
+/// Maintenance task types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceTaskType {
+    /// Cleanup expired entries
+    CleanupExpired,
+    /// Defragment storage
+    Defragment,
+    /// Rebuild indices
+    RebuildIndices,
+    /// Validate data integrity
+    ValidateIntegrity,
+    /// Optimize memory layout
+    OptimizeMemory,
+    /// Update access patterns
+    UpdatePatterns,
+    /// Compact cold tier storage
+    CompactColdTier,
+    /// Clean expired entries
+    CleanExpiredEntries,
+    /// Rebalance tiers
+    RebalanceTiers,
+    /// Update statistics
+    UpdateStatistics,
+    /// Garbage collect
+    GarbageCollect,
+    /// Optimize patterns
+    OptimizePatterns,
+    /// Backup state
+    BackupState,
+    /// Performance optimization
+    PerformanceOptimization,
+    /// Memory defragmentation
+    MemoryDefragmentation,
+}
+
+/// Maintenance operation types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceOperation {
+    /// Cleanup expired entries
+    CleanupExpired,
+    /// Defragment storage
+    Defragment,
+    /// Rebuild indices
+    RebuildIndices,
+    /// Validate data integrity
+    ValidateIntegrity,
+    /// Optimize memory layout
+    OptimizeMemory,
+    /// Update access patterns
+    UpdatePatterns,
+}
+
+/// Maintenance statistics tracking
+#[derive(Debug, Default)]
+pub struct MaintenanceStats {
+    /// Total maintenance tasks submitted
+    pub total_submitted: AtomicU64,
+    /// Total maintenance operations executed
+    pub operations_executed: AtomicU64,
+    /// Total time spent on maintenance (nanoseconds)
+    pub total_maintenance_time_ns: AtomicU64,
+    /// Operations by type counters
+    pub cleanup_operations: AtomicU64,
+    pub defrag_operations: AtomicU64,
+    pub rebuild_operations: AtomicU64,
+    pub validation_operations: AtomicU64,
+    pub optimization_operations: AtomicU64,
+    pub pattern_operations: AtomicU64,
+    /// Error counters
+    pub failed_operations: AtomicU64,
+    /// Last maintenance timestamp
+    pub last_maintenance: AtomicCell<Option<Instant>>,
+}
+
+/// Synchronization operation types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncOperation {
+    /// Sync to persistent storage
+    ToPersistent,
+    /// Sync from persistent storage
+    FromPersistent,
+    /// Sync between cache tiers
+    BetweenTiers,
+    /// Sync with remote cache
+    WithRemote,
+}
+
+/// Maintenance scheduler with atomic coordination and worker thread pool
+#[derive(Debug)]
+pub struct MaintenanceScheduler {
+    /// Maintenance interval in nanoseconds
+    pub maintenance_interval_ns: u64,
+    /// Last maintenance timestamp
+    pub last_maintenance: std::time::Instant,
+    /// Maintenance statistics with atomic tracking
+    pub maintenance_stats: MaintenanceStats,
+    /// Scheduled operations queue
+    pub scheduled_operations: Vec<MaintenanceOperation>,
+    /// Active task tracking for load balancing
+    pub active_tasks: Arc<AtomicU32>,
+    /// Task queue for distributing maintenance tasks
+    pub task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
+    /// Task sender for submitting maintenance tasks
+    pub task_sender: crossbeam_channel::Sender<MaintenanceTask>,
+    /// Worker thread handles for maintenance operations
+    pub worker_threads: Vec<std::thread::JoinHandle<()>>,
+    /// Scheduler configuration
+    pub config: MaintenanceConfig,
+    /// Maintenance statistics with atomic tracking
+    pub stats: MaintenanceStats,
+    /// Shutdown signal channel
+    pub shutdown_signal: crossbeam_channel::Receiver<()>,
+    /// Shutdown sender for graceful shutdown
+    pub shutdown_sender: crossbeam_channel::Sender<()>,
+}
+
+/// Background worker state with work-stealing coordination
+#[derive(Debug)]
+pub struct BackgroundWorkerState {
+    /// Worker identification
+    pub worker_id: u32,
+    /// Task processing statistics
+    pub tasks_processed: AtomicU64,
+    /// Processing time accumulator
+    pub total_processing_time: AtomicU64,
+    /// Worker status
+    pub status: AtomicCell<WorkerStatus>,
+    /// Last heartbeat timestamp
+    pub last_heartbeat: AtomicCell<Instant>,
+    /// Current task being processed
+    pub current_task: AtomicCell<Option<MaintenanceTaskType>>,
+    /// Error counter
+    pub error_count: AtomicU32,
+    /// Work-stealing attempt counter
+    pub steal_attempts: AtomicU64,
+    /// Successful steals counter
+    pub successful_steals: AtomicU64,
+    /// Number of tasks processed since last heartbeat
+    pub tasks_since_heartbeat: AtomicU64,
+}
+
+/// Maintenance scheduler configuration
+#[derive(Debug, Clone)]
+pub struct MaintenanceConfig {
+    /// Number of worker threads
+    pub worker_count: u32,
+    /// Task queue capacity
+    pub queue_capacity: usize,
+    /// Worker heartbeat interval (nanoseconds)
+    pub heartbeat_interval_ns: u64,
+    /// Task timeout threshold (nanoseconds)
+    pub task_timeout_ns: u64,
+    /// Maximum retry attempts for failed tasks
+    pub max_task_retries: u8,
+    /// Work stealing enabled
+    pub enable_work_stealing: bool,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            worker_count: 4,
+            queue_capacity: 1000,
+            heartbeat_interval_ns: 1_000_000_000, // 1 second
+            task_timeout_ns: 30_000_000_000,      // 30 seconds
+            max_task_retries: 3,
+            enable_work_stealing: true,
+        }
+    }
+}
+
+/// Worker status enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerStatus {
+    /// Worker is idle and available for tasks
+    Idle,
+    /// Worker is processing a task
+    Processing,
+    /// Worker is attempting to steal work
+    StealingWork,
+    /// Worker encountered an error
+    Error,
+    /// Worker is shutting down
+    Shutdown,
+}
+

@@ -1,0 +1,215 @@
+//! Cache operation results and error handling types
+//!
+//! This module provides comprehensive error handling and result types for cache operations
+//! with rich metadata and recovery hints for robust error handling.
+
+use std::sync::Arc;
+
+use super::super::traits::*;
+
+/// Cache operation result with rich metadata
+#[derive(Debug, Clone)]
+pub struct CacheResult<V: CacheValue> {
+    /// Operation success status
+    pub success: bool,
+    /// Retrieved value (if successful)
+    pub value: Option<Arc<V>>,
+    /// Operation latency in nanoseconds
+    pub latency_ns: u64,
+    /// Tier that served the request
+    pub tier: TierLocation,
+    /// Cache hit/miss status
+    pub hit_status: HitStatus,
+    /// Additional operation metadata
+    pub metadata: OperationMetadata,
+}
+
+impl<V: CacheValue> CacheResult<V> {
+    /// Create successful cache hit result
+    #[inline(always)]
+    pub fn hit(value: Arc<V>, latency_ns: u64, tier: TierLocation) -> Self {
+        Self {
+            success: true,
+            value: Some(value),
+            latency_ns,
+            tier,
+            hit_status: HitStatus::Hit,
+            metadata: OperationMetadata::default(),
+        }
+    }
+
+    /// Create cache miss result
+    #[inline(always)]
+    pub fn miss(latency_ns: u64) -> Self {
+        Self {
+            success: false,
+            value: None,
+            latency_ns,
+            tier: TierLocation::Hot, // Start search from hot tier
+            hit_status: HitStatus::Miss,
+            metadata: OperationMetadata::default(),
+        }
+    }
+
+    /// Create error result
+    #[inline(always)]
+    pub fn error(error: impl Into<CacheOperationError>, latency_ns: u64) -> Self {
+        Self {
+            success: false,
+            value: None,
+            latency_ns,
+            tier: TierLocation::Hot,
+            hit_status: HitStatus::Error,
+            metadata: OperationMetadata {
+                error: Some(error.into()),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Check if operation was successful
+    #[inline(always)]
+    pub fn is_success(&self) -> bool {
+        self.success
+    }
+
+    /// Check if this was a cache hit
+    #[inline(always)]
+    pub fn is_hit(&self) -> bool {
+        matches!(self.hit_status, HitStatus::Hit)
+    }
+}
+
+/// Cache operation metadata for observability
+#[derive(Debug, Clone, Default)]
+pub struct OperationMetadata {
+    /// Operation timestamp
+    pub timestamp_ns: u64,
+    /// Number of tiers searched
+    pub tiers_searched: u8,
+    /// Memory allocation count (should be 0)
+    pub allocations: u16,
+    /// SIMD operations performed
+    pub simd_ops: u16,
+    /// Error information (if any)
+    pub error: Option<CacheOperationError>,
+}
+
+/// Hit status enumeration for cache operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitStatus {
+    /// Cache hit - value found
+    Hit,
+    /// Cache miss - value not found
+    Miss,
+    /// Operation error
+    Error,
+    /// Partial hit (multi-tier scenarios)
+    Partial,
+}
+
+// ErrorCategory moved to canonical location: crate::cache::traits::types_and_enums
+
+/// Recovery hint for cache operation errors
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryHint {
+    /// Clear cache and retry operation
+    ClearAndRetry,
+    /// Retry with exponential backoff
+    RetryBackoff,
+    /// Fall back to alternative strategy
+    Fallback,
+    /// Restart cache subsystem
+    Restart,
+    /// No recovery possible
+    Fatal,
+}
+
+/// Cache operation error with recovery hints
+#[derive(Debug, Clone)]
+pub struct CacheOperationError {
+    /// Error category
+    pub category: ErrorCategory,
+    /// Error message
+    pub message: String,
+    /// Error code for programmatic handling
+    pub code: u32,
+    /// Recovery suggestion
+    pub recovery_hint: RecoveryHint,
+    /// Whether operation can be retried
+    pub retryable: bool,
+}
+
+impl CacheOperationError {
+    /// Create resource exhaustion error
+    #[inline(always)]
+    pub fn resource_exhausted(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Resource,
+            message: message.into(),
+            code: 1001,
+            recovery_hint: RecoveryHint::ClearAndRetry,
+            retryable: true,
+        }
+    }
+
+    /// Create serialization error
+    #[inline(always)]
+    pub fn serialization_failed(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Serialization,
+            message: message.into(),
+            code: 2001,
+            recovery_hint: RecoveryHint::Fallback,
+            retryable: false,
+        }
+    }
+
+    /// Create IO error
+    #[inline(always)]
+    pub fn io_failed(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Io,
+            message: message.into(),
+            code: 3001,
+            recovery_hint: RecoveryHint::RetryBackoff,
+            retryable: true,
+        }
+    }
+
+    /// Create configuration error
+    #[inline(always)]
+    pub fn configuration_error(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Configuration,
+            message: message.into(),
+            code: 4001,
+            recovery_hint: RecoveryHint::Restart,
+            retryable: false,
+        }
+    }
+
+    /// Create timing error
+    #[inline(always)]
+    pub fn timing_error(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Timing,
+            message: message.into(),
+            code: 5001,
+            recovery_hint: RecoveryHint::RetryBackoff,
+            retryable: true,
+        }
+    }
+
+    /// Create concurrency error
+    #[inline(always)]
+    pub fn concurrency_error(message: impl Into<String>) -> Self {
+        Self {
+            category: ErrorCategory::Concurrency,
+            message: message.into(),
+            code: 6001,
+            recovery_hint: RecoveryHint::RetryBackoff,
+            retryable: true,
+        }
+    }
+}

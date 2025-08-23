@@ -1,0 +1,191 @@
+//! Storage management for memory-mapped files and atomic operations
+//!
+//! This module handles memory-mapped file operations, atomic writes, and file management
+//! for the persistent cold tier cache storage system.
+
+use std::fs::OpenOptions;
+use std::io;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use memmap2::MmapOptions;
+
+use super::data_structures::StorageManager;
+
+impl StorageManager {
+    /// Create new storage manager
+    pub fn new(data_path: PathBuf, index_path: PathBuf, max_file_size: u64) -> io::Result<Self> {
+        // Create or open data file
+        let data_handle = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&data_path)?;
+
+        // Set initial size if file is empty
+        let data_metadata = data_handle.metadata()?;
+        if data_metadata.len() == 0 {
+            data_handle.set_len(max_file_size)?;
+        }
+
+        // Create memory map for data file
+        let data_file = unsafe { Some(MmapOptions::new().map_mut(&data_handle)?) };
+
+        // Create or open index file
+        let index_handle = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&index_path)?;
+
+        // Set initial size for index file (10% of data file size)
+        let index_metadata = index_handle.metadata()?;
+        let max_index_size = max_file_size / 10;
+        if index_metadata.len() == 0 {
+            index_handle.set_len(max_index_size)?;
+        }
+
+        // Create memory map for index file
+        let index_file = unsafe { Some(MmapOptions::new().map_mut(&index_handle)?) };
+
+        Ok(Self {
+            data_file,
+            index_file,
+            data_handle: Some(data_handle),
+            index_handle: Some(index_handle),
+            data_path,
+            index_path,
+            write_position: AtomicU64::new(0),
+            max_data_size: max_file_size,
+            max_index_size,
+            generation: AtomicU32::new(1),
+        })
+    }
+
+    /// Get current write position
+    pub fn current_write_position(&self) -> u64 {
+        self.write_position.load(Ordering::Relaxed)
+    }
+
+    /// Reserve space for writing
+    pub fn reserve_space(&self, size: u64) -> Option<u64> {
+        let current_pos = self.write_position.load(Ordering::Relaxed);
+        if current_pos + size <= self.max_data_size {
+            Some(self.write_position.fetch_add(size, Ordering::SeqCst))
+        } else {
+            None
+        }
+    }
+
+    /// Sync data file to disk
+    pub fn sync_data(&self) -> io::Result<()> {
+        if let Some(ref mmap) = self.data_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.data_handle {
+            handle.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Sync index file to disk
+    pub fn sync_index(&self) -> io::Result<()> {
+        if let Some(ref mmap) = self.index_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.index_handle {
+            handle.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Get available space in data file
+    pub fn available_space(&self) -> u64 {
+        let current_pos = self.write_position.load(Ordering::Relaxed);
+        self.max_data_size.saturating_sub(current_pos)
+    }
+
+    /// Check if storage needs compaction
+    pub fn needs_compaction(&self) -> bool {
+        let used_space = self.write_position.load(Ordering::Relaxed);
+        let usage_ratio = used_space as f64 / self.max_data_size as f64;
+        usage_ratio > 0.8 // Compact when 80% full
+    }
+
+    /// Reset write position (used during compaction)
+    pub fn reset_write_position(&self) {
+        self.write_position.store(0, Ordering::SeqCst);
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Get current generation number
+    pub fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// Expand data file if needed
+    pub fn expand_if_needed(&self, required_size: u64) -> io::Result<bool> {
+        let current_pos = self.write_position.load(Ordering::Relaxed);
+        if current_pos + required_size > self.max_data_size {
+            // Double the file size
+            let new_size = self.max_data_size * 2;
+            if let Some(ref handle) = self.data_handle {
+                handle.set_len(new_size)?;
+                // Note: In a real implementation, we'd need to remap the memory-mapped file
+                // This is a simplified version
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Get storage statistics
+    pub fn storage_stats(&self) -> StorageStats {
+        let used_space = self.write_position.load(Ordering::Relaxed);
+        StorageStats {
+            total_data_size: self.max_data_size,
+            used_data_size: used_space,
+            available_data_size: self.max_data_size.saturating_sub(used_space),
+            total_index_size: self.max_index_size,
+            generation: self.generation.load(Ordering::Relaxed),
+            fragmentation_ratio: self.calculate_fragmentation_ratio(),
+        }
+    }
+
+    /// Calculate fragmentation ratio (simplified)
+    fn calculate_fragmentation_ratio<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
+        &self, 
+        cache: &crate::cache::tier::cold::storage::ColdTierCache<K, V>
+    ) -> Result<f32, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // Connect to existing sophisticated fragmentation analysis
+        let index = cache.index.lock()
+            .map_err(|_| crate::cache::traits::types_and_enums::CacheOperationError::concurrency_error("Failed to acquire index lock"))?;
+        let used_space: u64 = index.values().map(|entry| entry.data_size as u64).sum();
+        let total_space = cache.write_offset.load(std::sync::atomic::Ordering::Relaxed);
+        
+        if total_space > 0 {
+            Ok((1.0 - (used_space as f64 / total_space as f64)) as f32)
+        } else {
+            Ok(0.0)
+        }
+    }
+}
+
+/// Storage statistics
+#[derive(Debug, Clone)]
+pub struct StorageStats {
+    pub total_data_size: u64,
+    pub used_data_size: u64,
+    pub available_data_size: u64,
+    pub total_index_size: u64,
+    pub generation: u32,
+    pub fragmentation_ratio: f32,
+}
+
+impl Drop for StorageManager {
+    fn drop(&mut self) {
+        // Ensure data is synced before dropping
+        let _ = self.sync_data();
+        let _ = self.sync_index();
+    }
+}

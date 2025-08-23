@@ -1,0 +1,774 @@
+//! Compression engine with multiple algorithms and adaptive selection
+//!
+//! This module provides compression and decompression capabilities with multiple algorithms,
+//! performance tracking, and adaptive algorithm selection for optimal storage efficiency.
+
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+use brotli::{CompressorReader, Decompressor};
+use crc32fast;
+use crossbeam_utils::atomic::AtomicCell;
+use dashmap::DashMap;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression as GzipLevel};
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
+use snap::raw::{Decoder as SnapDecoder, Encoder as SnapEncoder};
+
+use super::data_structures::{
+    AdaptiveThresholds, AlgorithmMetrics, CompressionAlgorithm, CompressionEngine, CompressionStats,
+};
+
+/// Workload types for algorithm selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadType {
+    /// Prioritize speed over compression ratio
+    LatencyOptimized,
+    /// Maximize compression ratio
+    StorageOptimized, 
+    /// Balance speed and compression
+    Balanced,
+    /// Use current adaptive algorithm
+    Adaptive,
+}
+
+impl CompressionEngine {
+    /// Create new compression engine
+    pub fn new(compression_level: u8) -> Self {
+        let algorithm_metrics = Arc::new(DashMap::new());
+
+        // Initialize metrics for ALL 6 algorithms
+        algorithm_metrics.insert(
+            CompressionAlgorithm::None,
+            AlgorithmMetrics {
+                avg_compression_ratio: 1.0,
+                avg_compression_speed: f64::MAX,
+                avg_decompression_speed: f64::MAX,
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        algorithm_metrics.insert(
+            CompressionAlgorithm::Lz4,
+            AlgorithmMetrics {
+                avg_compression_ratio: 0.6,
+                avg_compression_speed: 100_000_000.0, // 100 MB/s
+                avg_decompression_speed: 200_000_000.0, // 200 MB/s
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        algorithm_metrics.insert(
+            CompressionAlgorithm::Gzip,
+            AlgorithmMetrics {
+                avg_compression_ratio: 0.3,
+                avg_compression_speed: 30_000_000.0,   // 30 MB/s
+                avg_decompression_speed: 120_000_000.0, // 120 MB/s
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        algorithm_metrics.insert(
+            CompressionAlgorithm::Zstd,
+            AlgorithmMetrics {
+                avg_compression_ratio: 0.4,
+                avg_compression_speed: 50_000_000.0,    // 50 MB/s
+                avg_decompression_speed: 150_000_000.0, // 150 MB/s
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        algorithm_metrics.insert(
+            CompressionAlgorithm::Snappy,
+            AlgorithmMetrics {
+                avg_compression_ratio: 0.7,
+                avg_compression_speed: 150_000_000.0,  // 150 MB/s
+                avg_decompression_speed: 300_000_000.0, // 300 MB/s
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        algorithm_metrics.insert(
+            CompressionAlgorithm::Brotli,
+            AlgorithmMetrics {
+                avg_compression_ratio: 0.25,
+                avg_compression_speed: 20_000_000.0,   // 20 MB/s
+                avg_decompression_speed: 100_000_000.0, // 100 MB/s
+                operation_count: 0,
+                compression_ops: 0,
+                decompression_ops: 0,
+            },
+        );
+
+        Self {
+            algorithm: AtomicCell::new(CompressionAlgorithm::Lz4),
+            compression_stats: CompressionStats::new(),
+            algorithm_metrics,
+            adaptive_thresholds: AdaptiveThresholds {
+                min_compression_size: 256,
+                min_compression_ratio: 0.8,
+                speed_threshold: 10_000_000.0, // 10 MB/s
+            },
+            adaptation_counter: AtomicU64::new(0),
+            last_adaptation: AtomicU64::new(0),
+            compression_level,
+        }
+    }
+
+    /// Select optimal compression algorithm for given data
+    pub fn select_algorithm(&self, data: &[u8]) -> CompressionAlgorithm {
+        let data_size = data.len() as u32;
+
+        // Skip compression for small data
+        if data_size < self.adaptive_thresholds.min_compression_size {
+            return CompressionAlgorithm::None;
+        }
+
+        // Use current algorithm as default
+        let current = self.algorithm.load();
+
+        // Simple heuristic based on data size and current performance
+        if data_size > 4096 {
+            // For larger data, prefer better compression - check Brotli first for best ratio
+            if let Some(brotli_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Brotli) {
+                if brotli_metrics.avg_compression_ratio < 0.3 {
+                    return CompressionAlgorithm::Brotli;
+                }
+            }
+            // Fall back to Zstd for good balance of speed and compression
+            if let Some(zstd_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Zstd) {
+                if zstd_metrics.avg_compression_ratio < 0.7 {
+                    return CompressionAlgorithm::Zstd;
+                }
+            }
+        }
+
+        // For medium-sized data, balance speed and compression
+        if data_size > 1024 {
+            if let Some(lz4_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Lz4) {
+                if lz4_metrics.avg_compression_speed > self.adaptive_thresholds.speed_threshold {
+                    return CompressionAlgorithm::Lz4;
+                }
+            }
+        }
+
+        current
+    }
+
+    /// Compress data using specified algorithm
+    pub fn compress(
+        &self,
+        data: &[u8],
+        algorithm: CompressionAlgorithm,
+    ) -> Result<CompressedData, CompressionError> {
+        let start_time = Instant::now();
+
+        let compressed_data = match algorithm {
+            CompressionAlgorithm::None => data.to_vec(),
+            CompressionAlgorithm::Lz4 => compress_prepend_size(data),
+            CompressionAlgorithm::Gzip => {
+                let level = GzipLevel::new(self.compression_level.min(9) as u32);
+                let mut encoder = GzEncoder::new(Vec::new(), level);
+                encoder
+                    .write_all(data)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?;
+                encoder
+                    .finish()
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?
+            }
+            CompressionAlgorithm::Zstd => zstd::bulk::compress(data, self.compression_level.min(21) as i32)
+                .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?,
+            CompressionAlgorithm::Snappy => {
+                let mut encoder = SnapEncoder::new();
+                encoder
+                    .compress_vec(data)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?
+            }
+            CompressionAlgorithm::Brotli => {
+                let mut compressed = Vec::new();
+                let mut compressor = CompressorReader::new(
+                    data,
+                    4096, // buffer size
+                    self.compression_level.min(11) as u32, // Brotli supports 0-11
+                    22,   // window size
+                );
+                compressor.read_to_end(&mut compressed)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?;
+                compressed
+            }
+        };
+
+        let elapsed = start_time.elapsed();
+        let elapsed_ns = elapsed.as_nanos() as u64;
+
+        // Calculate integrity checksum
+        let checksum = crc32fast::hash(data);
+
+        // Update statistics
+        self.compression_stats
+            .total_uncompressed
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.compression_stats
+            .total_compressed
+            .fetch_add(compressed_data.len() as u64, Ordering::Relaxed);
+        self.compression_stats
+            .compression_ops
+            .fetch_add(1, Ordering::Relaxed);
+        self.compression_stats
+            .total_compression_time_ns
+            .fetch_add(elapsed_ns, Ordering::Relaxed);
+
+        // Update algorithm metrics
+        self.update_compression_metrics(algorithm, data.len(), compressed_data.len(), elapsed_ns);
+
+        Ok(CompressedData {
+            data: compressed_data,
+            original_size: data.len(),
+            checksum,
+            algorithm,
+        })
+    }
+
+    /// Decompress data with integrity verification
+    pub fn decompress(
+        &self,
+        compressed_data: &CompressedData,
+    ) -> Result<Vec<u8>, CompressionError> {
+        let start_time = Instant::now();
+
+        let decompressed_data = match compressed_data.algorithm {
+            CompressionAlgorithm::None => compressed_data.data.clone(),
+            CompressionAlgorithm::Lz4 => decompress_size_prepended(&compressed_data.data)
+                .map_err(|e| CompressionError::CompressionFailed(format!("LZ4 decompression failed: {:?}", e)))?,
+            CompressionAlgorithm::Gzip => {
+                let mut decoder = GzDecoder::new(compressed_data.data.as_slice());
+                let mut decompressed = Vec::new();
+                decoder
+                    .read_to_end(&mut decompressed)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?;
+                decompressed
+            }
+            CompressionAlgorithm::Zstd => {
+                zstd::bulk::decompress(&compressed_data.data, compressed_data.original_size)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?
+            }
+            CompressionAlgorithm::Snappy => {
+                let mut decoder = SnapDecoder::new();
+                decoder
+                    .decompress_vec(&compressed_data.data)
+                    .map_err(|e| CompressionError::CompressionFailed(e.to_string()))?
+            }
+            CompressionAlgorithm::Brotli => {
+                let mut decompressed = Vec::new();
+                let mut decompressor = Decompressor::new(compressed_data.data.as_slice(), 4096);
+                decompressor.read_to_end(&mut decompressed)
+                    .map_err(|e| CompressionError::CompressionFailed(format!("Brotli decompression failed: {}", e)))?;
+                decompressed
+            }
+        };
+
+        // Verify integrity
+        let actual_checksum = crc32fast::hash(&decompressed_data);
+        if actual_checksum != compressed_data.checksum {
+            return Err(CompressionError::IntegrityCheckFailed {
+                expected: compressed_data.checksum,
+                actual: actual_checksum,
+            });
+        }
+
+        let elapsed = start_time.elapsed();
+        let elapsed_ns = elapsed.as_nanos() as u64;
+
+        // Update statistics
+        self.compression_stats
+            .decompression_ops
+            .fetch_add(1, Ordering::Relaxed);
+        self.compression_stats
+            .total_decompression_time_ns
+            .fetch_add(elapsed_ns, Ordering::Relaxed);
+
+        // Update algorithm metrics
+        self.update_decompression_metrics(
+            compressed_data.algorithm,
+            decompressed_data.len(),
+            elapsed_ns,
+        );
+
+        Ok(decompressed_data)
+    }
+
+    /// Update compression metrics for algorithm (ENHANCED CONNECTION)
+    fn update_compression_metrics(
+        &self,
+        algorithm: CompressionAlgorithm,
+        original_size: usize,
+        compressed_size: usize,
+        elapsed_ns: u64,
+    ) {
+        // Connect to existing AlgorithmMetrics DashMap for sophisticated tracking
+        let compression_ratio = compressed_size as f32 / original_size as f32;
+        let compression_speed = if elapsed_ns > 0 {
+            (original_size as f64 * 1_000_000_000.0) / elapsed_ns as f64
+        } else {
+            f64::MAX
+        };
+        
+        // Use DashMap concurrent entry API for thread-safe updates
+        self.algorithm_metrics.entry(algorithm).and_modify(|metrics| {
+            // Exponential moving average for sophisticated metric updates
+            let alpha = 0.1f32; // Smoothing factor
+            metrics.avg_compression_ratio = 
+                (1.0 - alpha) * metrics.avg_compression_ratio + alpha * compression_ratio;
+            metrics.avg_compression_speed = 
+                (1.0 - alpha as f64) * metrics.avg_compression_speed + alpha as f64 * compression_speed;
+            metrics.operation_count += 1;
+            metrics.compression_ops += 1;
+        });
+        
+        // Trigger periodic adaptation using sophisticated metrics with race condition prevention
+        if self.compression_stats.compression_ops.load(Ordering::Relaxed) % 100 == 0 {
+            // Connect to existing atomic coordination fields for race prevention
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+                .as_nanos() as u64;
+            
+            // Only one thread can trigger adaptation using compare-and-swap
+            if self.adaptation_counter.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+                let last_adaptation = self.last_adaptation.load(Ordering::Relaxed);
+                
+                // Minimum 1-second interval between adaptations to prevent thrashing
+                if current_time.saturating_sub(last_adaptation) > 1_000_000_000 {
+                    self.select_optimal_algorithm_from_metrics();
+                    self.last_adaptation.store(current_time, Ordering::Relaxed);
+                }
+                
+                // Reset adaptation counter
+                self.adaptation_counter.store(0, Ordering::Release);
+            }
+        }
+    }
+
+    /// Update decompression metrics for algorithm
+    fn update_decompression_metrics(
+        &self,
+        algorithm: CompressionAlgorithm,
+        decompressed_size: usize,
+        elapsed_ns: u64,
+    ) {
+        let decompression_speed = if elapsed_ns > 0 {
+            (decompressed_size as f64 * 1_000_000_000.0) / elapsed_ns as f64
+        } else {
+            f64::MAX
+        };
+        
+        // Connect to existing AlgorithmMetrics DashMap for decompression tracking
+        self.algorithm_metrics.entry(algorithm).and_modify(|metrics| {
+            // Exponential moving average for sophisticated decompression metric updates
+            let alpha = 0.1f64; // Smoothing factor
+            metrics.avg_decompression_speed = 
+                (1.0 - alpha) * metrics.avg_decompression_speed + alpha * decompression_speed;
+            metrics.decompression_ops += 1;
+            metrics.operation_count += 1;
+        });
+    }
+
+    /// Get compression statistics
+    pub fn get_stats(&self) -> CompressionStatsSnapshot {
+        CompressionStatsSnapshot {
+            total_compressed: self
+                .compression_stats
+                .total_compressed
+                .load(Ordering::Relaxed),
+            total_uncompressed: self
+                .compression_stats
+                .total_uncompressed
+                .load(Ordering::Relaxed),
+            compression_ops: self
+                .compression_stats
+                .compression_ops
+                .load(Ordering::Relaxed),
+            decompression_ops: self
+                .compression_stats
+                .decompression_ops
+                .load(Ordering::Relaxed),
+            total_compression_time_ns: self
+                .compression_stats
+                .total_compression_time_ns
+                .load(Ordering::Relaxed),
+            total_decompression_time_ns: self
+                .compression_stats
+                .total_decompression_time_ns
+                .load(Ordering::Relaxed),
+            current_algorithm: self.algorithm.load(),
+        }
+    }
+
+    /// Adapt compression algorithm based on performance
+    pub fn adapt_algorithm(&self) {
+        // Connect to existing sophisticated AlgorithmMetrics for optimal selection
+        self.select_optimal_algorithm_from_metrics()
+    }
+
+    /// Select optimal algorithm using existing sophisticated AlgorithmMetrics
+    fn select_optimal_algorithm_from_metrics(&self) {
+        let stats = self.get_stats();
+        
+        // Need statistical significance before adapting
+        if stats.compression_ops < 50 {
+            return; // Keep current algorithm until we have enough data
+        }
+        
+        let mut best_algorithm = self.algorithm.load();
+        let mut best_score = 0.0f64;
+        
+        // Use existing AlgorithmMetrics DashMap for sophisticated selection
+        for (&algorithm, metrics) in &self.algorithm_metrics {
+            // Skip algorithms with insufficient data
+            if metrics.operation_count < 10 {
+                continue;
+            }
+            
+            // Calculate comprehensive performance score using existing metrics
+            let score = self.calculate_algorithm_score(metrics);
+            
+            if score > best_score {
+                best_score = score;
+                best_algorithm = algorithm;
+            }
+        }
+        
+        // Update algorithm if we found a significantly better one
+        if best_algorithm != self.algorithm.load() {
+            self.algorithm.store(best_algorithm);
+        }
+    }
+    
+    /// Calculate algorithm performance score using existing sophisticated metrics
+    fn calculate_algorithm_score(&self, metrics: &AlgorithmMetrics) -> f64 {
+        // Use existing adaptive thresholds for decision-making
+        let speed_weight = if metrics.avg_compression_speed < self.adaptive_thresholds.speed_threshold {
+            0.6 // Prioritize speed when below threshold
+        } else {
+            0.3 // De-emphasize speed when adequate
+        };
+        
+        let ratio_weight = 1.0 - speed_weight - 0.1; // Remaining weight for compression ratio
+        let reliability_weight = 0.1; // Small weight for operation count
+        
+        // Higher compression speed is better (more bytes/second)
+        let speed_score = (metrics.avg_compression_speed / 100_000_000.0).min(1.0);
+        
+        // Lower compression ratio is better (more compression)
+        let ratio_score = (2.0f64 - metrics.avg_compression_ratio as f64).max(0.0).min(1.0);
+        
+        // More operations indicate reliability
+        let reliability_score = (metrics.operation_count as f64 / 1000.0).min(1.0);
+        
+        // Weighted combination using existing metrics
+        speed_score * speed_weight + 
+        ratio_score * ratio_weight + 
+        reliability_score * reliability_weight
+    }
+    
+    /// Connect to existing metrics for workload-aware selection
+    pub fn select_algorithm_for_workload(&self, data: &[u8], workload_type: WorkloadType) -> CompressionAlgorithm {
+        // Use existing size thresholds
+        if (data.len() as u32) < self.adaptive_thresholds.min_compression_size {
+            return CompressionAlgorithm::None;
+        }
+        
+        match workload_type {
+            WorkloadType::LatencyOptimized => {
+                // Use existing metrics to find fastest algorithm
+                self.find_fastest_algorithm_from_metrics()
+            },
+            WorkloadType::StorageOptimized => {
+                // Use existing metrics to find best compression ratio
+                self.find_best_ratio_algorithm_from_metrics()
+            },
+            WorkloadType::Balanced => {
+                // Use existing sophisticated scoring
+                self.find_balanced_algorithm_from_metrics()
+            },
+            WorkloadType::Adaptive => {
+                // Use current sophisticated algorithm selection
+                self.algorithm.load()
+            }
+        }
+    }
+    
+    /// Find fastest algorithm using existing AlgorithmMetrics
+    fn find_fastest_algorithm_from_metrics(&self) -> CompressionAlgorithm {
+        let mut fastest_algorithm = CompressionAlgorithm::Lz4; // Safe default
+        let mut best_speed = 0.0f64;
+        
+        for (&algorithm, metrics) in &self.algorithm_metrics {
+            if metrics.operation_count >= 5 && metrics.avg_compression_speed > best_speed {
+                best_speed = metrics.avg_compression_speed;
+                fastest_algorithm = algorithm;
+            }
+        }
+        
+        fastest_algorithm
+    }
+    
+    /// Find best compression ratio using existing AlgorithmMetrics
+    fn find_best_ratio_algorithm_from_metrics(&self) -> CompressionAlgorithm {
+        let mut best_algorithm = CompressionAlgorithm::Zstd; // Safe default
+        let mut best_ratio = 1.0f32;
+        
+        for (&algorithm, metrics) in &self.algorithm_metrics {
+            if metrics.operation_count >= 5 && metrics.avg_compression_ratio < best_ratio {
+                best_ratio = metrics.avg_compression_ratio;
+                best_algorithm = algorithm;
+            }
+        }
+        
+        best_algorithm
+    }
+    
+    /// Find balanced algorithm using existing sophisticated scoring
+    fn find_balanced_algorithm_from_metrics(&self) -> CompressionAlgorithm {
+        let mut best_algorithm = CompressionAlgorithm::Lz4; // Safe default
+        let mut best_score = 0.0f64;
+        
+        for (&algorithm, metrics) in &self.algorithm_metrics {
+            if metrics.operation_count >= 5 {
+                let score = self.calculate_algorithm_score(metrics);
+                if score > best_score {
+                    best_score = score;
+                    best_algorithm = algorithm;
+                }
+            }
+        }
+        
+        best_algorithm
+    }
+}
+
+impl CompressionStats {
+    pub fn new() -> Self {
+        Self {
+            total_compressed: AtomicU64::new(0),
+            total_uncompressed: AtomicU64::new(0),
+            compression_ops: AtomicU64::new(0),
+            decompression_ops: AtomicU64::new(0),
+            total_compression_time_ns: AtomicU64::new(0),
+            total_decompression_time_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+/// Compression statistics snapshot
+#[derive(Debug, Clone)]
+pub struct CompressionStatsSnapshot {
+    pub total_compressed: u64,
+    pub total_uncompressed: u64,
+    pub compression_ops: u64,
+    pub decompression_ops: u64,
+    pub total_compression_time_ns: u64,
+    pub total_decompression_time_ns: u64,
+    pub current_algorithm: CompressionAlgorithm,
+}
+
+/// Enhanced compressed data structure with integrity verification
+#[derive(Debug, Clone)]
+pub struct CompressedData {
+    pub data: Vec<u8>,
+    pub original_size: usize,
+    pub checksum: u32,
+    pub algorithm: CompressionAlgorithm,
+}
+
+impl CompressedData {
+    /// Get the compressed data length
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Check if compressed data is empty
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+/// Compression error types
+#[derive(Debug, Clone)]
+pub enum CompressionError {
+    // Existing
+    DecompressionFailed,
+    UnsupportedAlgorithm,
+    InvalidData,
+
+    // NEW: Detailed error variants
+    CompressionFailed(String),
+    IntegrityCheckFailed { expected: u32, actual: u32 },
+    InvalidCompressionLevel(i32),
+    BackendNotAvailable(String),
+    InsufficientBuffer { needed: usize, available: usize },
+    CorruptedData(String),
+}
+
+impl std::fmt::Display for CompressionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CompressionFailed(msg) => write!(f, "Compression failed: {}", msg),
+            Self::IntegrityCheckFailed { expected, actual } => {
+                write!(
+                    f,
+                    "Integrity check failed: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            Self::InvalidCompressionLevel(level) => {
+                write!(f, "Invalid compression level: {}", level)
+            }
+            Self::BackendNotAvailable(backend) => {
+                write!(f, "Compression backend not available: {}", backend)
+            }
+            Self::InsufficientBuffer { needed, available } => {
+                write!(
+                    f,
+                    "Insufficient buffer: need {} bytes, have {}",
+                    needed, available
+                )
+            }
+            Self::CorruptedData(msg) => write!(f, "Corrupted data: {}", msg),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl std::error::Error for CompressionError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gzip_roundtrip() {
+        let engine = CompressionEngine::new(6);
+        let original = b"Hello, world! ".repeat(1000);
+
+        let compressed = engine
+            .compress(&original, CompressionAlgorithm::Gzip)
+            .expect("Gzip compression should succeed for test data");
+        assert!(compressed.data.len() < original.len());
+
+        let decompressed = engine.decompress(&compressed).expect("Gzip decompression should succeed for valid compressed data");
+        assert_eq!(original, decompressed.as_slice());
+    }
+
+    #[test]
+    fn test_zstd_roundtrip() {
+        let engine = CompressionEngine::new(3);
+        let original = b"Test data for Zstd compression! ".repeat(500);
+
+        let compressed = engine
+            .compress(&original, CompressionAlgorithm::Zstd)
+            .expect("Zstd compression should succeed for test data");
+        assert!(compressed.data.len() < original.len());
+
+        let decompressed = engine.decompress(&compressed).expect("Zstd decompression should succeed for valid compressed data");
+        assert_eq!(original, decompressed.as_slice());
+    }
+
+    #[test]
+    fn test_snappy_roundtrip() {
+        let engine = CompressionEngine::new(0);
+        let original = b"Fast compression test data for Snappy! ".repeat(300);
+
+        let compressed = engine
+            .compress(&original, CompressionAlgorithm::Snappy)
+            .expect("Snappy compression should succeed for test data");
+        assert!(compressed.data.len() < original.len());
+
+        let decompressed = engine.decompress(&compressed).expect("Snappy decompression should succeed for valid compressed data");
+        assert_eq!(original, decompressed.as_slice());
+    }
+
+    #[test]
+    fn test_brotli_roundtrip() {
+        let engine = CompressionEngine::new(6);
+        let original = b"Brotli compression test data! ".repeat(400);
+
+        let compressed = engine
+            .compress(&original, CompressionAlgorithm::Brotli)
+            .expect("Brotli compression should succeed for test data");
+        assert!(compressed.data.len() < original.len());
+
+        let decompressed = engine.decompress(&compressed).expect("Brotli decompression should succeed for valid compressed data");
+        assert_eq!(original, decompressed.as_slice());
+    }
+
+    #[test]
+    fn test_integrity_verification() {
+        let engine = CompressionEngine::new(3);
+        let data = b"Test data for integrity verification";
+
+        let mut compressed = engine.compress(data, CompressionAlgorithm::Zstd).expect("Zstd compression should succeed for integrity test data");
+
+        // Corrupt the checksum
+        compressed.checksum ^= 0xFFFFFFFF;
+
+        match engine.decompress(&compressed) {
+            Err(CompressionError::IntegrityCheckFailed { .. }) => {} // Expected
+            _ => panic!("Should have detected integrity failure"),
+        }
+    }
+
+    #[test]
+    fn test_adaptive_selection() {
+        let engine = CompressionEngine::new(6);
+
+        // Small data (512 bytes) returns current algorithm (Lz4)
+        let small_data = vec![0u8; 512];
+        assert_eq!(
+            engine.select_algorithm(&small_data),
+            CompressionAlgorithm::Lz4
+        );
+
+        // Large data should use Zstd
+        let large_data = vec![0u8; 65536];
+        assert_eq!(
+            engine.select_algorithm(&large_data),
+            CompressionAlgorithm::Zstd
+        );
+    }
+
+    #[test]
+    fn test_all_algorithms() {
+        let engine = CompressionEngine::new(6);
+        let test_data = b"This is test data for all compression algorithms.".repeat(100);
+
+        for algorithm in [
+            CompressionAlgorithm::None,
+            CompressionAlgorithm::Lz4,
+            CompressionAlgorithm::Gzip,
+            CompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Snappy,
+            CompressionAlgorithm::Brotli,
+        ] {
+            let compressed = engine.compress(&test_data, algorithm).expect("Compression should succeed for all algorithms in test");
+            let decompressed = engine.decompress(&compressed).expect("Decompression should succeed for all algorithms in test");
+            assert_eq!(
+                test_data,
+                decompressed.as_slice(),
+                "Failed for algorithm: {:?}",
+                algorithm
+            );
+        }
+    }
+}
