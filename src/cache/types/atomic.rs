@@ -5,7 +5,6 @@
 
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use crossbeam_utils::atomic::AtomicCell;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -355,20 +354,6 @@ where
 {
     AtomicCacheEntry::new(key, value)
 }
-
-/// Create atomic cache entry from Arc value (extracts inner value)
-#[inline(always)]
-pub fn create_atomic_entry_from_arc<K, V>(key: K, value: Arc<V>) -> AtomicCacheEntry<K, V>
-where
-    K: CacheKey,
-    V: CacheValue,
-{
-    match Arc::try_unwrap(value) {
-        Ok(inner_value) => AtomicCacheEntry::new(key, inner_value),
-        Err(arc_value) => AtomicCacheEntry::new(key, (*arc_value).clone()),
-    }
-}
-
 
 /// Batch atomic entry creation for bulk operations
 #[inline(always)]

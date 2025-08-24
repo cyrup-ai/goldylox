@@ -3,7 +3,6 @@
 //! This module implements write request processing including write misses,
 //! shared writes, and exclusive writes with proper state transitions.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cache::coherence::communication::{CoherenceError, WriteResponse};
@@ -20,7 +19,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &K,
         requesting_tier: CacheTier,
-        data: Arc<V>,
+        data: V,
     ) -> Result<WriteResponse, CoherenceError> {
         let start_time = Instant::now();
         let coherence_key = CoherenceKey::from_cache_key(key);
@@ -61,7 +60,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: Arc<V>,
+        data: V,
     ) -> Result<WriteResponse, CoherenceError> {
         self.handle_cache_miss(key, requesting_tier, true)?;
 
@@ -83,7 +82,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: Arc<V>,
+        data: V,
     ) -> Result<WriteResponse, CoherenceError> {
         // Send invalidation to other tiers
         self.invalidation_manager.submit_invalidation(
@@ -129,7 +128,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: Arc<V>,
+        data: V,
     ) -> Result<WriteResponse, CoherenceError> {
         // Transition to modified state
         if let Some(cache_line_entry) = self.cache_line_states.get(key) {

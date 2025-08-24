@@ -4,7 +4,6 @@
 //! concurrent tracking and pattern analysis capabilities.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 use dashmap::DashMap;
 
@@ -19,7 +18,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 #[derive(Debug)]
 pub struct AccessPatternAnalyzer<K: CacheKey> {
     /// Map of access records indexed by cache key
-    pub access_history: DashMap<K, Arc<AccessRecord>>,
+    pub access_history: DashMap<K, AccessRecord>,
     /// Global logical clock for ordering
     pub global_clock: AtomicU64,
     /// Cleanup operation counter
@@ -79,13 +78,17 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
     }
 
     /// Record cache access for pattern analysis
+    #[inline]
     pub fn record_access(&self, key: &K) -> Result<(), CacheOperationError> {
         let now_ns = self.current_timestamp_ns()?;
         let bucket_index = self.time_bucket_index(now_ns);
 
-        // Get or create access record
-        let record = match self.access_history.get(key) {
-            Some(existing_record) => existing_record.value().clone(),
+        // Get existing or create new record
+        match self.access_history.get(key) {
+            Some(existing) => {
+                // Update existing record atomically
+                existing.record_access(now_ns, bucket_index);
+            }
             None => {
                 // Check if we're at capacity
                 if self.access_history.len() >= self.config.max_tracked_keys {
@@ -93,22 +96,15 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
                 }
 
                 // Create new record
-                let new_record = Arc::new(AccessRecord::new(now_ns, self.config.time_bucket_count));
-                match self.access_history.entry(key.clone()) {
-                    dashmap::mapref::entry::Entry::Occupied(entry) => {
-                        // Race condition: someone else inserted it
-                        entry.get().clone()
-                    }
-                    dashmap::mapref::entry::Entry::Vacant(entry) => {
-                        entry.insert(new_record.clone());
-                        new_record
-                    }
-                }
+                let new_record = AccessRecord::new(now_ns, self.config.time_bucket_count);
+                
+                // Insert or update if racing
+                self.access_history
+                    .entry(key.clone())
+                    .and_modify(|existing| existing.record_access(now_ns, bucket_index))
+                    .or_insert(new_record);
             }
-        };
-
-        // Record the access
-        record.record_access(now_ns, bucket_index);
+        }
 
         // Update pattern analysis window
         self.update_pattern_window(key, now_ns)?;
@@ -126,16 +122,21 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
     }
 
     /// Analyze access pattern for cache key
+    #[inline]
     pub fn analyze_access_pattern(&self, key: &K) -> AccessPattern {
         let now_ns = match self.current_timestamp_ns() {
             Ok(ts) => ts,
             Err(_) => return Self::default_pattern(),
         };
 
-        let record = match self.access_history.get(key) {
-            Some(record) => record.value().clone(),
+        match self.access_history.get(key) {
+            Some(record) => self.compute_pattern(&*record, now_ns),
             None => return Self::default_pattern(),
-        };
+        }
+    }
+
+    #[inline(always)]
+    fn compute_pattern(&self, record: &AccessRecord, now_ns: u64) -> AccessPattern {
 
         let frequency = self.calculate_frequency(&record, now_ns);
         let recency = self.calculate_recency(&record, now_ns);

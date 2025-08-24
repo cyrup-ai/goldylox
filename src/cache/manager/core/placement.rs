@@ -3,8 +3,6 @@
 //! This module implements intelligent placement decisions and tier promotion
 //! logic for optimal cache performance.
 
-use std::sync::Arc;
-
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::{AccessPath, CacheTier, PlacementDecision};
 use super::types::UnifiedCacheManager;
@@ -12,7 +10,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 
 impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Analyze value characteristics and determine optimal placement
-    pub fn analyze_placement(&self, _key: &K, _value: &Arc<V>) -> PlacementDecision {
+    pub fn analyze_placement(&self, _key: &K, _value: &V) -> PlacementDecision {
         PlacementDecision {
             primary_tier: CacheTier::Warm,
             replication_tiers: Vec::new(),
@@ -41,7 +39,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     pub fn put_with_replication(
         &self,
         _key: K,
-        _value: Arc<V>,
+        _value: V,
         _tier: CacheTier,
         _replication: Vec<CacheTier>,
     ) -> Result<(), CacheOperationError> {
@@ -50,7 +48,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     }
 
     /// Put value directly to cold tier without hot/warm placement
-    pub fn put_cold_tier_only(&self, _key: K, _value: Arc<V>) -> Result<(), CacheOperationError> {
+    pub fn put_cold_tier_only(&self, _key: K, _value: V) -> Result<(), CacheOperationError> {
         // Implementation would place value only in cold tier
         Ok(())
     }
@@ -65,7 +63,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     pub fn calculate_promotion_priority(
         &self,
         _key: &K,
-        _value: &Arc<V>,
+        _value: &V,
         _access_path: &AccessPath,
     ) -> u8 {
         // Implementation would return priority score (0-255)
@@ -75,7 +73,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Analyze value size and complexity for placement decisions using real pattern analyzer
     pub fn analyze_value_characteristics(
         &self,
-        value: &Arc<V>,
+        value: &V,
     ) -> super::types::ValueCharacteristics {
         let size = value.estimated_size();
         

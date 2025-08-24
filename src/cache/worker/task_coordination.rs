@@ -5,8 +5,8 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use crossbeam_channel::{bounded, Sender, Receiver, TryRecvError};
 
 use log::{warn, debug};
 use dashmap::DashMap;
@@ -18,10 +18,12 @@ use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask};
 
 /// Command queue for safe cache mutations from async contexts
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CacheCommandQueue<K: CacheKey, V: CacheValue> {
-    /// Pending commands to execute
-    commands: Mutex<VecDeque<CacheCommand<K, V>>>,
+    /// Channel sender for commands
+    sender: Sender<CacheCommand<K, V>>,
+    /// Channel receiver for commands (wrapped in Option for taking)
+    receiver: Option<Receiver<CacheCommand<K, V>>>,
     /// Command execution statistics
     stats: CommandQueueStats,
     /// Maximum queue size
@@ -141,7 +143,7 @@ pub struct CoordinatorStats {
 #[derive(Debug)]
 pub struct TaskExecutionContext<K: CacheKey, V: CacheValue> {
     /// Command queue for mutations
-    command_queue: Arc<CacheCommandQueue<K, V>>,
+    command_sender: Sender<CacheCommand<K, V>>,
     /// Task ID for tracking
     task_id: u64,
     /// Execution start time
@@ -168,8 +170,10 @@ pub struct TaskMetadata {
 impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
     /// Create new command queue
     pub fn new(max_queue_size: usize) -> Self {
+        let (sender, receiver) = bounded(max_queue_size);
         Self {
-            commands: Mutex::new(VecDeque::with_capacity(max_queue_size)),
+            sender,
+            receiver: Some(receiver),
             stats: CommandQueueStats::new(),
             max_queue_size,
         }
@@ -177,45 +181,36 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
 
     /// Enqueue command for deferred execution
     pub fn enqueue_command(&self, command: CacheCommand<K, V>) -> Result<(), CacheOperationError> {
-        let mut commands = self
-            .commands
-            .lock()
-            .map_err(|_| CacheOperationError::OperationFailed)?;
-
-        // Check queue capacity
-        if commands.len() >= self.max_queue_size {
-            return Err(CacheOperationError::ResourceExhausted(
-                "Command queue full".to_string(),
-            ));
-        }
-
-        commands.push_back(command);
+        // Try to send command through channel
+        self.sender.try_send(command).map_err(|_| {
+            CacheOperationError::ResourceExhausted("Command queue full".to_string())
+        })?;
+        
         self.stats.queued_commands.fetch_add(1, Ordering::Relaxed);
-
-        // Update max queue depth
-        let current_depth = commands.len();
-        self.stats
-            .max_queue_depth
-            .fetch_max(current_depth, Ordering::Relaxed);
+        
+        // Update max queue depth (approximate, since channel doesn't expose len())
+        let current_depth = self.stats.queued_commands.load(Ordering::Relaxed);
+        self.stats.max_queue_depth.fetch_max(current_depth, Ordering::Relaxed);
 
         Ok(())
     }
 
     /// Drain and execute all pending commands
-    pub fn execute_pending_commands<F>(&self, mut executor: F) -> Result<usize, CacheOperationError>
+    pub fn execute_pending_commands<F>(&mut self, mut executor: F) -> Result<usize, CacheOperationError>
     where
         F: FnMut(CacheCommand<K, V>) -> Result<(), CacheOperationError>,
     {
-        let mut commands = self
-            .commands
-            .lock()
-            .map_err(|_| CacheOperationError::OperationFailed)?;
-
-        let command_count = commands.len();
+        // Take the receiver out (can only be done once)
+        let receiver = self.receiver.take()
+            .ok_or_else(|| CacheOperationError::InvalidState("Receiver already taken".to_string()))?;
+        
         let execution_start = Instant::now();
+        let mut command_count = 0;
 
-        while let Some(command) = commands.pop_front() {
+        // Use try_iter() to drain all pending commands without blocking
+        for command in receiver.try_iter() {
             let command_start = Instant::now();
+            command_count += 1;
 
             // Execute command
             if let Err(e) = executor(command) {
@@ -227,6 +222,9 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
             let execution_time = command_start.elapsed();
             self.update_execution_stats(execution_time);
         }
+        
+        // Put the receiver back
+        self.receiver = Some(receiver);
 
         // Update queue statistics
         self.stats.queued_commands.store(0, Ordering::Relaxed);
@@ -273,17 +271,34 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
     }
 
     /// Clear all pending commands
-    pub fn clear(&self) -> Result<usize, CacheOperationError> {
-        let mut commands = self
-            .commands
-            .lock()
-            .map_err(|_| CacheOperationError::OperationFailed)?;
-
-        let cleared_count = commands.len();
-        commands.clear();
+    pub fn clear(&mut self) -> Result<usize, CacheOperationError> {
+        // Take the receiver and drain it
+        let receiver = self.receiver.take()
+            .ok_or_else(|| CacheOperationError::InvalidState("Receiver already taken".to_string()))?;
+        
+        let cleared_count = receiver.try_iter().count();
+        self.receiver = Some(receiver);
+        
         self.stats.queued_commands.store(0, Ordering::Relaxed);
 
         Ok(cleared_count)
+    }
+    
+    /// Get a sender that can be cloned for use in other contexts
+    pub fn get_sender(&self) -> Sender<CacheCommand<K, V>> {
+        self.sender.clone()
+    }
+}
+
+// Manual Clone implementation since Receiver can't be cloned
+impl<K: CacheKey, V: CacheValue> Clone for CacheCommandQueue<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            receiver: None,  // Only the original keeps the receiver
+            stats: self.stats.clone(),
+            max_queue_size: self.max_queue_size,
+        }
     }
 }
 
@@ -337,7 +352,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
 
         // Create execution context
         let context = TaskExecutionContext {
-            command_queue: self.command_queue.clone(),
+            command_sender: self.command_queue.get_sender(),
             task_id,
             start_time,
             metadata: TaskMetadata {
@@ -380,7 +395,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
     }
 
     /// Execute all pending commands
-    pub fn flush_command_queue<F>(&self, executor: F) -> Result<usize, CacheOperationError>
+    pub fn flush_command_queue<F>(&mut self, executor: F) -> Result<usize, CacheOperationError>
     where
         F: FnMut(CacheCommand<K, V>) -> Result<(), CacheOperationError>,
     {
@@ -439,7 +454,8 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
 impl<K: CacheKey, V: CacheValue> TaskExecutionContext<K, V> {
     /// Enqueue command for deferred execution
     pub fn enqueue_command(&self, command: CacheCommand<K, V>) -> Result<(), CacheOperationError> {
-        self.command_queue.enqueue_command(command)
+        self.command_sender.try_send(command)
+            .map_err(|_| CacheOperationError::ResourceExhausted("Command queue full".to_string()))
     }
 
     /// Get task execution time so far

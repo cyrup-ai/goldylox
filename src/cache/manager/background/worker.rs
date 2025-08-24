@@ -4,7 +4,6 @@
 //! logic for background maintenance operations.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, TryRecvError};
@@ -13,13 +12,16 @@ use super::types::{
     BackgroundWorkerState, MaintenanceConfig, MaintenanceTask, MaintenanceTaskType, WorkerStatus,
 };
 
+/// Global active task counter
+static GLOBAL_ACTIVE_TASKS: AtomicU32 = AtomicU32::new(0);
+
 impl super::types::MaintenanceScheduler {
     /// Worker thread main loop
     pub fn worker_loop(
         worker_id: u32,
         task_receiver: Receiver<MaintenanceTask>,
         shutdown_receiver: Receiver<()>,
-        active_tasks: Arc<AtomicU32>,
+        _active_tasks: &AtomicU32,  // Now uses global static
         _config: MaintenanceConfig,
     ) {
         let mut worker_state = BackgroundWorkerState::new(worker_id);
@@ -36,7 +38,7 @@ impl super::types::MaintenanceScheduler {
                 Ok(task) => {
                     worker_state.status.store(WorkerStatus::Processing);
                     worker_state.current_task.store(Some(task.task_type));
-                    active_tasks.fetch_add(1, Ordering::Relaxed);
+                    GLOBAL_ACTIVE_TASKS.fetch_add(1, Ordering::Relaxed);
 
                     let start_time = Instant::now();
 
@@ -49,7 +51,7 @@ impl super::types::MaintenanceScheduler {
                         .fetch_add(processing_time, Ordering::Relaxed);
                     worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
 
-                    active_tasks.fetch_sub(1, Ordering::Relaxed);
+                    GLOBAL_ACTIVE_TASKS.fetch_sub(1, Ordering::Relaxed);
                     worker_state.current_task.store(None);
                     worker_state.status.store(WorkerStatus::Idle);
                 }

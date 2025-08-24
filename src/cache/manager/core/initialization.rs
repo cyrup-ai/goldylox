@@ -44,10 +44,10 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             );
 
         // Initialize all subsystems
-        let strategy_selector = CacheStrategySelector::new();
-        let tier_manager = TierPromotionManager::new();
+        let strategy_selector = CacheStrategySelector::new(&config);
+        let tier_manager = TierPromotionManager::new(&config);
         let unified_stats = UnifiedCacheStatistics::new();
-        let background_coordinator = BackgroundCoordinator::new()?;
+        let background_coordinator = BackgroundCoordinator::new(&config)?;
         let policy_engine =
             CachePolicyEngine::new(&config, crate::cache::eviction::PolicyType::default())?;
         let performance_monitor = PerformanceMonitor::new();

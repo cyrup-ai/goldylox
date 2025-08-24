@@ -3,8 +3,6 @@
 //! This module provides the global API for the unified cache manager,
 //! including static initialization and thread-safe access patterns.
 
-use std::sync::Arc;
-
 use crate::cache::config::CacheConfig;
 use crate::cache::manager::UnifiedStats as ManagerUnifiedStats;
 use super::unified_manager::UnifiedCacheManager;

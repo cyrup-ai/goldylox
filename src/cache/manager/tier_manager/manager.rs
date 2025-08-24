@@ -54,7 +54,7 @@ impl<K: CacheKey> TierPromotionManager<K> {
     }
 
     /// Consider promoting a value from one tier to another
-    pub fn consider_promotion<K, V>(
+    pub fn consider_promotion<V>(
         &self,
         _key: &K,
         _current_tier: crate::cache::coherence::CacheTier,
@@ -66,7 +66,7 @@ impl<K: CacheKey> TierPromotionManager<K> {
     }
 
     /// Consider promotion across multiple tiers based on access patterns
-    pub fn consider_multi_tier_promotion<K>(
+    pub fn consider_multi_tier_promotion(
         &self,
         _key: &K,
         _path: &crate::cache::manager::AccessPath,

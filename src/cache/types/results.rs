@@ -3,7 +3,7 @@
 //! This module provides comprehensive error handling and result types
 //! for cache operations with detailed metadata and recovery hints.
 
-use std::sync::Arc;
+
 
 pub use crate::cache::traits::ErrorCategory;
 use crate::cache::traits::*;
@@ -14,7 +14,7 @@ pub struct CacheResult<V: CacheValue> {
     /// Operation success status
     pub success: bool,
     /// Retrieved value (if successful)
-    pub value: Option<Arc<V>>,
+    pub value: Option<V>,
     /// Operation latency in nanoseconds
     pub latency_ns: u64,
     /// Tier that served the request
@@ -28,7 +28,7 @@ pub struct CacheResult<V: CacheValue> {
 impl<V: CacheValue> CacheResult<V> {
     /// Create successful cache hit result
     #[inline(always)]
-    pub fn hit(value: Arc<V>, latency_ns: u64, tier: TierLocation) -> Self {
+    pub fn hit(value: V, latency_ns: u64, tier: TierLocation) -> Self {
         Self {
             success: true,
             value: Some(value),

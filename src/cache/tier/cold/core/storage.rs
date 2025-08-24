@@ -4,7 +4,6 @@
 //! compressed data to memory-mapped files with integrity verification.
 
 use std::io;
-use std::sync::Arc;
 
 use crate::cache::tier::cold::compression_engine::CompressedData;
 use crate::cache::tier::cold::data_structures::*;
@@ -18,7 +17,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
     PersistentColdTier<K, V>
 {
     /// Read data from storage using metadata
-    pub fn read_from_storage(&self, _key: &K, metadata: &IndexEntry) -> io::Result<Arc<V>> {
+    pub fn read_from_storage(&self, _key: &K, metadata: &IndexEntry) -> io::Result<V> {
         // Read compressed data from memory-mapped file
         let compressed_data = self.read_compressed_data(metadata)?;
 
@@ -51,7 +50,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
             )
         })?;
 
-        Ok(Arc::new(cache_value))
+        Ok(cache_value)
     }
 
     /// Read compressed data from memory-mapped file

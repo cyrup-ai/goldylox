@@ -3,8 +3,6 @@
 //! This module implements the core cache operations including get, put, remove,
 //! and statistics retrieval for the persistent cold tier cache.
 
-use std::sync::Arc;
-
 use crate::cache::tier::cold::core::types::*;
 use crate::cache::tier::cold::compression_engine::CompressedData;
 use crate::cache::tier::cold::data_structures::*;
@@ -21,7 +19,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
     PersistentColdTier<K, V>
 {
     /// Get value from persistent storage
-    pub fn get(&self, key: &K) -> Option<Arc<V>> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
         let cold_key = ColdCacheKey::from_cache_key(key);
 
@@ -68,7 +66,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                                         .last_access_ns
                                         .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
 
-                                    Some(Arc::new(cache_value))
+                                    Some(cache_value)
                                 }
                                 Err(_) => {
                                     let elapsed_ns = timer.elapsed_ns();
@@ -118,12 +116,12 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
     }
 
     /// Put value in persistent storage
-    pub fn put(&mut self, key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
+    pub fn put(&mut self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
         let cold_key = ColdCacheKey::from_cache_key(&key);
 
         // Serialize value using CacheValue trait
-        let serialized_data = match bincode::encode_to_vec(value.as_ref(), bincode::config::standard()) {
+        let serialized_data = match bincode::encode_to_vec(&value, bincode::config::standard()) {
             Ok(data) => data,
             Err(_) => {
                 let elapsed_ns = timer.elapsed_ns();

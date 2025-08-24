@@ -344,7 +344,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &K,
         requesting_tier: CacheTier,
-        data: std::sync::Arc<V>,
+        data: V,
     ) -> Result<super::communication::WriteResponse, super::communication::CoherenceError> {
         use std::time::Instant;
 
@@ -446,7 +446,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: std::sync::Arc<V>,
+        data: V,
     ) -> Result<super::communication::WriteResponse, super::communication::CoherenceError> {
         self.handle_cache_miss(key, requesting_tier, true)?;
 
@@ -468,7 +468,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: std::sync::Arc<V>,
+        data: V,
     ) -> Result<super::communication::WriteResponse, super::communication::CoherenceError> {
         // Send invalidation to other tiers
         self.invalidation_manager.submit_invalidation(
@@ -514,7 +514,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         &self,
         key: &CoherenceKey<K>,
         requesting_tier: CacheTier,
-        data: std::sync::Arc<V>,
+        data: V,
     ) -> Result<super::communication::WriteResponse, super::communication::CoherenceError> {
         // Transition to modified state
         if let Some(cache_line_entry) = self.cache_line_states.get(key) {

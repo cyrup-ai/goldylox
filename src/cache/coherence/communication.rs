@@ -4,7 +4,6 @@
 //! coherence operations between Hot, Warm, and Cold cache tiers.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -81,7 +80,7 @@ pub enum CoherenceMessage<K: CacheKey, V: CacheValue> {
         key: CoherenceKey<K>,
         source_tier: CacheTier,
         target_tier: CacheTier,
-        data: Arc<V>,
+        data: V,
         version: u64,
         timestamp_ns: u64,
     },

@@ -8,77 +8,11 @@ use std::sync::Arc;
 use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
-#[derive(Debug, Clone)]
-pub struct CacheResult<V: CacheValue> {
-    /// Operation success status
-    pub success: bool,
-    /// Retrieved value (if successful)
-    pub value: Option<Arc<V>>,
-    /// Operation latency in nanoseconds
-    pub latency_ns: u64,
-    /// Tier that served the request
-    pub tier: TierLocation,
-    /// Cache hit/miss status
-    pub hit_status: HitStatus,
-    /// Additional operation metadata
-    pub metadata: OperationMetadata,
-}
+use crate::cache::types::results::CacheResult;
 
-impl<V: CacheValue> CacheResult<V> {
-    /// Create successful cache hit result
-    #[inline(always)]
-    pub fn hit(value: Arc<V>, latency_ns: u64, tier: TierLocation) -> Self {
-        Self {
-            success: true,
-            value: Some(value),
-            latency_ns,
-            tier,
-            hit_status: HitStatus::Hit,
-            metadata: OperationMetadata::default(),
-        }
-    }
 
-    /// Create cache miss result
-    #[inline(always)]
-    pub fn miss(latency_ns: u64) -> Self {
-        Self {
-            success: false,
-            value: None,
-            latency_ns,
-            tier: TierLocation::Hot, // Start search from hot tier
-            hit_status: HitStatus::Miss,
-            metadata: OperationMetadata::default(),
-        }
-    }
 
-    /// Create error result
-    #[inline(always)]
-    pub fn error(error: impl Into<CacheOperationError>, latency_ns: u64) -> Self {
-        Self {
-            success: false,
-            value: None,
-            latency_ns,
-            tier: TierLocation::Hot,
-            hit_status: HitStatus::Error,
-            metadata: OperationMetadata {
-                error: Some(error.into()),
-                ..Default::default()
-            },
-        }
-    }
 
-    /// Check if operation was successful
-    #[inline(always)]
-    pub fn is_success(&self) -> bool {
-        self.success
-    }
-
-    /// Check if this was a cache hit
-    #[inline(always)]
-    pub fn is_hit(&self) -> bool {
-        matches!(self.hit_status, HitStatus::Hit)
-    }
-}
 
 /// Cache operation metadata for observability
 #[derive(Debug, Clone, Default)]

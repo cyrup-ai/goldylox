@@ -204,7 +204,7 @@ impl<K: CacheKey, V: CacheValue, P: TaskProcessor + Send + 'static> BackgroundCo
         // timer_thread and worker_thread handles need &mut self to be taken
         // This requires API redesign or interior mutability
         
-        self.worker_state.shutdown_workers()?;
+        self.worker_state.shutdown_workers(&self.maintenance_scheduler)?;
         self.maintenance_scheduler.stop_maintenance()?;
         Ok(())
     }

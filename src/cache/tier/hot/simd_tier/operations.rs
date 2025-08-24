@@ -3,8 +3,6 @@
 //! This module contains the main cache operations including get, put, and remove
 //! with SIMD-accelerated lookup and intelligent eviction.
 
-use std::sync::Arc;
-
 use crate::cache::tier::hot::synchronization::{PrecisionTimer, ReadGuard, WriteGuard};
 use super::core::SimdHotTier;
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -12,7 +10,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     /// Get entry from cache with SIMD-accelerated lookup
-    pub fn get(&mut self, key: &K) -> Option<Arc<V>> {
+    pub fn get(&mut self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
         let context_hash = self.calculate_context_hash(key);
 
@@ -66,7 +64,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                         timer.elapsed_ns(),
                     );
 
-                    return Some(value);
+                    return value;
                 }
             }
         }
@@ -79,7 +77,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     }
 
     /// Put entry in cache with intelligent eviction
-    pub fn put(&mut self, key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
+    pub fn put(&mut self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
 
         // Try to acquire write lock
@@ -169,7 +167,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     }
 
     /// Remove entry from cache
-    pub fn remove(&mut self, key: &K) -> Option<Arc<V>> {
+    pub fn remove(&mut self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
 
         // Compute hash with SIMD acceleration before acquiring lock

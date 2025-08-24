@@ -4,7 +4,6 @@
 //! and tier access coordination for the unified cache system.
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
@@ -14,7 +13,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 
 impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Get value from unified cache with intelligent tier selection
-    pub fn get(&self, key: &K) -> Option<Arc<V>> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
         let mut access_path = AccessPath::new();
 
@@ -70,7 +69,7 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     }
 
     /// Put value in unified cache with optimal tier placement
-    pub fn put(&self, key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
+    pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
 
         // Analyze value characteristics for optimal placement

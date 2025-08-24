@@ -3,7 +3,6 @@
 //! This module implements the main cache operations including get, put, remove,
 //! and memory management with atomic coordination.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -30,7 +29,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(analysis_tx),
-            eviction_policy: Arc::new(ConcurrentEvictionPolicy::new()),
+            eviction_policy: ConcurrentEvictionPolicy::new(),
             stats: AtomicTierStats::new(),
             config,
             memory_monitor: MemoryPressureMonitor::new(memory_limit),
@@ -41,7 +40,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     }
 
     /// Get entry from warm tier cache
-    pub fn get(&self, key: &K) -> Option<Arc<V>> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let warm_key = WarmCacheKey::from_cache_key(key);
         let access_start = std::time::Instant::now();
 
@@ -85,7 +84,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     pub fn put(
         &self,
         key: K,
-        value: Arc<V>,
+        value: V,
     ) -> Result<(), CacheOperationError> {
         let warm_key = WarmCacheKey::from_cache_key(&key);
         let generation = self.generation_counter.fetch_add(1, Ordering::Relaxed);
@@ -131,7 +130,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     }
 
     /// Remove entry from warm tier cache
-    pub fn remove(&self, key: &K) -> Option<Arc<V>> {
+    pub fn remove(&self, key: &K) -> Option<V> {
         let warm_key = WarmCacheKey::from_cache_key(key);
 
         if let Some(entry) = self.storage.remove(&warm_key) {

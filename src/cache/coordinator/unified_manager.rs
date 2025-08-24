@@ -3,8 +3,6 @@
 //! This module contains the main UnifiedCacheManager struct and its core operations
 //! for intelligently managing multi-tier cache access with SIMD optimization.
 
-use std::sync::Arc;
-
 use crate::cache::coherence::ProtocolConfiguration;
 use crate::cache::config::CacheConfig;
 use crate::cache::eviction::CachePolicyEngine;
@@ -279,7 +277,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     fn consider_promotion(
         &self,
         key: &K,
-        value: &Arc<V>,
+        value: &V,
         from_tier: crate::cache::coherence::CacheTier,
         to_tier: crate::cache::coherence::CacheTier,
         access_path: &crate::cache::manager::AccessPath,
@@ -298,7 +296,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     fn consider_multi_tier_promotion(
         &self,
         key: &K,
-        value: &Arc<V>,
+        value: &V,
         _access_path: &crate::cache::manager::AccessPath,
     ) {
         // Analyze access pattern to determine optimal promotion strategy

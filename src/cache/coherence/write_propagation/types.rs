@@ -4,7 +4,6 @@
 //! propagation system for cache coherence.
 
 use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
 use std::time::Instant;
 
 use crossbeam_skiplist::SkipMap;
@@ -34,7 +33,7 @@ pub struct WritePropagationSystem<K: CacheKey, V: CacheValue> {
 #[derive(Debug, Clone)]
 pub struct WriteBackRequest<K: CacheKey, V: CacheValue> {
     pub key: CoherenceKey<K>,
-    pub data: Arc<V>,
+    pub data: V,
     pub source_tier: CacheTier,
     pub target_tier: CacheTier,
     pub version: u64,

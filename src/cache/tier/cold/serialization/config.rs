@@ -46,7 +46,7 @@ pub struct SerializationResult {
 /// Deserialization result
 #[derive(Debug)]
 pub struct DeserializationResult<V: CacheValue> {
-    pub data: std::sync::Arc<V>,
+    pub data: V,
     pub size: usize,
 }
 

@@ -3,7 +3,6 @@
 //! This module defines the fundamental types used throughout the unified
 //! cache management system.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cache::coherence::CacheTier;
@@ -161,7 +160,7 @@ pub struct UnifiedStats {
 pub enum BackgroundTask<K: CacheKey, V: CacheValue> {
     Promote {
         key: K,
-        value: Arc<V>,
+        value: V,
         from_tier: CacheTier,
         to_tier: CacheTier,
         priority: u8,

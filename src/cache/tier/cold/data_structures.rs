@@ -8,7 +8,6 @@ use std::fs::File;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
-use std::sync::Arc;
 use dashmap::DashMap;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -100,7 +99,7 @@ pub struct CompressionEngine {
     /// Compression statistics
     pub compression_stats: CompressionStats,
     /// Per-algorithm performance metrics (thread-safe)
-    pub algorithm_metrics: Arc<DashMap<CompressionAlgorithm, AlgorithmMetrics>>,
+    pub algorithm_metrics: DashMap<CompressionAlgorithm, AlgorithmMetrics>,
     /// Adaptive compression thresholds
     pub adaptive_thresholds: AdaptiveThresholds,
     /// Adaptation coordination counter

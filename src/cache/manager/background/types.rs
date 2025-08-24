@@ -4,7 +4,6 @@
 //! operation system including coordinators, workers, and task definitions.
 
 use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
 use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -210,8 +209,7 @@ pub struct MaintenanceScheduler {
     pub maintenance_stats: MaintenanceStats,
     /// Scheduled operations queue
     pub scheduled_operations: Vec<MaintenanceOperation>,
-    /// Active task tracking for load balancing
-    pub active_tasks: Arc<AtomicU32>,
+
     /// Task queue for distributing maintenance tasks
     pub task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
     /// Task sender for submitting maintenance tasks

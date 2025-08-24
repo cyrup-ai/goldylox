@@ -3,7 +3,7 @@
 //! This module provides high-performance batch processing capabilities
 //! for cache operations with comprehensive performance tracking.
 
-use std::sync::Arc;
+
 
 use crate::cache::types::results::CacheResult;
 use super::hasher::SimdHasher;
@@ -49,7 +49,7 @@ impl BatchOperationManager {
 
     /// Analyze batch operation performance
     pub fn analyze_batch_performance<V: CacheValue>(
-        results: &[CacheResult<Arc<V>>],
+        results: &[CacheResult<V>],
     ) -> BatchPerformanceMetrics {
         let total_operations = results.len();
         let successful_operations = results.iter().filter(|r| r.is_success()).count();

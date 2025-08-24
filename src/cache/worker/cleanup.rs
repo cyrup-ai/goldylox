@@ -3,7 +3,6 @@
 //! This module implements expired entry cleanup across all cache tiers
 //! with configurable TTL thresholds and statistics tracking.
 
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::types::WorkerStats;

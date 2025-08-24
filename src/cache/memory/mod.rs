@@ -4,7 +4,6 @@
 //! pressure monitoring, and efficiency analysis through specialized submodules.
 
 use std::ptr::NonNull;
-use std::sync::Arc;
 use log::{error, warn, info};
 
 use super::config::CacheConfig;
@@ -206,29 +205,27 @@ impl MemoryManager {
     }
 }
 
-/// Memory monitoring task processor
+/// Memory monitoring task processor using channel communication
 pub struct MemoryMonitoringProcessor {
-    memory_manager: Arc<MemoryManager>,
+    task_sender: crossbeam_channel::Sender<MemoryMonitoringTask>,
 }
 
 impl MemoryMonitoringProcessor {
-    pub fn new(memory_manager: Arc<MemoryManager>) -> Self {
-        Self { memory_manager }
+    pub fn new(task_sender: crossbeam_channel::Sender<MemoryMonitoringTask>) -> Self {
+        Self { task_sender }
     }
+}
+
+/// Memory monitoring task
+#[derive(Debug, Clone)]
+pub enum MemoryMonitoringTask {
+    MonitorPressure,
 }
 
 impl TaskProcessor for MemoryMonitoringProcessor {
     fn process_task(&self, task: &BackgroundTask) -> Result<(), CacheOperationError> {
-        match task {
-            BackgroundTask::Statistics { stats_type, .. } if *stats_type == 2 => {
-                // Memory monitoring task
-                self.memory_manager.monitor_memory_pressure()?;
-                Ok(())
-            }
-            _ => {
-                // Not a memory monitoring task
-                Ok(())
-            }
-        }
+        // Send task via channel instead of direct access
+        self.task_sender.send(MemoryMonitoringTask::MonitorPressure)
+            .map_err(|_| CacheOperationError::Internal("Failed to send monitoring task".into()))
     }
 }

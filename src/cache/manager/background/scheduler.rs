@@ -4,7 +4,6 @@
 //! with worker thread pool management and task distribution.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::types::{
@@ -22,7 +21,7 @@ impl MaintenanceScheduler {
         };
 
         let (shutdown_sender, shutdown_signal) = crossbeam_channel::bounded(1);
-        let active_tasks = Arc::new(AtomicU32::new(0));
+
 
         let _stats = MaintenanceStats::new();
 
@@ -32,7 +31,6 @@ impl MaintenanceScheduler {
         for worker_id in 0..config.worker_count {
             let task_receiver = task_queue.clone();
             let shutdown_receiver = shutdown_signal.clone();
-            let active_tasks_clone = active_tasks.clone();
             let config_clone = config.clone();
 
             let handle = std::thread::Builder::new()
@@ -42,7 +40,7 @@ impl MaintenanceScheduler {
                         worker_id,
                         task_receiver,
                         shutdown_receiver,
-                        active_tasks_clone,
+                        &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
                         config_clone,
                     );
                 })
@@ -56,7 +54,6 @@ impl MaintenanceScheduler {
             last_maintenance: Instant::now(),
             maintenance_stats: MaintenanceStats::default(),
             scheduled_operations: Vec::new(),
-            active_tasks,
             task_queue,
             task_sender,
             worker_threads,
@@ -137,7 +134,7 @@ impl MaintenanceScheduler {
     #[inline(always)]
     pub fn is_healthy(&self) -> bool {
         // Check if any tasks are stuck (taking too long)
-        let active_count = self.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
+        let active_count = crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS.load(std::sync::atomic::Ordering::Relaxed);
         let max_healthy_tasks = self.config.worker_count * 2; // Allow some queuing
         active_count <= max_healthy_tasks
     }

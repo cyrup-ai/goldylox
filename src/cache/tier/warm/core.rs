@@ -35,8 +35,7 @@ pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue> {
     /// Access tracking for advanced eviction policies
     pub(super) access_tracker: ConcurrentAccessTracker<K>,
     /// Eviction policy implementation
-    /// Note: This is a legitimate Arc use for shared trait object across threads
-    pub(super) eviction_policy: std::sync::Arc<ConcurrentEvictionPolicy<K>>,
+    pub(super) eviction_policy: ConcurrentEvictionPolicy<K>,
     /// Atomic statistics
     pub(super) stats: AtomicTierStats,
     /// Configuration
@@ -322,7 +321,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         Ok(Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: std::sync::Arc::new(ConcurrentEvictionPolicy::new()),
+            eviction_policy: ConcurrentEvictionPolicy::new(),
             stats: AtomicTierStats::new(),
             config,
             memory_monitor,
@@ -339,7 +338,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         Ok(Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: std::sync::Arc::new(ConcurrentEvictionPolicy::new()),
+            eviction_policy: ConcurrentEvictionPolicy::new(),
             stats: AtomicTierStats::new(),
             config,
             memory_monitor: MemoryMonitorImpl::new_noop(), // No-op implementation

@@ -250,6 +250,7 @@ impl From<crate::cache::tier::cold::data_structures::CompressionAlgorithm>
             ColdAlg::Gzip => CompressionAlgorithm::Deflate, // Map Gzip to Deflate
             ColdAlg::Zstd => CompressionAlgorithm::Zstd,
             ColdAlg::Snappy => CompressionAlgorithm::Brotli, // Map Snappy to Brotli
+            ColdAlg::Brotli => CompressionAlgorithm::Brotli,
         }
     }
 }

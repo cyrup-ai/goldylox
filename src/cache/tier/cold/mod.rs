@@ -1,12 +1,12 @@
 //! Cold tier persistent cache module
 //!
 //! This module provides persistent storage for the cold tier cache with
-//! comprehensive serialization, compression, synchronization, and optimization.
-//! The implementation is decomposed into focused submodules for maintainability.
+//! lock-free message passing architecture for thread safety.
 
 use std::any::TypeId;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
+use crossbeam_channel::{unbounded, Sender, Receiver};
+use bincode::{config, encode_to_vec, decode_from_slice};
 
 use self::data_structures::{ColdCacheKey, IndexEntry, PersistentColdTier};
 use crate::cache::config::types::ColdTierConfig;
@@ -26,38 +26,116 @@ pub mod storage;
 pub mod storage_manager;
 pub mod sync;
 
-/// Cold tier coordinator for managing mutable operations
-pub struct ColdTierCoordinator {
-    tiers: Arc<Mutex<HashMap<(TypeId, TypeId), Arc<Mutex<Box<dyn std::any::Any + Send + Sync>>>>>>,
+/// Cold tier service message
+enum ColdTierMessage {
+    Register {
+        type_key: (TypeId, TypeId),
+        tier: Box<dyn std::any::Any + Send + Sync>,
+        response: Sender<Result<(), CacheOperationError>>,
+    },
+    ExecuteOp {
+        type_key: (TypeId, TypeId),
+        op: Box<dyn FnOnce(&mut dyn std::any::Any) -> Vec<u8> + Send>,
+        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+    },
+    ExecuteReadOp {
+        type_key: (TypeId, TypeId),
+        op: Box<dyn FnOnce(&dyn std::any::Any) -> Vec<u8> + Send>,
+        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+    },
 }
 
-static COLD_TIER_COORDINATOR: OnceLock<ColdTierCoordinator> = OnceLock::new();
+/// Cold tier service that owns all state (no locks needed)
+struct ColdTierService {
+    receiver: Receiver<ColdTierMessage>,
+}
+
+impl ColdTierService {
+    fn run(self) {
+        // Service thread owns ALL tier instances - no sharing, no locks
+        let mut tiers = std::collections::HashMap::<
+            (TypeId, TypeId),
+            Box<dyn std::any::Any + Send + Sync>
+        >::new();
+        
+        while let Ok(msg) = self.receiver.recv() {
+            match msg {
+                ColdTierMessage::Register { type_key, tier, response } => {
+                    tiers.insert(type_key, tier);
+                    let _ = response.send(Ok(()));
+                }
+                ColdTierMessage::ExecuteOp { type_key, op, response } => {
+                    if let Some(tier) = tiers.get_mut(&type_key) {
+                        let result = op(&mut **tier);
+                        let _ = response.send(Ok(result));
+                    } else {
+                        let _ = response.send(Err(CacheOperationError::resource_exhausted(
+                            "Cold tier not initialized for type"
+                        )));
+                    }
+                }
+                ColdTierMessage::ExecuteReadOp { type_key, op, response } => {
+                    if let Some(tier) = tiers.get(&type_key) {
+                        let result = op(&**tier);
+                        let _ = response.send(Ok(result));
+                    } else {
+                        let _ = response.send(Err(CacheOperationError::resource_exhausted(
+                            "Cold tier not initialized for type"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+}
+
+static COLD_TIER_SERVICE_TX: OnceLock<Sender<ColdTierMessage>> = OnceLock::new();
+
+/// Cold tier coordinator for managing mutable operations
+pub struct ColdTierCoordinator {
+    sender: Sender<ColdTierMessage>,
+}
 
 impl ColdTierCoordinator {
     pub fn get() -> Result<&'static ColdTierCoordinator, CacheOperationError> {
-        COLD_TIER_COORDINATOR.get_or_init(|| ColdTierCoordinator {
-            tiers: Arc::new(Mutex::new(HashMap::new())),
+        static COORDINATOR: OnceLock<ColdTierCoordinator> = OnceLock::new();
+        
+        let sender = COLD_TIER_SERVICE_TX.get_or_init(|| {
+            let (tx, rx) = unbounded();
+            
+            std::thread::Builder::new()
+                .name("cold-tier-service".to_string())
+                .spawn(move || {
+                    let service = ColdTierService {
+                        receiver: rx,
+                    };
+                    service.run();
+                })
+                .expect("Failed to spawn cold tier service");
+            
+            tx
         });
-
-        COLD_TIER_COORDINATOR.get().ok_or_else(|| {
-            CacheOperationError::resource_exhausted("Cold tier coordinator not available")
-        })
+        
+        Ok(COORDINATOR.get_or_init(|| ColdTierCoordinator {
+            sender: sender.clone(),
+        }))
     }
 
     pub fn register<K: CacheKey + 'static, V: CacheValue + 'static>(
         &self,
         tier: PersistentColdTier<K, V>,
     ) -> Result<(), CacheOperationError> {
-        let mut tiers = self
-            .tiers
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Coordinator lock poisoned"))?;
-
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         let boxed_tier = Box::new(tier) as Box<dyn std::any::Any + Send + Sync>;
-        tiers.insert(type_key, Arc::new(Mutex::new(boxed_tier)));
-
-        Ok(())
+        let (tx, rx) = unbounded();
+        
+        self.sender.send(ColdTierMessage::Register {
+            type_key,
+            tier: boxed_tier,
+            response: tx,
+        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        
+        rx.recv().map_err(|_| CacheOperationError::TimeoutError)?
     }
 
     pub fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
@@ -65,26 +143,33 @@ impl ColdTierCoordinator {
         K: CacheKey + 'static,
         V: CacheValue + 'static,
         F: FnOnce(&mut PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
+        R: bincode::Encode + bincode::Decode + 'static,
     {
-        let tiers = self
-            .tiers
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Coordinator lock poisoned"))?;
-
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let tier_mutex = tiers.get(&type_key).ok_or_else(|| {
-            CacheOperationError::resource_exhausted("Cold tier not initialized for type")
-        })?;
-
-        let mut tier_guard = tier_mutex
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Tier lock poisoned"))?;
-
-        let tier = tier_guard
-            .downcast_mut::<PersistentColdTier<K, V>>()
-            .ok_or_else(|| CacheOperationError::invalid_state("Type mismatch"))?;
-
-        operation(tier)
+        let (tx, rx) = unbounded();
+        
+        let op = Box::new(move |tier_any: &mut dyn std::any::Any| -> Vec<u8> {
+            if let Some(tier) = tier_any.downcast_mut::<PersistentColdTier<K, V>>() {
+                match operation(tier) {
+                    Ok(result) => encode_to_vec(&result, config::standard()).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            }
+        });
+        
+        self.sender.send(ColdTierMessage::ExecuteOp {
+            type_key,
+            op,
+            response: tx,
+        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        
+        let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
+        
+        decode_from_slice(&serialized, config::standard())
+            .map(|(decoded, _len)| decoded)
+            .map_err(|_| CacheOperationError::InternalError("Deserialization failed".to_string()))
     }
 
     pub fn execute_read_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
@@ -92,26 +177,33 @@ impl ColdTierCoordinator {
         K: CacheKey + 'static,
         V: CacheValue + 'static,
         F: FnOnce(&PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
+        R: bincode::Encode + bincode::Decode + 'static,
     {
-        let tiers = self
-            .tiers
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Coordinator lock poisoned"))?;
-
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let tier_mutex = tiers.get(&type_key).ok_or_else(|| {
-            CacheOperationError::resource_exhausted("Cold tier not initialized for type")
-        })?;
-
-        let tier_guard = tier_mutex
-            .lock()
-            .map_err(|_| CacheOperationError::invalid_state("Tier lock poisoned"))?;
-
-        let tier = tier_guard
-            .downcast_ref::<PersistentColdTier<K, V>>()
-            .ok_or_else(|| CacheOperationError::invalid_state("Type mismatch"))?;
-
-        operation(tier)
+        let (tx, rx) = unbounded();
+        
+        let op = Box::new(move |tier_any: &dyn std::any::Any| -> Vec<u8> {
+            if let Some(tier) = tier_any.downcast_ref::<PersistentColdTier<K, V>>() {
+                match operation(tier) {
+                    Ok(result) => encode_to_vec(&result, config::standard()).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            }
+        });
+        
+        self.sender.send(ColdTierMessage::ExecuteReadOp {
+            type_key,
+            op,
+            response: tx,
+        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        
+        let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
+        
+        decode_from_slice(&serialized, config::standard())
+            .map(|(decoded, _len)| decoded)
+            .map_err(|_| CacheOperationError::InternalError("Deserialization failed".to_string()))
     }
 }
 
@@ -146,9 +238,9 @@ pub fn init_cold_tier<K: CacheKey + 'static, V: CacheValue + 'static>(
 /// Get value from cold tier cache
 pub fn cold_get<K: CacheKey + 'static, V: CacheValue + serde::de::DeserializeOwned + 'static>(
     key: &K,
-) -> Result<Option<Arc<V>>, CacheOperationError> {
+) -> Result<Option<V>, CacheOperationError> {
     let coordinator = ColdTierCoordinator::get()?;
-    coordinator.execute_read_operation::<K, V, Option<Arc<V>>, _>(|tier| Ok(tier.get(key)))
+    coordinator.execute_read_operation::<K, V, Option<V>, _>(|tier| Ok(tier.get(key)))
 }
 
 /// Get cache statistics  
@@ -189,7 +281,7 @@ pub fn should_promote_to_warm<K: CacheKey + 'static, V: CacheValue + 'static>(ke
 /// Insert demoted entry from warm tier (for tier transitions)
 pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + serde::Serialize + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     let coordinator = ColdTierCoordinator::get()?;
     coordinator.execute_operation::<K, V, (), _>(|tier| tier.put(key, value))

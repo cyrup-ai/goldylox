@@ -4,7 +4,6 @@
 //! write-through, write-back, adaptive policies, and queue management.
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crossbeam_channel::unbounded;
@@ -42,7 +41,7 @@ impl<K: CacheKey, V: CacheValue> WritePropagationSystem<K, V> {
     pub fn submit_writeback(
         &self,
         key: CoherenceKey<K>,
-        data: Arc<V>,
+        data: V,
         source_tier: CacheTier,
         target_tier: CacheTier,
         version: u64,

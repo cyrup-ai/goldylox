@@ -1,6 +1,5 @@
 //! Core type definitions for the cache system.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 /// Cache operation result type
@@ -80,18 +79,6 @@ pub struct BatchResult<V> {
     pub results: Vec<CacheResult<Option<V>>>,
     pub completed_count: usize,
     pub failed_count: usize,
-}
-
-/// Read guard for concurrent access
-#[derive(Debug)]
-pub struct ReadGuard<T> {
-    _inner: Arc<T>,
-}
-
-/// Write guard for concurrent access
-#[derive(Debug)]
-pub struct WriteGuard<T> {
-    _inner: Arc<T>,
 }
 
 /// Tier statistics

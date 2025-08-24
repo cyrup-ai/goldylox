@@ -5,7 +5,6 @@
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use brotli::{CompressorReader, Decompressor};
@@ -36,7 +35,7 @@ pub enum WorkloadType {
 impl CompressionEngine {
     /// Create new compression engine
     pub fn new(compression_level: u8) -> Self {
-        let algorithm_metrics = Arc::new(DashMap::new());
+        let algorithm_metrics = DashMap::new();
 
         // Initialize metrics for ALL 6 algorithms
         algorithm_metrics.insert(

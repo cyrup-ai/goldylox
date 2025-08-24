@@ -3,8 +3,6 @@
 //! This module provides generic worker API functions that eliminate the global singleton pattern.
 //! All functions now require explicit type parameters and work with CacheMaintenanceWorker instances.
 
-use std::sync::Arc;
-
 use super::types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStats};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -35,7 +33,7 @@ pub fn create_worker<K: CacheKey, V: CacheValue>() -> CacheMaintenanceWorker<K, 
 pub fn async_promote<K: CacheKey, V: CacheValue>(
     worker: &CacheMaintenanceWorker<K, V>,
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     worker.submit_task(MaintenanceTask::Promote { key, value })
 }
@@ -44,7 +42,7 @@ pub fn async_promote<K: CacheKey, V: CacheValue>(
 pub fn async_demote<K: CacheKey, V: CacheValue>(
     worker: &CacheMaintenanceWorker<K, V>,
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     worker.submit_task(MaintenanceTask::Demote { key, value })
 }

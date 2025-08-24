@@ -3,7 +3,7 @@
 //! This module provides the public global API functions that use a static
 //! warm tier instance for cache operations across the application.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use super::builder::WarmTierBuilder;
@@ -14,8 +14,7 @@ use super::maintenance::MaintenanceTask;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-/// Global warm tier cache instance
-static GLOBAL_WARM_TIER: OnceLock<Arc<dyn std::any::Any + Send + Sync>> = OnceLock::new();
+// Global warm tier no longer uses Arc - handled by channel-based architecture in global_api.rs
 
 /// Initialize global warm tier cache
 pub fn init_warm_tier<K: CacheKey + 'static, V: CacheValue + 'static>(config: WarmTierConfig) -> Result<(), CacheOperationError> {
@@ -23,17 +22,17 @@ pub fn init_warm_tier<K: CacheKey + 'static, V: CacheValue + 'static>(config: Wa
 }
 
 /// Get entry from warm tier cache
-pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
+pub fn warm_get<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<V> {
     super::global_api::warm_get(key)
 }
 
 /// Put entry into warm tier cache
-pub fn warm_put<K: CacheKey + 'static, V: CacheValue + 'static>(key: K, value: Arc<V>) -> Result<(), CacheOperationError> {
+pub fn warm_put<K: CacheKey + 'static, V: CacheValue + 'static>(key: K, value: V) -> Result<(), CacheOperationError> {
     super::global_api::warm_put(key, value)
 }
 
 /// Remove entry from warm tier cache
-pub fn warm_remove<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<Arc<V>> {
+pub fn warm_remove<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> Option<V> {
     super::global_api::warm_remove(key)
 }
 
@@ -61,7 +60,7 @@ pub fn get_idle_keys<K: CacheKey + 'static, V: CacheValue + 'static>(idle_thresh
 /// Insert entry promoted from cold tier
 pub fn insert_promoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     super::global_api::insert_promoted(key, value)
 }
@@ -69,7 +68,7 @@ pub fn insert_promoted<K: CacheKey + 'static, V: CacheValue + 'static>(
 /// Insert entry demoted from hot tier
 pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + 'static>(
     key: K,
-    value: Arc<V>,
+    value: V,
 ) -> Result<(), CacheOperationError> {
     super::global_api::insert_demoted(key, value)
 }

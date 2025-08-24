@@ -857,7 +857,7 @@ where
         // DELEGATE to existing write propagation system for coordination
         coherence_controller.write_propagation.submit_writeback(
             coherence_key.clone(),
-            Arc::new(entry.value.clone()),
+            entry.value.clone(),
             entry.tier_info.current_tier.into(),
             coherence_controller.determine_target_tier(entry.tier_info.current_tier.into()),
             0,

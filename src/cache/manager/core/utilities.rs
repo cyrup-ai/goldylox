@@ -3,30 +3,29 @@
 //! This module contains helper methods, stub implementations, and utility
 //! functions used throughout the unified cache management system.
 
-use std::sync::Arc;
-
 use crate::cache::tier::cold::cold_get;
 use crate::cache::tier::hot::simd_hot_get;
 use crate::cache::tier::warm::warm_get;
 use crate::cache::types::CacheTier;
 use super::types::{AccessPath, UnifiedCacheManager};
 use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::traits::entry_and_stats::TierStats;
 
 impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Try to get value from hot tier
-    pub fn try_hot_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<Arc<V>> {
+    pub fn try_hot_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<V> {
         access_path.tried_hot = true;
         simd_hot_get(key)
     }
 
     /// Try to get value from warm tier
-    pub fn try_warm_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<Arc<V>> {
+    pub fn try_warm_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<V> {
         access_path.tried_warm = true;
         warm_get(key)
     }
 
     /// Try to get value from cold tier
-    pub fn try_cold_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<Arc<V>> {
+    pub fn try_cold_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<V> {
         access_path.tried_cold = true;
         crate::cache::tier::cold::cold_get::<K, V>(key).ok().flatten()
     }

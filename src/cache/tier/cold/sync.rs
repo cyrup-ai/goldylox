@@ -9,7 +9,7 @@ use crossbeam_channel::select;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 use super::storage::ColdTierCache;
 use crate::cache::traits::CacheOperationError;

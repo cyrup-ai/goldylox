@@ -208,7 +208,9 @@ impl SimdMemory {
     #[cfg(not(target_arch = "x86_64"))]
     #[inline(always)]
     pub unsafe fn copy_simd(src: *const u8, dst: *mut u8, len: usize) {
-        std::ptr::copy_nonoverlapping(src, dst, len);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, dst, len);
+        }
     }
 
     /// Zero memory using SIMD operations
@@ -236,6 +238,8 @@ impl SimdMemory {
     #[cfg(not(target_arch = "x86_64"))]
     #[inline(always)]
     pub unsafe fn zero_simd(dst: *mut u8, len: usize) {
-        std::ptr::write_bytes(dst, 0, len);
+        unsafe {
+            std::ptr::write_bytes(dst, 0, len);
+        }
     }
 }
