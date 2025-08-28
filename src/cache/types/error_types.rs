@@ -3,12 +3,11 @@
 //! This module provides comprehensive error handling and result types for cache operations
 //! with rich metadata and recovery hints for robust error handling.
 
-use std::sync::Arc;
 
 use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
-use crate::cache::types::results::CacheResult;
+
 
 
 

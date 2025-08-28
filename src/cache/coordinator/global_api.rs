@@ -3,11 +3,7 @@
 //! This module provides the global API for the unified cache manager,
 //! including static initialization and thread-safe access patterns.
 
-use crate::cache::config::CacheConfig;
-use crate::cache::manager::UnifiedStats as ManagerUnifiedStats;
-use super::unified_manager::UnifiedCacheManager;
-use crate::cache::traits::types_and_enums::CacheOperationError;
-use crate::cache::traits::{CacheKey, CacheValue};
+// Removed unused imports - file contains only documentation
 
 /// Global unified cache manager instance with atomic initialization
 /// This is now generic and must be initialized with specific key/value types

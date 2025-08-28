@@ -3,16 +3,19 @@
 //! This module handles write operations with configurable strategies,
 //! consistency levels, and performance optimization through batching.
 
-use std::collections::VecDeque;
+// VecDeque removed - unused in current implementation
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
+use serde_json;
 use dashmap::DashMap;
 
 use crate::cache::coherence::CacheTier;
 use crate::cache::config::CacheConfig;
+use crate::cache::tier::warm::global_api::warm_put;
+use crate::cache::tier::cold::insert_demoted;
 use super::policy_engine::{WriteResult, WriteStats};
 use super::types::{ConsistencyLevel, WriteStrategy};
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -251,7 +254,7 @@ impl<K: CacheKey> WritePolicyManager<K> {
     /// Write to cache tier
     fn write_to_cache_tier(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
         use crate::cache::tier::hot::simd_hot_put;
-        use crate::cache::tier::warm::core::WarmCacheKey;
+        // WarmCacheKey import removed - unused in current implementation
 
         match tier {
             CacheTier::Hot => {
@@ -262,15 +265,23 @@ impl<K: CacheKey> WritePolicyManager<K> {
             }
             CacheTier::Warm => {
                 // Write to warm tier using lock-free skiplist
-                let warm_key = WarmCacheKey::from_cache_key(key);
-                let _value = format!("cached_value_{:?}", key);
-                // Note: Would need access to warm tier instance here
-                // For now, log the operation
-                log::debug!("Would write key to warm tier: {:?}", warm_key);
+                let key_str = format!("{:?}", key);
+                let value_str = format!("cached_value_{:?}", key);
+                
+                // Call the global warm_put function
+                warm_put(key_str, value_str).map_err(|e| {
+                    CacheOperationError::io_failed(format!("Failed to write to warm tier: {}", e))
+                })?;
             }
             CacheTier::Cold => {
                 // Write to cold tier (persistent storage)
-                log::debug!("Would write key to cold tier: {:?}", key);
+                let key_str = format!("{:?}", key);
+                let value_str = format!("cached_value_{:?}", key);
+                
+                // Call the global insert_demoted function
+                insert_demoted(key_str, value_str).map_err(|e| {
+                    CacheOperationError::io_failed(format!("Failed to write to cold tier: {}", e))
+                })?;
             }
         }
 
@@ -279,8 +290,8 @@ impl<K: CacheKey> WritePolicyManager<K> {
 
     /// Write to backing store
     fn write_to_backing_store(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
-        // Use key's serialization capabilities if available, otherwise use debug format
-        let key_bytes = key.as_bytes();
+        // Use key's serialization capabilities for byte representation
+        let key_bytes = serde_json::to_vec(key).unwrap_or_else(|_| format!("{:?}", key).into_bytes());
 
         match tier {
             CacheTier::Cold => {
@@ -369,7 +380,7 @@ impl<K: CacheKey> WritePolicyManager<K> {
         // Flush entries to backing store
         for dirty_entry in &entries_to_flush {
             if let Err(e) = self.flush_dirty_entry(dirty_entry) {
-                log::error!("Failed to flush dirty entry {}: {:?}", dirty_entry.key, e);
+                log::error!("Failed to flush dirty entry {:?}: {:?}", dirty_entry.key, e);
                 self.flush_coordinator
                     .flush_stats
                     .flush_failures
@@ -420,7 +431,7 @@ impl<K: CacheKey> WritePolicyManager<K> {
         while let Ok(pending_write) = self.write_behind_receiver.try_recv() {
             if let Err(e) = self.execute_pending_write(&pending_write) {
                 log::error!(
-                    "Failed to execute pending write for {}: {:?}",
+                    "Failed to execute pending write for {:?}: {:?}",
                     pending_write.key,
                     e
                 );

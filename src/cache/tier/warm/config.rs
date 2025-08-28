@@ -5,16 +5,34 @@
 //! access tracking, background tasks, and performance tuning parameters.
 
 use super::eviction::types::EvictionPolicyType;
+use serde::{Serialize, Deserialize};
+
+/// Skip map configuration for warm tier
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkipMapConfig {
+    pub max_level: u8,
+    pub skip_probability_x1000: u16,
+    pub node_pool_size: u32,
+}
 
 /// Configuration for warm tier cache behavior
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(align(64))]
 pub struct WarmTierConfig {
+    /// Enable/disable the warm tier
+    pub enabled: bool,
     /// Maximum memory usage in bytes
     pub max_memory_bytes: u64,
     /// Maximum number of entries
     pub max_entries: usize,
     /// Default TTL for entries
     pub default_ttl_sec: u64,
+    /// Promotion threshold for tier transitions
+    pub promotion_threshold: u16,
+    /// Demotion age threshold in nanoseconds
+    pub demotion_age_threshold_ns: u64,
+    /// Skip map data structure configuration
+    pub skip_map: SkipMapConfig,
     /// Memory pressure thresholds
     pub pressure_thresholds: PressureConfig,
     /// Eviction policy configuration
@@ -28,7 +46,7 @@ pub struct WarmTierConfig {
 }
 
 /// Memory pressure configuration thresholds
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PressureConfig {
     /// Low pressure threshold (0.0-1.0)
     pub low_threshold: f64,
@@ -44,25 +62,69 @@ pub struct PressureConfig {
     pub leak_detection_sensitivity: f64,
 }
 
-/// Eviction policy configuration
-#[derive(Debug, Clone)]
+/// Unified eviction configuration for all cache tiers
+/// Combines best features from hot and warm tier implementations
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvictionConfig {
+    // Core Policy Configuration
     /// Primary eviction policy
     pub primary_policy: EvictionPolicyType,
-    /// Enable adaptive policy switching
+    /// Fallback policy for edge cases
+    pub fallback_policy: EvictionPolicyType,
+    
+    // Adaptive Intelligence (from Warm tier)
+    /// Enable adaptive policy switching based on performance
     pub adaptive_switching: bool,
+    /// Enable machine learning-based policy optimization
+    pub ml_enabled: bool,
     /// Policy evaluation interval in seconds
     pub evaluation_interval_sec: u64,
-    /// Performance history window size
+    /// Performance analysis window size
     pub performance_window_size: usize,
-    /// Minimum confidence for policy switches
+    /// Minimum confidence threshold for policy switches
     pub switch_confidence_threshold: f64,
+    
+    // Performance Optimization (from Hot tier)
+    /// Historical data buffer size for analysis
+    pub history_buffer_size: usize,
+    /// Performance threshold for triggering adaptations
+    pub performance_threshold: f64,
+    /// Adaptation check interval (converted to seconds)
+    pub adaptation_interval_sec: u64,
+    
+    // Batch Operations (from Warm tier)
     /// Eviction batch size for bulk operations
     pub eviction_batch_size: usize,
+    /// Maximum items to evaluate per cycle
+    pub max_evaluation_items: usize,
+    
+    // Tier-Specific Overrides
+    /// Hot tier specific settings
+    pub hot_tier_overrides: Option<HotTierEvictionOverrides>,
+    /// Warm tier specific settings  
+    pub warm_tier_overrides: Option<WarmTierEvictionOverrides>,
+}
+
+/// Hot tier specific eviction overrides
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotTierEvictionOverrides {
+    /// Force specific policy for hot tier
+    pub force_policy: Option<EvictionPolicyType>,
+    /// Hot tier specific batch size
+    pub batch_size_override: Option<usize>,
+}
+
+/// Warm tier specific eviction overrides
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WarmTierEvictionOverrides {
+    /// Extended evaluation window for warm tier
+    pub extended_window_size: Option<usize>,
+    /// Custom confidence threshold for warm tier
+    pub confidence_override: Option<f64>,
 }
 
 /// Access pattern tracking configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackingConfig {
     /// Access history window size
     pub history_window_size: usize,
@@ -77,7 +139,7 @@ pub struct TrackingConfig {
 }
 
 /// Frequency estimation configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrequencyConfig {
     /// Exponential moving average decay factor
     pub decay_factor: f64,
@@ -90,7 +152,7 @@ pub struct FrequencyConfig {
 }
 
 /// Background task processing configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundConfig {
     /// Enable background processing
     pub enable_background_tasks: bool,
@@ -105,7 +167,7 @@ pub struct BackgroundConfig {
 }
 
 /// Performance tuning configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceConfig {
     /// Enable SIMD optimization where available
     pub enable_simd: bool,
@@ -122,7 +184,7 @@ pub struct PerformanceConfig {
 }
 
 /// Batch operation size configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchSizeConfig {
     /// Cleanup batch size
     pub cleanup_batch: usize,
@@ -135,7 +197,7 @@ pub struct BatchSizeConfig {
 }
 
 /// Concurrency control configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConcurrencyConfig {
     /// Maximum concurrent readers
     pub max_readers: usize,
@@ -148,7 +210,7 @@ pub struct ConcurrencyConfig {
 }
 
 /// Backoff strategy configuration for contention handling
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackoffConfig {
     /// Initial backoff delay in nanoseconds
     pub initial_delay_ns: u64,
@@ -165,14 +227,29 @@ impl Default for WarmTierConfig {
     #[inline]
     fn default() -> Self {
         Self {
+            enabled: true,
             max_memory_bytes: 256 * 1024 * 1024, // 256MB
             max_entries: 10_000,
             default_ttl_sec: 3600, // 1 hour
+            promotion_threshold: 100,
+            demotion_age_threshold_ns: 3_600_000_000_000, // 1 hour
+            skip_map: SkipMapConfig::default(),
             pressure_thresholds: PressureConfig::default(),
             eviction_config: EvictionConfig::default(),
             tracking_config: TrackingConfig::default(),
             background_config: BackgroundConfig::default(),
             performance_config: PerformanceConfig::default(),
+        }
+    }
+}
+
+impl Default for SkipMapConfig {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            max_level: 16,
+            skip_probability_x1000: 500, // 0.5 probability
+            node_pool_size: 1024,
         }
     }
 }
@@ -191,18 +268,92 @@ impl Default for PressureConfig {
     }
 }
 
+impl EvictionConfig {
+    /// Create default eviction configuration (const-evaluable)
+    #[inline]
+    pub const fn default_const() -> Self {
+        Self {
+            primary_policy: EvictionPolicyType::Adaptive,
+            fallback_policy: EvictionPolicyType::Lru,
+            adaptive_switching: true,
+            ml_enabled: true,
+            evaluation_interval_sec: 60,
+            performance_window_size: 1000,
+            switch_confidence_threshold: 0.8,
+            history_buffer_size: 1000,
+            performance_threshold: 0.8,
+            adaptation_interval_sec: 60,
+            eviction_batch_size: 32,
+            max_evaluation_items: 512,
+            hot_tier_overrides: None,
+            warm_tier_overrides: None,
+        }
+    }
+}
+
 impl Default for EvictionConfig {
     #[inline]
     fn default() -> Self {
-        Self {
-            primary_policy: EvictionPolicyType::Adaptive,
-            adaptive_switching: true,
-            evaluation_interval_sec: 60,
-            performance_window_size: 100,
-            switch_confidence_threshold: 0.8,
-            eviction_batch_size: 32,
+        Self::default_const()
+    }
+}
+
+impl EvictionConfig {
+    /// Get effective configuration for hot tier
+    pub fn for_hot_tier(&self) -> HotTierEvictionConfig {
+        HotTierEvictionConfig {
+            policy: self.hot_tier_overrides.as_ref()
+                .and_then(|o| o.force_policy)
+                .unwrap_or(self.primary_policy),
+            learning_enabled: self.ml_enabled,
+            history_size: self.history_buffer_size,
+            adaptation_interval_sec: self.adaptation_interval_sec,
+            performance_threshold: self.performance_threshold,
+            batch_size: self.hot_tier_overrides.as_ref()
+                .and_then(|o| o.batch_size_override)
+                .unwrap_or(self.eviction_batch_size),
         }
     }
+    
+    /// Get effective configuration for warm tier
+    pub fn for_warm_tier(&self) -> WarmTierEvictionConfig {
+        WarmTierEvictionConfig {
+            primary_policy: self.primary_policy,
+            adaptive_switching: self.adaptive_switching,
+            ml_enabled: self.ml_enabled,
+            evaluation_interval_sec: self.evaluation_interval_sec,
+            performance_window_size: self.warm_tier_overrides.as_ref()
+                .and_then(|o| o.extended_window_size)
+                .unwrap_or(self.performance_window_size),
+            switch_confidence_threshold: self.warm_tier_overrides.as_ref()
+                .and_then(|o| o.confidence_override)
+                .unwrap_or(self.switch_confidence_threshold),
+            eviction_batch_size: self.eviction_batch_size,
+        }
+    }
+}
+
+/// Hot tier specific configuration adapter
+#[derive(Debug, Clone)]
+pub struct HotTierEvictionConfig {
+    pub policy: EvictionPolicyType,
+    pub learning_enabled: bool,
+    pub history_size: usize,
+    pub adaptation_interval_sec: u64,
+    pub performance_threshold: f64,
+    pub batch_size: usize,
+}
+
+/// Warm tier specific configuration adapter
+#[derive(Debug, Clone)]
+pub struct WarmTierEvictionConfig {
+    pub primary_policy: EvictionPolicyType,
+    pub adaptive_switching: bool,
+    pub ml_enabled: bool,
+    pub evaluation_interval_sec: u64,
+    pub performance_window_size: usize,
+    pub switch_confidence_threshold: f64,
+    pub eviction_batch_size: usize,
 }
 
 impl Default for TrackingConfig {

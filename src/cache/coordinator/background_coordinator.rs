@@ -13,7 +13,7 @@ use crate::cache::config::CacheConfig;
 use crate::cache::manager::background::{
     types::{BackgroundTask, TaskProcessor}, BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
 };
-use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Timer control commands
@@ -26,6 +26,7 @@ enum TimerCommand {
 }
 
 /// Background operation coordinator with work-stealing task queue
+#[derive(Debug)]
 pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue, P: TaskProcessor = DefaultProcessor> {
     /// Background task queue (lock-free channel)
     task_queue: Sender<BackgroundTask>,
@@ -42,7 +43,7 @@ pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue, P: TaskProcessor = 
     /// Timer control sender
     timer_sender: Sender<TimerCommand>,
     /// Maintenance scheduler with atomic timing
-    maintenance_scheduler: MaintenanceScheduler,
+    maintenance_scheduler: MaintenanceScheduler<K, V>,
     /// Background worker state with atomic coordination
     worker_state: BackgroundWorkerState,
     /// Phantom data for generics
@@ -50,6 +51,7 @@ pub struct BackgroundCoordinator<K: CacheKey, V: CacheValue, P: TaskProcessor = 
 }
 
 /// Default no-op processor for when no processor is set
+#[derive(Debug)]
 pub struct DefaultProcessor;
 
 impl TaskProcessor for DefaultProcessor {
@@ -64,7 +66,7 @@ impl<K: CacheKey, V: CacheValue, P: TaskProcessor + Send + 'static> BackgroundCo
         let (task_queue, task_receiver) = bounded(1000); // Bounded queue for backpressure
         let (timer_sender, timer_receiver) = bounded(100);
         let maintenance_config = MaintenanceConfig::default();
-        let maintenance_scheduler = MaintenanceScheduler::new(maintenance_config)?;
+        let maintenance_scheduler = MaintenanceScheduler::<K, V>::new(maintenance_config)?;
         let worker_state = BackgroundWorkerState::new(0);
         
         // Start timer thread
@@ -190,14 +192,19 @@ impl<K: CacheKey, V: CacheValue, P: TaskProcessor + Send + 'static> BackgroundCo
     }
 
     /// Get maintenance scheduler
-    pub fn maintenance_scheduler(&self) -> &MaintenanceScheduler {
+    pub fn maintenance_scheduler(&self) -> &MaintenanceScheduler<K, V> {
         &self.maintenance_scheduler
+    }
+    
+    /// Get maintenance task sender for wiring to GC coordinator
+    pub fn get_maintenance_task_sender(&self) -> crossbeam_channel::Sender<crate::cache::manager::background::types::MaintenanceTask> {
+        self.maintenance_scheduler.task_sender.clone()
     }
 
     /// Shutdown background processing
     pub fn shutdown(&self) -> Result<(), CacheOperationError> {
         if let Err(e) = self.timer_sender.send(TimerCommand::Shutdown) {
-            eprintln!("Failed to signal timer shutdown: {:?}", e);
+            error!("Failed to signal timer shutdown: {:?}", e);
         }
         
         // NOTE: Cannot join threads due to structural limitation

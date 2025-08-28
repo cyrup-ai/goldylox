@@ -18,7 +18,6 @@ pub mod memory_monitor_enum;
 pub mod memory_monitor_trait;
 pub mod metrics;
 pub mod monitoring;
-pub mod noop_monitor;
 pub mod timing;
 
 // Re-export the main API for easy access
@@ -32,10 +31,12 @@ pub use access_tracking::{
 };
 pub use builder::WarmTierBuilder;
 pub use data_structures::{
-    AnalysisDepth, BackgroundConfig, ConsistencyLevel, LockFreeWarmTier, MaintenanceTask,
-    ModelComplexity, OptimizationLevel, PerformanceConfig, PerformanceMetrics, PressureConfig,
-    SyncDirection, TrackingConfig, ValidationLevel, WarmTierConfig,
+    AnalysisDepth, ConsistencyLevel, LockFreeWarmTier, MaintenanceTask,
+    ModelComplexity, OptimizationLevel, PerformanceMetrics,
+    SyncDirection, ValidationLevel,
 };
+// Import config types from correct location
+pub use config::{WarmTierConfig, BackgroundConfig, PerformanceConfig, PressureConfig, TrackingConfig};
 pub use error::{DegradationMode, RetryConfig, WarmTierInitError};
 // Re-export eviction types
 pub use eviction::{
@@ -53,8 +54,8 @@ pub use monitoring::{
     AtomicTierStats, MemoryAlert, MemoryPressureMonitor, MonitoringTask, TierStatsSnapshot,
 };
 
-use crate::cache::traits::types_and_enums::CacheOperationError;
-use crate::cache::traits::{CacheKey, CacheValue};
+
+
 
 // REMOVED: All convenience functions with hardcoded String types.
 // These functions masked the generic nature of the cache system and forced String defaults.
@@ -91,10 +92,6 @@ pub enum AccessPattern {
     /// Working set pattern
     Working,
 }
-
-// REMOVED: warm_cache_with_predictions() and tune_for_workload() - assumed String types.
-// These placeholder functions made String type assumptions.
-// Users must implement cache warming and tuning strategies using the generic APIs directly.
 
 /// Workload characteristics for cache tuning
 #[derive(Debug, Clone)]

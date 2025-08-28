@@ -74,8 +74,8 @@ impl FeatureVector {
         let current_time = crate::telemetry::cache::types::timestamp_nanos();
         self.recency = (current_time - timestamp_ns) as f64 / 1e9; // Seconds since access
 
-        // Update frequency (simple increment for now)
-        self.frequency += 1.0;
+        // Update frequency with exponential moving average
+        self.update_frequency(self.frequency + 1.0, 0.1);
 
         // Update other features based on access type
         match access_type {

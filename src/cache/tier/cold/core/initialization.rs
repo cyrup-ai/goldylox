@@ -10,6 +10,8 @@ use crate::cache::config::ColdTierConfig;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::core::{CacheKey, CacheValue};
+use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
     /// Create new persistent cold tier cache
@@ -33,7 +35,15 @@ impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
 
         let compression_engine = CompressionEngine::new(config.compression_level);
         let metadata_index = MetadataIndex::new()?;
-        let compaction_system = CompactionSystem::new(config.compact_interval_ns)?;
+        let mut compaction_system = CompactionSystem::new(config.compact_interval_ns)?;
+        
+        // Start the background compaction worker thread
+        compaction_system.start_background_worker()
+            .map_err(|e| std::io::Error::new(
+                std::io::ErrorKind::Other, 
+                format!("Failed to start compaction worker: {:?}", e)
+            ))?;
+        
         let sync_state = SyncState::new(10_000_000_000); // 10 seconds
         let recovery_system = RecoverySystem::new(log_path)?;
 
@@ -43,6 +53,7 @@ impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
             metadata_index,
             compaction_system,
             stats: AtomicTierStats::new(),
+            error_stats: ErrorStatistics::new(),
             config,
             sync_state,
             recovery_system,
@@ -57,8 +68,8 @@ impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
 
     /// Start background compaction
     pub(super) fn start_background_compaction(&self) {
-        // In a real implementation, this would start the background compaction thread
-        // For now, we'll just schedule initial tasks
+        // Background compaction thread is already running from initialization
+        // Schedule initial optimization task to begin compaction work
         let _ = self
             .compaction_system
             .schedule_compaction(CompactionTask::OptimizeCompression);

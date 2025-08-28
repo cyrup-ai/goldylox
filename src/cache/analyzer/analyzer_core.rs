@@ -130,13 +130,13 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         };
 
         match self.access_history.get(key) {
-            Some(record) => self.compute_pattern(&*record, now_ns),
+            Some(record) => self.compute_pattern(key, &*record, now_ns),
             None => return Self::default_pattern(),
         }
     }
 
     #[inline(always)]
-    fn compute_pattern(&self, record: &AccessRecord, now_ns: u64) -> AccessPattern {
+    fn compute_pattern(&self, key: &K, record: &AccessRecord, now_ns: u64) -> AccessPattern {
 
         let frequency = self.calculate_frequency(&record, now_ns);
         let recency = self.calculate_recency(&record, now_ns);

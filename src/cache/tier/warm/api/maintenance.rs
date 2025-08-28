@@ -11,7 +11,8 @@ use crate::cache::traits::AccessType;
 use super::access_tracking::{AccessContext, ConcurrentAccessTracker};
 use super::core::{LockFreeWarmTier, WarmCacheKey};
 use super::eviction::{ConcurrentEvictionPolicy, EvictionPolicyType};
-use super::monitoring::{AtomicTierStats, MemoryAlert, MemoryPressureMonitor};
+use super::monitoring::{MemoryAlert, MemoryPressureMonitor};
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::CacheKey;
 

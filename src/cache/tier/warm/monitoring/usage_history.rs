@@ -26,41 +26,25 @@ pub struct MemoryUsageHistory {
 }
 
 impl MemoryUsageHistory {
-    pub fn new() -> Result<Self, CacheOperationError> {
+    pub fn new() -> Self {
         Self::new_with_capacity(256, true)
     }
     
     /// Create with specified capacity (up to 256)
-    pub fn new_with_capacity(capacity: usize, leak_detection_enabled: bool) -> Result<Self, CacheOperationError> {
+    pub fn new_with_capacity(capacity: usize, leak_detection_enabled: bool) -> Self {
         let actual_capacity = capacity.min(256);
         
-        let mut samples = Vec::with_capacity(256);
-        let mut timestamps = Vec::with_capacity(256);
+        // Initialize arrays directly - cannot fail
+        let samples = [const { CachePadded::new(AtomicU64::new(0)) }; 256];
+        let timestamps = [const { CachePadded::new(AtomicU64::new(0)) }; 256];
 
-        for _ in 0..256 {
-            samples.push(CachePadded::new(AtomicU64::new(0)));
-            timestamps.push(CachePadded::new(AtomicU64::new(0)));
-        }
-
-        let samples_array = samples.try_into().map_err(|_| {
-            CacheOperationError::InvalidState(
-                "Failed to convert samples Vec to fixed array".to_string(),
-            )
-        })?;
-
-        let timestamps_array = timestamps.try_into().map_err(|_| {
-            CacheOperationError::InvalidState(
-                "Failed to convert timestamps Vec to fixed array".to_string(),
-            )
-        })?;
-
-        Ok(Self {
-            samples: samples_array,
+        Self {
+            samples,
             actual_capacity,
             position: CachePadded::new(AtomicUsize::new(0)),
-            timestamps: timestamps_array,
+            timestamps,
             trend_analysis: TrendAnalysis::new_with_config(leak_detection_enabled),
-        })
+        }
     }
 
     /// Record memory usage sample

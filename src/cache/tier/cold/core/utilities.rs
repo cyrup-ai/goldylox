@@ -3,24 +3,18 @@
 //! This module provides helper functions for cache maintenance and global
 //! compatibility functions for existing code integration.
 
-use std::any::TypeId;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+
 
 use crate::cache::tier::cold::data_structures::ColdCacheKey;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
-use crate::cache::tier::cold::core::types::ColdTierStats;
+
 use crate::cache::tier::cold::core::types::timestamp_nanos;
 use crate::cache::tier::cold::storage::ColdTierCache;
 use crate::cache::manager::background::types::MaintenanceTaskType;
-use crate::cache::traits::types_and_enums::CacheOperationError;
+
 use crate::cache::traits::{CacheKey, CacheValue};
 
-// Registry for PersistentColdTier instances by type combination
-static COLD_TIER_REGISTRY: OnceLock<
-    HashMap<(TypeId, TypeId), Box<dyn std::any::Any + Send + Sync>>,
-> = OnceLock::new();
 
 impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
     /// Update access metadata for cache entry
@@ -33,14 +27,12 @@ impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
         entry.access_count += 1;
         
         // Update global statistics using existing atomic counters
-        use std::sync::atomic::Ordering;
         ColdTierCache::<K, V>::record_hit();
     }
 
     /// Mark space as free for compaction
     pub(super) fn mark_space_free(&self, offset: u64, size: u32) {
         // Connect to existing compaction system
-        use std::sync::atomic::Ordering;
         
         // Mark space for compaction - actual reclamation happens during compaction
         // Space statistics are updated when entries are actually removed, not just marked
@@ -66,6 +58,12 @@ impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
             checksum = checksum.wrapping_mul(31).wrapping_add(byte as u32);
         }
         checksum
+    }
+
+    /// Validate storage integrity
+    pub fn validate_integrity(&self) -> Result<bool, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // Delegate to storage manager's validate_integrity method
+        self.storage_manager.validate_integrity()
     }
 }
 

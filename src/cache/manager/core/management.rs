@@ -10,7 +10,7 @@ use crate::cache::traits::core::{CacheKey, CacheValue};
 use super::types::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
-impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
+impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Remove value from all cache tiers
     pub fn remove(&self, _key: &K) -> bool {
         let mut removed = false;

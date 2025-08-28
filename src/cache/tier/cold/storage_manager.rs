@@ -123,16 +123,67 @@ impl StorageManager {
         self.generation.load(Ordering::Relaxed)
     }
 
-    /// Expand data file if needed
-    pub fn expand_if_needed(&self, required_size: u64) -> io::Result<bool> {
+    /// Expand data file if needed with proper memory-mapped file remapping
+    pub fn expand_if_needed(&mut self, required_size: u64) -> io::Result<bool> {
         let current_pos = self.write_position.load(Ordering::Relaxed);
         if current_pos + required_size > self.max_data_size {
             // Double the file size
             let new_size = self.max_data_size * 2;
-            if let Some(ref handle) = self.data_handle {
+            
+            // Remap the memory-mapped file properly
+            if let (Some(ref handle), Some(ref mut mmap)) = (&self.data_handle, &mut self.data_file) {
+                // Step 1: Flush any pending writes before remapping
+                mmap.flush()?;
+                
+                // Step 2: Extend the underlying file
                 handle.set_len(new_size)?;
-                // Note: In a real implementation, we'd need to remap the memory-mapped file
-                // This is a simplified version
+                
+                // Step 3: Drop the old memory map
+                drop(std::mem::take(&mut self.data_file));
+                
+                // Step 4: Create new memory map with expanded size
+                let new_mmap = unsafe { 
+                    MmapOptions::new()
+                        .len(new_size as usize)
+                        .map_mut(handle)? 
+                };
+                
+                // Step 5: Update the mmap reference
+                self.data_file = Some(new_mmap);
+                
+                // Step 6: Update max size tracking
+                self.max_data_size = new_size;
+                
+                // Step 7: Also expand the index file proportionally (10% of data size)
+                let new_index_size = new_size / 10;
+                if let (Some(ref index_handle), Some(ref mut index_mmap)) = (&self.index_handle, &mut self.index_file) {
+                    // Flush index before remapping
+                    index_mmap.flush()?;
+                    
+                    // Extend index file
+                    index_handle.set_len(new_index_size)?;
+                    
+                    // Drop old index mmap
+                    drop(std::mem::take(&mut self.index_file));
+                    
+                    // Create new index mmap
+                    let new_index_mmap = unsafe {
+                        MmapOptions::new()
+                            .len(new_index_size as usize)
+                            .map_mut(index_handle)?
+                    };
+                    
+                    self.index_file = Some(new_index_mmap);
+                    self.max_index_size = new_index_size;
+                }
+                
+                // Log the expansion for monitoring
+                log::info!(
+                    "Expanded storage: data {} -> {} bytes, index {} -> {} bytes",
+                    self.max_data_size / 2, new_size,
+                    self.max_index_size * 10 / new_size, new_index_size
+                );
+                
                 return Ok(true);
             }
         }

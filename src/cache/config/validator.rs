@@ -36,7 +36,7 @@ impl ConfigValidator {
             let _ = errors.try_push(ConfigError::PowerOfTwoRequired);
         }
 
-        if config.warm_tier.entry_timeout_ns == 0 {
+        if config.warm_tier.default_ttl_sec == 0 {
             let _ = errors.try_push(ConfigError::TimeoutInvalid);
         }
 
@@ -102,7 +102,7 @@ impl ConfigValidator {
             return Err(ConfigError::PowerOfTwoRequired);
         }
 
-        if config.warm_tier.entry_timeout_ns == 0 {
+        if config.warm_tier.default_ttl_sec == 0 {
             return Err(ConfigError::TimeoutInvalid);
         }
 

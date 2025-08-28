@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::cache::coherence::communication::{CoherenceError, CoherenceMessage};
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey};
 use crate::cache::coherence::invalidation::InvalidationPriority;
-use super::types::CoherenceController;
+use crate::cache::coherence::data_structures::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
@@ -24,10 +24,15 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
 
         // Process pending write-backs
         let writeback_tasks = self.write_propagation.process_writebacks();
-        for _task in writeback_tasks {
-            // In a real implementation, these would be sent to background workers
-            // For now, we'll just record the processing
-            self.coherence_stats.record_writeback();
+        for task in writeback_tasks {
+            // Send task to background worker via existing channel
+            if let Err(_) = self.write_propagation.worker_channels.task_tx.try_send(task) {
+                // Worker queue is full, record failure and continue
+                self.coherence_stats.record_failure();
+            } else {
+                // Successfully submitted to worker
+                self.coherence_stats.record_writeback();
+            }
         }
     }
 

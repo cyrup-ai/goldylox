@@ -6,9 +6,10 @@
 use crate::cache::tier::hot::memory_pool::SlotMetadata;
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::types::{
-    AccessEvent, AccessType, EvictionCandidate, EvictionConfig, EvictionMetrics, EvictionPolicy,
+    AccessEvent, AccessType, EvictionCandidate, HotTierEvictionConfig, EvictionMetrics, EvictionPolicy,
     EvictionStats, FeatureWeights,
 };
+use crate::cache::tier::warm::config::EvictionConfig;
 
 /// Adaptive eviction engine with machine learning
 #[derive(Debug)]
@@ -22,18 +23,19 @@ pub struct EvictionEngine {
     /// Performance metrics for adaptive tuning
     pub performance_metrics: EvictionMetrics,
     /// Configuration
-    pub config: EvictionConfig,
+    pub config: HotTierEvictionConfig,
 }
 
 impl EvictionEngine {
     /// Create new eviction engine
     pub fn new(config: EvictionConfig) -> Self {
+        let hot_config = config.for_hot_tier();
         Self {
-            policy: config.default_policy,
-            access_history: Vec::with_capacity(config.history_size),
+            policy: hot_config.policy.into(),
+            access_history: Vec::with_capacity(hot_config.history_size),
             feature_weights: FeatureWeights::default(),
             performance_metrics: EvictionMetrics::default(),
-            config,
+            config: hot_config,
         }
     }
 

@@ -3,7 +3,8 @@
 //! This module provides builder methods for advanced cache configuration options
 //! including hash functions, eviction policies, and version management.
 
-use crate::cache::config::types::{EvictionPolicy, HashFunction};
+use crate::cache::config::types::HashFunction;
+use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
 use super::core::CacheConfigBuilder;
 
 impl CacheConfigBuilder {
@@ -16,7 +17,7 @@ impl CacheConfigBuilder {
 
     /// Set eviction policy
     #[inline(always)]
-    pub const fn eviction_policy(mut self, policy: EvictionPolicy) -> Self {
+    pub const fn eviction_policy(mut self, policy: EvictionPolicyType) -> Self {
         self.config.hot_tier.eviction_policy = policy;
         self
     }

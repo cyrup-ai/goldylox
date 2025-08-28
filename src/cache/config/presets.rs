@@ -7,8 +7,13 @@ use arrayvec::ArrayString;
 
 use super::builder::CacheConfigBuilder;
 use super::types::{
-    AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig, EvictionPolicy,
-    HashFunction, HotTierConfig, MonitoringConfig, SkipMapConfig, WarmTierConfig, WorkerConfig,
+    AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig,
+    HashFunction, HotTierConfig, MemoryConfig, MonitoringConfig, WorkerConfig,
+};
+use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
+use crate::cache::tier::warm::config::{
+    WarmTierConfig, SkipMapConfig, PressureConfig, EvictionConfig as WarmEvictionConfig,
+    TrackingConfig, BackgroundConfig, PerformanceConfig,
 };
 
 /// Ultra-fast predefined configuration presets (compile-time constants)
@@ -22,7 +27,7 @@ impl ConfigPresets {
             .hot_tier_capacity(256) // Power of 2
             .warm_tier_capacity(16384) // Power of 2
             .hash_function(HashFunction::XxHash)
-            .eviction_policy(EvictionPolicy::LRU2)
+            .eviction_policy(EvictionPolicyType::Lru2)
             .monitoring_interval_ns(5_000_000_000) // 5 seconds
             .worker_threads(4)
             .build()
@@ -48,27 +53,24 @@ impl ConfigPresets {
                 max_entries: 128,
                 enabled: true,
                 hash_function: HashFunction::AHash,
-                eviction_policy: EvictionPolicy::LRU,
+                eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 64,
                 prefetch_distance: 2,
                 _padding: [0; 5],
             },
             warm_tier: WarmTierConfig {
-                max_entries: 8192,
-                max_size_bytes: 128 * 1024 * 1024, // 128MB for high performance
-                entry_timeout_ns: 300_000_000_000,
                 enabled: true,
-                skip_map: SkipMapConfig {
-                    max_level: 16,
-                    skip_probability_x1000: 500,
-                    node_pool_size: 1024,
-                    _padding: [0; 1],
-                },
+                max_memory_bytes: 128 * 1024 * 1024,
+                max_entries: 8192,
+                default_ttl_sec: 300, // Convert from nanoseconds
                 promotion_threshold: 3,
                 demotion_age_threshold_ns: 600_000_000_000,
-                concurrency_level: 16,
-                load_factor_threshold: 750,
-                _padding: [0; 4],
+                skip_map: SkipMapConfig::default(),
+                pressure_thresholds: PressureConfig::default(),
+                eviction_config: WarmEvictionConfig::default_const(),
+                tracking_config: TrackingConfig::default(),
+                background_config: BackgroundConfig::default(),
+                performance_config: PerformanceConfig::default(),
             },
             cold_tier: ColdTierConfig {
                 enabled: false,
@@ -122,6 +124,18 @@ impl ConfigPresets {
                 time_bucket_duration_ns: 1_000_000_000, // 1 second
                 pattern_analysis_window: 100,
             },
+            memory_config: MemoryConfig {
+                max_memory_usage: None,
+                monitoring_enabled: true,
+                low_pressure_threshold: 0.5,
+                medium_pressure_threshold: 0.7,
+                high_pressure_threshold: 0.85,
+                critical_pressure_threshold: 0.95,
+                leak_detection_enabled: false,
+                alert_cooldown_ms: 5000,
+                sample_interval_ms: 1000,
+                max_history_samples: 60,
+            },
             version: 1,
         }
     }
@@ -151,7 +165,7 @@ impl ConfigPresets {
             .hot_tier_capacity(512) // Power of 2
             .warm_tier_capacity(32768) // Power of 2
             .hash_function(HashFunction::XxHash)
-            .eviction_policy(EvictionPolicy::ARC)
+            .eviction_policy(EvictionPolicyType::Arc)
             .monitoring_interval_ns(15_000_000_000) // 15 seconds
             .worker_threads(8)
             .auto_tier_management(true)

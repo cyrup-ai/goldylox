@@ -37,17 +37,17 @@ pub struct MemoryPressureMonitor {
 }
 
 impl MemoryPressureMonitor {
-    pub fn new(memory_limit: u64) -> Result<Self, CacheOperationError> {
-        Ok(Self {
+    pub fn new(memory_limit: u64) -> Self {
+        Self {
             current_usage: CachePadded::new(AtomicU64::new(0)),
             memory_limit,
             peak_usage: CachePadded::new(AtomicU64::new(0)),
             pressure_level: AtomicF64::new(0.0),
-            usage_history: MemoryUsageHistory::new()?,
+            usage_history: MemoryUsageHistory::new(),
             thresholds: PressureThresholds::default(),
             alert_system: MemoryAlertSystem::new(30000), // 30 seconds cooldown
             stats: MemoryMonitoringStats::new(),
-        })
+        }
     }
 
     /// Create monitor with custom thresholds
@@ -57,17 +57,17 @@ impl MemoryPressureMonitor {
         alert_cooldown_ms: u64,
         max_history_samples: usize,
         leak_detection_enabled: bool,
-    ) -> Result<Self, CacheOperationError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             current_usage: CachePadded::new(AtomicU64::new(0)),
             memory_limit,
             peak_usage: CachePadded::new(AtomicU64::new(0)),
             pressure_level: AtomicF64::new(0.0),
-            usage_history: MemoryUsageHistory::new_with_capacity(max_history_samples, leak_detection_enabled)?,
+            usage_history: MemoryUsageHistory::new_with_capacity(max_history_samples, leak_detection_enabled),
             thresholds,
             alert_system: MemoryAlertSystem::new(alert_cooldown_ms),
             stats: MemoryMonitoringStats::new(),
-        })
+        }
     }
 
     /// Update current memory usage and check pressure levels

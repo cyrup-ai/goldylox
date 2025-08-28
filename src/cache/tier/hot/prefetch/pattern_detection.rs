@@ -123,7 +123,6 @@ impl PatternDetector {
 
                 // Check for regular intervals (periodic access)
                 if self.has_regular_intervals(&intervals) {
-                    // Fix the unwrap() call with proper error handling
                     let last_seen = timestamps
                         .last()
                         .copied()
@@ -237,7 +236,6 @@ impl PatternDetector {
                     .map(|acc| acc.key.clone())
                     .collect();
 
-                // Fix the unwrap() call with proper error handling
                 let last_access = access_history
                     .back()
                     .ok_or(PatternDetectionError::EmptyAccessHistory)?;
@@ -263,22 +261,53 @@ impl PatternDetector {
             return false;
         }
 
-        // Simple heuristic: check if hash values are somewhat sequential
-        // This is a simplified check - in practice, you'd want more sophisticated logic
-        let mut sequential_count = 0;
-
-        for window in sequence.windows(2) {
-            let hash1 = window[0].cache_hash();
-            let hash2 = window[1].cache_hash();
-
-            // Check if hashes are "close" (indicating potential sequential access)
-            let diff = hash1.abs_diff(hash2);
-            if diff < 1000 || (hash2 > hash1 && hash2 - hash1 < 10000) {
-                sequential_count += 1;
+        // Use statistical analysis approach from analyzer::PatternDetector
+        // Build hash sequence for analysis
+        let hashes: Vec<u64> = sequence.iter().map(|k| k.cache_hash()).collect();
+        
+        // Look for monotonically increasing or decreasing patterns
+        let mut increasing_count = 0;
+        let mut decreasing_count = 0;
+        let mut stride_consistent = true;
+        let mut last_stride = None;
+        
+        for window in hashes.windows(2) {
+            let hash1 = window[0];
+            let hash2 = window[1];
+            
+            if hash2 > hash1 {
+                increasing_count += 1;
+                
+                // Check for consistent stride (common in sequential access)
+                let stride = hash2 - hash1;
+                if let Some(last) = last_stride {
+                    // Allow 20% variance in stride
+                    if stride.abs_diff(last) > last / 5 {
+                        stride_consistent = false;
+                    }
+                }
+                last_stride = Some(stride);
+            } else if hash1 > hash2 {
+                decreasing_count += 1;
+                
+                // Check for consistent stride in reverse
+                let stride = hash1 - hash2;
+                if let Some(last) = last_stride {
+                    if stride.abs_diff(last) > last / 5 {
+                        stride_consistent = false;
+                    }
+                }
+                last_stride = Some(stride);
             }
         }
-
-        sequential_count as f64 / (sequence.len() - 1) as f64 > 0.6
+        
+        let total_windows = sequence.len() - 1;
+        let sequential_ratio = increasing_count.max(decreasing_count) as f64 / total_windows as f64;
+        
+        // Consider it sequential if:
+        // 1. >70% of accesses are in monotonic order, OR
+        // 2. >60% are monotonic AND stride is consistent
+        sequential_ratio > 0.7 || (sequential_ratio > 0.6 && stride_consistent)
     }
 
     /// Check if intervals show regular timing pattern

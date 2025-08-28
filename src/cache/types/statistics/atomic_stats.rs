@@ -9,6 +9,7 @@ use std::time::Instant;
 use crossbeam_utils::CachePadded;
 
 use crate::cache::types::timestamp_nanos;
+use crate::cache::tier::warm::atomic_float::AtomicF64;
 use super::tier_stats::TierStatistics;
 
 /// Atomic tier statistics with cache-line alignment
@@ -31,6 +32,16 @@ pub struct AtomicTierStats {
     errors: CachePadded<AtomicU32>,
     /// Last reset timestamp
     last_reset_ns: CachePadded<AtomicU64>,
+    /// Peak memory usage (from hot tier version)
+    peak_memory: CachePadded<AtomicU64>,
+    /// Peak access latency observed (from warm tier version)
+    peak_access_latency_ns: CachePadded<AtomicU64>,
+    /// Hit rate (moving average) - from warm tier version
+    hit_rate: AtomicF64,
+    /// Performance score (0.0-1.0) - from warm tier version
+    performance_score: AtomicF64,
+    /// Total uncompressed data size (for compression ratio calculation)
+    total_uncompressed_bytes: CachePadded<AtomicU64>,
 }
 
 impl AtomicTierStats {
@@ -48,6 +59,11 @@ impl AtomicTierStats {
             total_operation_time_ns: CachePadded::new(AtomicU64::new(0)),
             errors: CachePadded::new(AtomicU32::new(0)),
             last_reset_ns: CachePadded::new(AtomicU64::new(now_ns)),
+            peak_memory: CachePadded::new(AtomicU64::new(0)),
+            peak_access_latency_ns: CachePadded::new(AtomicU64::new(0)),
+            hit_rate: AtomicF64::new(0.0),
+            performance_score: AtomicF64::new(1.0),
+            total_uncompressed_bytes: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -58,6 +74,13 @@ impl AtomicTierStats {
         self.hits.fetch_add(1, Ordering::Relaxed);
         self.total_operation_time_ns
             .fetch_add(operation_time_ns, Ordering::Relaxed);
+        
+        // Update peak access latency
+        self.peak_access_latency_ns
+            .fetch_max(operation_time_ns, Ordering::Relaxed);
+            
+        // Update performance metrics
+        self.update_performance_metrics();
     }
 
     /// Record cache miss atomically
@@ -67,6 +90,13 @@ impl AtomicTierStats {
         self.misses.fetch_add(1, Ordering::Relaxed);
         self.total_operation_time_ns
             .fetch_add(operation_time_ns, Ordering::Relaxed);
+            
+        // Update peak access latency
+        self.peak_access_latency_ns
+            .fetch_max(operation_time_ns, Ordering::Relaxed);
+            
+        // Update performance metrics
+        self.update_performance_metrics();
     }
 
     /// Record error atomically
@@ -76,6 +106,13 @@ impl AtomicTierStats {
         self.errors.fetch_add(1, Ordering::Relaxed);
         self.total_operation_time_ns
             .fetch_add(operation_time_ns, Ordering::Relaxed);
+            
+        // Update peak access latency
+        self.peak_access_latency_ns
+            .fetch_max(operation_time_ns, Ordering::Relaxed);
+            
+        // Update performance metrics for consistency
+        self.update_performance_metrics();
     }
 
     /// Update entry count atomically
@@ -92,11 +129,26 @@ impl AtomicTierStats {
     /// Update memory usage atomically
     #[inline(always)]
     pub fn update_memory_usage(&self, delta: i64) {
-        if delta >= 0 {
-            self.memory_bytes.fetch_add(delta as u64, Ordering::Relaxed);
+        let current = if delta >= 0 {
+            self.memory_bytes.fetch_add(delta as u64, Ordering::Relaxed) + delta as u64
         } else {
             self.memory_bytes
-                .fetch_sub((-delta) as u64, Ordering::Relaxed);
+                .fetch_sub((-delta) as u64, Ordering::Relaxed)
+                - (-delta) as u64
+        };
+
+        // Update peak memory if necessary (from hot tier version)
+        let mut peak = self.peak_memory.load(Ordering::Relaxed);
+        while current > peak {
+            match self.peak_memory.compare_exchange_weak(
+                peak,
+                current,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => peak = actual,
+            }
         }
     }
 
@@ -131,11 +183,16 @@ impl AtomicTierStats {
         };
 
         TierStatistics {
+            hits,
+            misses: _misses,
             entry_count: entries as usize,
             memory_usage: memory as usize,
+            peak_memory: self.peak_memory.load(Ordering::Relaxed),
+            total_size_bytes: self.total_uncompressed_bytes.load(Ordering::Relaxed),
             hit_rate,
             avg_access_time_ns,
             ops_per_second: Self::calculate_ops_per_second(total_accesses, self.uptime_ns()),
+            error_count: errors as u64,
             error_rate,
         }
     }
@@ -176,6 +233,94 @@ impl AtomicTierStats {
         self.total_operation_time_ns.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
         self.last_reset_ns.store(now_ns, Ordering::Relaxed);
+        self.peak_memory.store(0, Ordering::Relaxed);
+        self.peak_access_latency_ns.store(0, Ordering::Relaxed);
+        self.hit_rate.store(0.0, Ordering::Relaxed);
+        self.performance_score.store(1.0, Ordering::Relaxed);
+        self.total_uncompressed_bytes.store(0, Ordering::Relaxed);
+    }
+
+    /// Update performance metrics (from warm tier version)
+    #[inline(always)]
+    fn update_performance_metrics(&self) {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total_accesses = hits + misses;
+
+        if total_accesses > 0 {
+            // Update hit rate
+            let hit_rate = hits as f64 / total_accesses as f64;
+            self.hit_rate.store(hit_rate, Ordering::Relaxed);
+
+            // Calculate performance score (combination of hit rate and latency)
+            let total_time = self.total_operation_time_ns.load(Ordering::Relaxed);
+            let avg_latency = if total_accesses > 0 {
+                total_time as f64 / total_accesses as f64
+            } else {
+                0.0
+            };
+
+            let latency_score = if avg_latency > 0.0 {
+                1.0 / (1.0 + avg_latency / 1e6) // Normalize latency (lower is better)
+            } else {
+                1.0
+            };
+
+            let performance = (hit_rate * 0.7) + (latency_score * 0.3);
+            self.performance_score.store(performance, Ordering::Relaxed);
+        }
+    }
+
+    /// Get memory efficiency (current/peak ratio) - from hot tier version
+    #[inline(always)]
+    pub fn memory_efficiency(&self) -> f64 {
+        let current = self.memory_bytes.load(Ordering::Relaxed);
+        let peak = self.peak_memory.load(Ordering::Relaxed);
+        if peak > 0 {
+            current as f64 / peak as f64
+        } else {
+            1.0
+        }
+    }
+
+    /// Get performance score - from warm tier version
+    #[inline(always)]
+    pub fn get_performance_score(&self) -> f64 {
+        self.performance_score.load(Ordering::Relaxed)
+    }
+
+    /// Get current hit rate - from warm tier version
+    #[inline(always)]
+    pub fn get_hit_rate(&self) -> f64 {
+        self.hit_rate.load(Ordering::Relaxed)
+    }
+
+    /// Get peak access latency - from warm tier version
+    #[inline(always)]
+    pub fn get_peak_access_latency_ns(&self) -> u64 {
+        self.peak_access_latency_ns.load(Ordering::Relaxed)
+    }
+
+    /// Get peak memory usage - from hot tier version
+    #[inline(always)]
+    pub fn get_peak_memory(&self) -> u64 {
+        self.peak_memory.load(Ordering::Relaxed)
+    }
+
+    /// Update total uncompressed size atomically
+    #[inline(always)]
+    pub fn update_uncompressed_size(&self, delta: i64) {
+        if delta >= 0 {
+            self.total_uncompressed_bytes.fetch_add(delta as u64, Ordering::Relaxed);
+        } else {
+            self.total_uncompressed_bytes.fetch_sub((-delta) as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Get total uncompressed size
+    #[inline(always)]
+    pub fn total_uncompressed_bytes(&self) -> u64 {
+        self.total_uncompressed_bytes.load(Ordering::Relaxed)
     }
 }
 

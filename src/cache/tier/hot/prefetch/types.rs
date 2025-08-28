@@ -17,7 +17,7 @@ pub enum PredictionConfidence {
     VeryHigh,
 }
 
-/// Prefetch request with metadata
+/// Enhanced prefetch request with metadata
 #[derive(Debug, Clone)]
 pub struct PrefetchRequest<K: CacheKey> {
     pub key: K,
@@ -25,6 +25,12 @@ pub struct PrefetchRequest<K: CacheKey> {
     pub predicted_access_time: u64,
     pub pattern_type: AccessPattern,
     pub priority: u8,
+    /// Request timestamp
+    pub timestamp_ns: u64,
+    /// Expected access pattern
+    pub access_pattern: Option<AccessPattern>,
+    /// Estimated value size in bytes
+    pub estimated_size: Option<usize>,
 }
 
 /// Access pattern types for prediction
@@ -177,5 +183,33 @@ impl Default for PrefetchStats {
             queue_size: 0,
             avg_confidence: 0.0,
         }
+    }
+}
+
+impl<K: CacheKey> PrefetchRequest<K> {
+    /// Create new prefetch request with current timestamp
+    pub fn new(key: K, confidence: PredictionConfidence, predicted_access_time: u64, pattern_type: AccessPattern, priority: u8) -> Self {
+        Self {
+            key,
+            confidence,
+            predicted_access_time,
+            pattern_type,
+            priority,
+            timestamp_ns: crate::cache::types::timestamp_nanos(std::time::Instant::now()),
+            access_pattern: None,
+            estimated_size: None,
+        }
+    }
+    
+    /// Add access pattern prediction
+    pub fn with_pattern(mut self, pattern: AccessPattern) -> Self {
+        self.access_pattern = Some(pattern);
+        self
+    }
+    
+    /// Add size estimation
+    pub fn with_estimated_size(mut self, size: usize) -> Self {
+        self.estimated_size = Some(size);
+        self
     }
 }

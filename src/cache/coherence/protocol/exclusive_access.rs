@@ -9,7 +9,7 @@ use crate::cache::coherence::communication::{CoherenceError, ExclusiveResponse};
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, MesiState};
 use crate::cache::coherence::invalidation::InvalidationPriority;
 use crate::cache::coherence::state_management::{StateTransitionRequest, TransitionReason};
-use super::types::CoherenceController;
+use crate::cache::coherence::data_structures::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {

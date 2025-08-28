@@ -18,7 +18,7 @@ use crate::cache::tier::warm::eviction::{
     ArcEvictionState, ConcurrentLfuTracker, ConcurrentLruTracker, MachineLearningEvictionPolicy,
 };
 
-impl ReplacementPolicies {
+impl<K: crate::cache::traits::CacheKey> ReplacementPolicies<K> {
     /// Create new replacement policies manager
     pub fn new() -> Self {
         Self {
@@ -40,7 +40,7 @@ impl ReplacementPolicies {
 
     /// Select eviction candidate based on current algorithm
     #[inline(always)]
-    pub fn select_eviction_candidate<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+    pub fn select_eviction_candidate(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
         }
@@ -69,7 +69,7 @@ impl ReplacementPolicies {
         }
     }
 
-    fn lru_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+    fn lru_select(&self, candidates: &[K]) -> Option<K> {
         // Convert to WarmCacheKey and delegate to real LRU implementation
         let warm_candidates: Vec<WarmCacheKey<K>> = candidates
             .iter()
@@ -83,7 +83,7 @@ impl ReplacementPolicies {
         }
     }
 
-    fn lfu_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+    fn lfu_select(&self, candidates: &[K]) -> Option<K> {
         // Convert to WarmCacheKey and delegate to real LFU implementation
         let warm_candidates: Vec<WarmCacheKey<K>> = candidates
             .iter()
@@ -97,7 +97,7 @@ impl ReplacementPolicies {
         }
     }
 
-    fn arc_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+    fn arc_select(&self, candidates: &[K]) -> Option<K> {
         // Convert to WarmCacheKey and delegate to real ARC implementation
         let warm_candidates: Vec<WarmCacheKey<K>> = candidates
             .iter()
@@ -113,7 +113,7 @@ impl ReplacementPolicies {
         }
     }
 
-    fn ml_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+    fn ml_select(&self, candidates: &[K]) -> Option<K> {
         // Convert to WarmCacheKey and delegate to real ML implementation
         let warm_candidates: Vec<WarmCacheKey<K>> = candidates
             .iter()

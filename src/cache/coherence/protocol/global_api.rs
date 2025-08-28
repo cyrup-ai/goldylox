@@ -5,15 +5,17 @@
 
 use crate::cache::coherence::communication::{CoherenceError, ReadResponse};
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, ProtocolConfiguration};
-use super::types::CoherenceController;
+use crate::cache::coherence::data_structures::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 // Connect to existing sophisticated type-safe deserialization infrastructure
 use crate::cache::traits::cache_entry::{CacheEntry, SerializationEnvelope};
 use crate::cache::traits::types_and_enums::TierLocation;
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json;
 
 #[cfg(feature = "bincode")]
+#[allow(unused_imports)] // These are used conditionally based on bincode feature
 use bincode::{config, decode_from_slice, encode_to_vec};
 
 // Global coherence functions for external use
@@ -49,12 +51,12 @@ fn serialize_tier_value_with_envelope<K: CacheKey, V: CacheValue + Serialize>(
     ).map_err(|e| match e {
         crate::cache::coherence::CoherenceError::CacheLineNotFound => CoherenceError::CacheLineNotFound,
         crate::cache::coherence::CoherenceError::InvalidStateTransition { from, to } => CoherenceError::InvalidStateTransition { from, to },
-        _ => CoherenceError::SerializationFailed,
+        _ => CoherenceError::SerializationFailed("Coherence error during envelope creation".to_string()),
     })?;
     
-    // Serialize SerializationEnvelope directly with bincode (it has serde derives)
-    bincode::encode_to_vec(&envelope, bincode::config::standard()).map_err(|e| {
-        CoherenceError::SerializationFailed(format!("Bincode serialization failed: {}", e))
+    // Serialize SerializationEnvelope with serde_json (bincode not available due to Instant fields)
+    serde_json::to_vec(&envelope).map_err(|e| {
+        CoherenceError::SerializationFailed(format!("JSON serialization failed: {}", e))
     })
 }
 
@@ -133,18 +135,17 @@ pub fn coherent_read<K: CacheKey, V: CacheValue + Serialize>(
     }
 }
 
-pub fn coherent_write<K: CacheKey, V: CacheValue + DeserializeOwned>(
+pub fn coherent_write<K: CacheKey + bincode::Decode<()>, V: CacheValue + DeserializeOwned + bincode::Decode<()>>(
     controller: &CoherenceController<K, V>,
     key: &K,
     data: Vec<u8>,
     tier: CacheTier,
 ) -> Result<(), CoherenceError> {
     // Connect to existing SerializationEnvelope<K,V> infrastructure  
-    // Use bincode directly to deserialize SerializationEnvelope (it has serde derives)
-    let envelope: SerializationEnvelope<K, V> = bincode::decode_from_slice(&data, bincode::config::standard())
-        .map(|(v, _)| v)
+    // Use serde_json to deserialize SerializationEnvelope (bincode not available due to Instant fields)
+    let envelope: SerializationEnvelope<K, V> = serde_json::from_slice(&data)
         .map_err(|e| {
-            CoherenceError::SerializationFailed(format!("Bincode deserialization failed: {}", e))
+            CoherenceError::SerializationFailed(format!("JSON deserialization failed: {}", e))
         })?;
 
     // Extract value from sophisticated envelope with all metadata preserved

@@ -7,14 +7,13 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "bincode")]
-use bincode::{config, decode_from_slice, encode_to_vec, Decode, Encode};
+
 
 use super::core::{CacheKey, CacheValue};
 use super::supporting_types::{CompressionAlgorithm, SerializationFormat};
@@ -51,18 +50,8 @@ pub enum HealthStatus {
     CircuitOpen,
 }
 
-/// Access event for pattern analysis
-#[derive(Debug, Clone)]
-pub struct AccessEvent {
-    /// When the access occurred
-    pub timestamp: Instant,
-    /// Type of access pattern
-    pub access_type: AccessType,
-    /// Access latency in nanoseconds
-    pub latency_ns: u64,
-    /// Whether access resulted in cache hit
-    pub hit: bool,
-}
+// AccessEvent moved to canonical location: crate::cache::eviction::types::AccessEvent  
+pub use crate::cache::eviction::types::AccessEvent;
 
 /// Tier transition event for tracking migration history
 #[derive(Debug, Clone)]
@@ -93,9 +82,8 @@ pub struct MigrationLock {
 /// Cache entry metadata containing infrastructure data
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct CacheEntryMetadata {
-    /// Exact creation timestamp
+    /// Exact creation timestamp  
     #[cfg_attr(feature = "serde", serde(skip))]
     pub created_at: Instant,
     /// Last access timestamp
@@ -220,6 +208,7 @@ impl Clone for CacheEntryMetadata {
 
 /// Sophisticated access pattern tracker for cache intelligence
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AccessTracker {
     /// Recent access events (bounded circular buffer)
     pub access_history: VecDeque<AccessEvent>,
@@ -232,6 +221,7 @@ pub struct AccessTracker {
     /// Detected temporal pattern
     pub temporal_pattern: TemporalPattern,
     /// Last pattern analysis timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub last_pattern_update: Instant,
     /// Pattern confidence score (0.0-1.0)
     pub pattern_confidence: f32,
@@ -427,6 +417,7 @@ impl Default for AccessTracker {
 
 /// Multi-tier management information for intelligent tier transitions
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TierInfo {
     /// Current tier location
     pub current_tier: TierLocation,
@@ -443,6 +434,7 @@ pub struct TierInfo {
     /// Tier residency time (how long in current tier)
     pub tier_residency: Duration,
     /// Tier entry timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub tier_entry_time: Instant,
     /// Number of tier transitions
     pub transition_count: u32,
@@ -798,7 +790,6 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
 /// Serialization envelope for persistent storage with versioning and integrity
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(
     feature = "serde",
     serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))

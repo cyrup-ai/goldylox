@@ -146,6 +146,10 @@ pub struct TierStatsSnapshot {
     pub peak_access_latency_ns: u64,
     pub ops_per_second: f64,
     pub performance_score: f64,
+    // Enhanced fields for comprehensive monitoring
+    pub timestamp_ns: u64,
+    pub memory_pressure: f64,
+    pub evictions: u64,
 }
 
 impl From<crate::cache::types::statistics::tier_stats::TierStatistics> for TierStatsSnapshot {
@@ -160,6 +164,38 @@ impl From<crate::cache::types::statistics::tier_stats::TierStatistics> for TierS
             peak_access_latency_ns: stats.avg_access_time_ns,
             ops_per_second: stats.ops_per_second,
             performance_score: stats.efficiency_score(),
+            timestamp_ns: crate::cache::types::timestamp_nanos(std::time::Instant::now()),
+            memory_pressure: 0.0,
+            evictions: 0,
+        }
+    }
+}
+
+impl TierStatsSnapshot {
+    /// Create new snapshot with current timestamp
+    pub fn new() -> Self {
+        Self {
+            entry_count: 0,
+            memory_usage: 0,
+            total_hits: 0,
+            total_misses: 0,
+            hit_rate: 0.0,
+            avg_access_latency_ns: 0.0,
+            peak_access_latency_ns: 0,
+            ops_per_second: 0.0,
+            performance_score: 0.0,
+            timestamp_ns: crate::cache::types::timestamp_nanos(std::time::Instant::now()),
+            memory_pressure: 0.0,
+            evictions: 0,
+        }
+    }
+    
+    /// Calculate efficiency ratio
+    pub fn efficiency_ratio(&self) -> f64 {
+        if self.total_hits + self.total_misses == 0 {
+            0.0
+        } else {
+            self.hit_rate * (1.0 - self.memory_pressure)
         }
     }
 }

@@ -15,7 +15,7 @@ use super::core::{LockFreeWarmTier, WarmCacheEntry, WarmCacheKey};
 use super::data_structures::WarmTierConfig;
 use super::eviction::{ConcurrentEvictionPolicy, EvictionPolicyType};
 use super::monitoring::{MemoryPressureMonitor, TierStatsSnapshot};
-use crate::cache::types::statistics::AtomicTierStats;
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 

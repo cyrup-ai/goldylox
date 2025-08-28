@@ -12,6 +12,9 @@ pub mod types;
 // Re-export engine implementation
 pub use engine::EvictionEngine;
 pub use types::{
-    AccessEvent, AccessType, EvictionCandidate, EvictionConfig, EvictionMetrics, EvictionPolicy,
+    AccessEvent, AccessType, EvictionCandidate, HotTierEvictionConfig, EvictionMetrics, EvictionPolicy,
     EvictionReason, EvictionStats, FeatureWeights,
 };
+
+// Re-export canonical config
+pub use crate::cache::tier::warm::config::EvictionConfig;

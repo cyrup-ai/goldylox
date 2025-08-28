@@ -7,10 +7,26 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
+use crate::cache::manager::policy::types::LockFreeQueue;
 
 use crate::cache::config::CacheConfig;
 use super::types::{GCTask, GCTaskType};
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crossbeam_channel::Sender;
+use crate::cache::manager::background::types::{MaintenanceTask, MaintenanceTaskType};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+/// Global maintenance task sender for GC coordination
+static GLOBAL_MAINTENANCE_SENDER: Lazy<Mutex<Option<Sender<MaintenanceTask>>>> = Lazy::new(|| {
+    Mutex::new(None)
+});
+
+/// Set the global maintenance sender for all GC coordinators
+pub fn set_global_maintenance_sender(sender: Sender<MaintenanceTask>) {
+    let mut global_sender = GLOBAL_MAINTENANCE_SENDER.lock().unwrap();
+    *global_sender = Some(sender);
+}
 
 /// Garbage collection coordinator
 #[derive(Debug)]
@@ -21,6 +37,10 @@ pub struct GCCoordinator {
     gc_metrics: GCMetrics,
     /// GC task queue for scheduling
     task_queue: GCTaskQueue,
+    /// Lock-free queue for proper synchronization
+    lock_free_queue: LockFreeQueue<GCTask>,
+    /// Sender for maintenance tasks
+    maintenance_sender: Option<Sender<MaintenanceTask>>,
 }
 
 /// GC execution state tracking
@@ -71,6 +91,9 @@ struct GCTaskQueue {
 impl GCCoordinator {
     /// Create new GC coordinator
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
+        // Get the global maintenance sender if available
+        let maintenance_sender = GLOBAL_MAINTENANCE_SENDER.lock().unwrap().clone();
+        
         Ok(Self {
             gc_state: GCState {
                 is_running: AtomicBool::new(false),
@@ -93,7 +116,14 @@ impl GCCoordinator {
                 queue_tail: AtomicUsize::new(0),
                 queue_size: AtomicUsize::new(0),
             },
+            lock_free_queue: LockFreeQueue::with_capacity(1024),
+            maintenance_sender,
         })
+    }
+
+    /// Set the maintenance task sender
+    pub fn set_maintenance_sender(&mut self, sender: Sender<MaintenanceTask>) {
+        self.maintenance_sender = Some(sender);
     }
 
     /// Trigger emergency garbage collection
@@ -160,10 +190,13 @@ impl GCCoordinator {
             ));
         }
 
-        // In a real implementation, we would need proper synchronization for the queue
-        // This is a simplified version for demonstration
-        self.task_queue.queue_size.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        // Use the production LockFreeQueue for proper synchronization
+        if self.lock_free_queue.push(_task) {
+            self.task_queue.queue_size.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(CacheOperationError::resource_exhausted("GC task queue full"))
+        }
     }
 
     /// Execute GC cycle
@@ -188,11 +221,50 @@ impl GCCoordinator {
             ));
         }
 
-        // Execute GC logic based on cycle type (simplified for demo)
+        // Execute GC logic based on cycle type
         let result = match cycle_type {
-            GCTaskType::Emergency => Ok(()),
-            GCTaskType::Normal => Ok(()),
-            GCTaskType::Maintenance => Ok(()),
+            GCTaskType::Emergency => {
+                if let Some(ref sender) = self.maintenance_sender {
+                    let task = MaintenanceTask {
+                        task_type: MaintenanceTaskType::GarbageCollect,
+                        priority: 0, // Highest priority
+                        created_at: std::time::Instant::now(),
+                        timeout_ns: 5_000_000_000, // 5 seconds
+                        retry_count: 0,
+                        max_retries: 1,
+                    };
+                    let _ = sender.try_send(task);
+                }
+                Ok(())
+            }
+            GCTaskType::Normal => {
+                if let Some(ref sender) = self.maintenance_sender {
+                    let task = MaintenanceTask {
+                        task_type: MaintenanceTaskType::GarbageCollect,
+                        priority: 100,
+                        created_at: std::time::Instant::now(),
+                        timeout_ns: 30_000_000_000, // 30 seconds
+                        retry_count: 0,
+                        max_retries: 3,
+                    };
+                    let _ = sender.try_send(task);
+                }
+                Ok(())
+            }
+            GCTaskType::Maintenance => {
+                if let Some(ref sender) = self.maintenance_sender {
+                    let task = MaintenanceTask {
+                        task_type: MaintenanceTaskType::MemoryDefragmentation,
+                        priority: 200,
+                        created_at: std::time::Instant::now(),
+                        timeout_ns: 60_000_000_000, // 60 seconds
+                        retry_count: 0,
+                        max_retries: 3,
+                    };
+                    let _ = sender.try_send(task);
+                }
+                Ok(())
+            }
         };
 
         // Record completion metrics

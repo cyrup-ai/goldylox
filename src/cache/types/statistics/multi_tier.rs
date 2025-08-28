@@ -393,14 +393,26 @@ impl MultiTierStatistics {
             0.0
         };
 
-        TierStatistics {
-            entry_count: total_entries,
-            memory_usage: total_memory,
-            hit_rate: weighted_hit_rate,
-            avg_access_time_ns: weighted_avg_time,
-            ops_per_second: total_ops_per_second,
-            error_rate: weighted_error_rate,
-        }
+        // Calculate total hits and misses from individual tier statistics
+        let total_hits = self.hot_tier.hits + self.warm_tier.hits + self.cold_tier.hits;
+        let total_misses = self.hot_tier.misses + self.warm_tier.misses + self.cold_tier.misses;
+        let total_errors = self.hot_tier.error_count + self.warm_tier.error_count + self.cold_tier.error_count;
+        let max_peak_memory = self.hot_tier.peak_memory
+            .max(self.warm_tier.peak_memory)
+            .max(self.cold_tier.peak_memory);
+        let total_size_bytes = self.hot_tier.total_size_bytes + self.warm_tier.total_size_bytes + self.cold_tier.total_size_bytes;
+
+        TierStatistics::new(
+            total_hits,              // hits: u64 - sum of all tier hits
+            total_misses,            // misses: u64 - sum of all tier misses  
+            total_entries,           // entry_count: usize - sum of all tier entries
+            total_memory,            // memory_usage: usize - sum of all tier memory
+            max_peak_memory,         // peak_memory: u64 - max across tiers
+            total_size_bytes,        // total_size_bytes: u64 - sum across tiers
+            weighted_avg_time,       // avg_access_time_ns: u64 - weighted average
+            total_ops_per_second,    // ops_per_second: f64 - sum across tiers
+            total_errors,            // error_count: u64 - sum of all tier errors
+        )
     }
 
     /// Get tier with best hit rate

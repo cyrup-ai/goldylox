@@ -144,12 +144,26 @@ impl AlertSystem {
 
     /// Adapt thresholds based on performance patterns
     pub fn adapt_thresholds(&self, _pattern_analysis: &[f32]) {
-        // Placeholder for threshold adaptation logic
-        // In full implementation, this would:
-        // 1. Analyze recent alert patterns
-        // 2. Adjust thresholds to reduce false positives
-        // 3. Maintain sensitivity to real performance issues
-        // 4. Update adaptation state for continuous learning
+        // Use the EXISTING sophisticated threshold adaptation from strategy module
+        use crate::cache::manager::strategy::thresholds::StrategyThresholds;
+        
+        // The EXISTING StrategyThresholds::adapt() expects:
+        // - system_load: 0.0 to 1.0 representing load
+        // - stability_ratio: 0.0 to 1.0 representing stability
+        
+        // Pattern analysis values represent alert frequencies/patterns
+        // Higher values = more alerts = higher load, lower stability
+        let avg_pattern = if !_pattern_analysis.is_empty() {
+            _pattern_analysis.iter().sum::<f32>() / _pattern_analysis.len() as f32
+        } else {
+            0.5
+        };
+        
+        let system_load = avg_pattern.clamp(0.0, 1.0);
+        let stability_ratio = 1.0 - avg_pattern.clamp(0.0, 1.0); // Inverse relationship
+        
+        let strategy_thresholds = StrategyThresholds::new();
+        strategy_thresholds.adapt(system_load, stability_ratio);
     }
 
     /// Create alert if rate limiting allows using feature-rich types
@@ -160,20 +174,42 @@ impl AlertSystem {
         metric_value: f64,
         threshold_value: f64,
     ) -> Option<PerformanceAlert> {
-        // Use feature-rich AlertRateLimits from types.rs
-        // Simplified rate limiting check for now
-
-        Some(PerformanceAlert {
-            alert_type,
-            severity: AlertSeverity::Warning,
-            message: format!(
-                "Performance alert: metric {:.2} exceeded threshold {:.2}",
-                metric_value, threshold_value
-            ),
-            timestamp: std::time::Instant::now(),
-            metric_value,
-            value: metric_value,
-            threshold: threshold_value,
-        })
+        use crate::cache::types::timestamp_nanos;
+        use std::sync::atomic::Ordering;
+        
+        let type_idx = alert_type as usize;
+        let now = timestamp_nanos(std::time::Instant::now());
+        
+        // Check window expiry (60 seconds)
+        let window_start = self.rate_limits.window_start.load(Ordering::Relaxed);
+        if now - window_start > 60_000_000_000 {
+            // Reset window
+            self.rate_limits.window_start.store(now, Ordering::Relaxed);
+            for count in &self.rate_limits.current_counts {
+                count.store(0, Ordering::Relaxed);
+            }
+        }
+        
+        // Check rate limit
+        let current = self.rate_limits.current_counts[type_idx].load(Ordering::Relaxed);
+        let max = self.rate_limits.max_alerts_per_minute[type_idx].load(Ordering::Relaxed);
+        
+        if current < max {
+            self.rate_limits.current_counts[type_idx].fetch_add(1, Ordering::Relaxed);
+            Some(PerformanceAlert {
+                alert_type,
+                severity: AlertSeverity::Warning,
+                message: format!(
+                    "Performance alert: metric {:.2} exceeded threshold {:.2}",
+                    metric_value, threshold_value
+                ),
+                timestamp: std::time::Instant::now(),
+                metric_value,
+                value: metric_value,
+                threshold: threshold_value,
+            })
+        } else {
+            None // Rate limited
+        }
     }
 }

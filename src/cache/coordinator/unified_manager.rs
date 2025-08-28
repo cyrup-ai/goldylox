@@ -6,12 +6,12 @@
 use crate::cache::coherence::ProtocolConfiguration;
 use crate::cache::config::CacheConfig;
 use crate::cache::eviction::CachePolicyEngine;
-use crate::cache::manager::{
-    ErrorRecoverySystem as ManagerErrorRecoverySystem, UnifiedStats as ManagerUnifiedStats,
-};
-use crate::cache::tier::TierPromotionManager;
+use crate::cache::manager::ErrorRecoverySystem as ManagerErrorRecoverySystem;
+use crate::telemetry::unified_stats::UnifiedStats;
+use crate::cache::tier::manager::TierPromotionManager;
 use crate::cache::traits::core::{CacheKey, CacheValue};
-use crate::cache::manager::core::PrecisionTimer;
+use crate::cache::types::performance::timer::PrecisionTimer;
+use crate::cache::types::AccessPath;
 use super::background_coordinator::BackgroundCoordinator;
 use super::strategy_selector::CacheStrategySelector;
 use super::tier_operations::TierOperations;
@@ -42,7 +42,7 @@ pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
     tier_operations: TierOperations<K, V>,
 }
 
-impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
+impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Create new unified cache manager with full tier coordination
     pub fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize all cache tiers with SIMD optimization
@@ -56,16 +56,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         };
         // Initialize hot tier with proper generic types
         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
-        let warm_tier_config = crate::cache::tier::warm::WarmTierConfig {
-            max_memory_bytes: config.warm_tier.max_size_bytes,
-            max_entries: config.warm_tier.max_entries as usize,
-            default_ttl_sec: config.warm_tier.entry_timeout_ns / 1_000_000_000,
-            pressure_thresholds: crate::cache::tier::warm::PressureConfig::default(),
-            eviction_config: crate::cache::tier::warm::eviction::EvictionConfig::default(),
-            tracking_config: crate::cache::tier::warm::TrackingConfig::default(),
-            background_config: crate::cache::tier::warm::BackgroundConfig::default(),
-            performance_config: crate::cache::tier::warm::PerformanceConfig::default(),
-        };
+        let warm_tier_config = config.warm_tier;
         // Initialize warm tier with proper generic types
         crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
         // Initialize cold tier with proper generic types
@@ -79,6 +70,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             max_invalidation_retries: 3,
             coherence_timeout_ns: 1_000_000, // 1ms
             strict_ordering: false,
+            schema_version: 1,
         };
         let _coherence_controller =
             crate::cache::coherence::protocol::global_api::init_coherence_controller::<K, V>();
@@ -94,6 +86,10 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         let performance_monitor = PerformanceMonitor::new(monitor_config);
         let error_recovery = ManagerErrorRecoverySystem::new();
         let tier_operations = TierOperations::new();
+
+        // Wire GC coordinator to maintenance scheduler before creating manager
+        let maintenance_sender = background_coordinator.get_maintenance_task_sender();
+        crate::cache::memory::gc_coordinator::set_global_maintenance_sender(maintenance_sender);
 
         let manager = Self {
             config,
@@ -116,7 +112,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Get value from unified cache with intelligent tier selection - zero-copy crossbeam reference
     pub fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
-        let mut access_path = crate::cache::manager::AccessPath::new();
+        let mut access_path = AccessPath::new();
 
         // Record operation start with atomic increment
         self.unified_stats.record_miss(0); // Will be updated with actual timing later
@@ -237,10 +233,10 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     }
 
     /// Get comprehensive unified cache statistics
-    pub fn stats(&self) -> ManagerUnifiedStats {
-        // Convert from performance_tracking::UnifiedStats to manager::UnifiedStats
+    pub fn stats(&self) -> UnifiedStats {
+        // Convert from performance_tracking::UnifiedStats to unified_stats::UnifiedStats
         let perf_stats = self.unified_stats.compute_unified_stats();
-        ManagerUnifiedStats {
+        UnifiedStats {
             total_operations: perf_stats.total_operations,
             overall_hit_rate: perf_stats.overall_hit_rate,
             hot_tier_hits: perf_stats.hot_tier_hits,
@@ -251,6 +247,15 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             promotions_performed: perf_stats.promotions_performed,
             demotions_performed: perf_stats.demotions_performed,
             total_memory_usage: perf_stats.total_memory_usage,
+            peak_memory_usage: perf_stats.total_memory_usage, // Use current as peak for now
+            ops_per_second: if perf_stats.avg_access_latency_ns > 0 { 
+                1_000_000_000.0 / perf_stats.avg_access_latency_ns as f32 
+            } else { 0.0 },
+            tier_hit_rates: [
+                if perf_stats.total_operations > 0 { perf_stats.hot_tier_hits as f32 / perf_stats.total_operations as f32 } else { 0.0 },
+                if perf_stats.total_operations > 0 { perf_stats.warm_tier_hits as f32 / perf_stats.total_operations as f32 } else { 0.0 },
+                if perf_stats.total_operations > 0 { perf_stats.cold_tier_hits as f32 / perf_stats.total_operations as f32 } else { 0.0 },
+            ],
         }
     }
 
@@ -280,7 +285,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         value: &V,
         from_tier: crate::cache::coherence::CacheTier,
         to_tier: crate::cache::coherence::CacheTier,
-        access_path: &crate::cache::manager::AccessPath,
+        access_path: &AccessPath,
     ) {
         let promotion_decision =
             self.tier_manager
@@ -297,7 +302,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
         &self,
         key: &K,
         value: &V,
-        _access_path: &crate::cache::manager::AccessPath,
+        _access_path: &AccessPath,
     ) {
         // Analyze access pattern to determine optimal promotion strategy
         let access_pattern = self
@@ -315,7 +320,7 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
             );
 
             // Consider further promotion to hot tier for very frequent access
-            if access_pattern.frequency > 10.0 && value.as_ref().estimated_size() < 1024 {
+            if access_pattern.frequency > 10.0 && value.estimated_size() < 1024 {
                 let _ = self.tier_manager.schedule_promotion(
                     key.clone(),
                     crate::cache::coherence::CacheTier::Warm,

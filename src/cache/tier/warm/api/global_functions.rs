@@ -79,7 +79,7 @@ pub fn process_background_maintenance<K: CacheKey + 'static, V: CacheValue + 'st
 }
 
 /// Check for memory alerts in warm tier
-pub fn check_warm_tier_alerts<K: CacheKey + 'static, V: CacheValue + 'static>() -> Vec<String> {
+pub fn check_warm_tier_alerts<K: CacheKey + 'static, V: CacheValue + 'static>() -> Vec<super::global_api::CacheAlert> {
     super::global_api::check_warm_tier_alerts::<K, V>()
 }
 

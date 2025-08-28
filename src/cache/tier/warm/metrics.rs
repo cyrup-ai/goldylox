@@ -106,13 +106,8 @@ pub enum OperationType {
     Analysis,
 }
 
-/// Tier statistics snapshot for monitoring
-pub struct TierStatsSnapshot {
-    pub hit_count: u64,
-    pub miss_count: u64,
-    pub total_entries: usize,
-    pub memory_usage: u64,
-}
+// TierStatsSnapshot moved to canonical location: crate::cache::tier::warm::monitoring::types::TierStatsSnapshot
+pub use crate::cache::tier::warm::monitoring::types::TierStatsSnapshot;
 
 /// Frequency trend analysis for access patterns
 pub enum FrequencyTrend {

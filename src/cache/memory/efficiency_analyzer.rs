@@ -320,14 +320,28 @@ impl MemoryEfficiencyAnalyzer {
     }
 
     /// Store analysis result in history
-    fn store_analysis_result(&self, _result: EfficiencyAnalysisResult) {
-        // In a real implementation, we would store the result in the history buffer
-        // This is simplified for demonstration
-        let pos = self
-            .analysis_history
-            .write_position
-            .fetch_add(1, Ordering::Relaxed);
-        let _ = pos; // Suppress unused variable warning
+    fn store_analysis_result(&self, result: EfficiencyAnalysisResult) {
+        // Use circular buffer pattern from PerformanceHistory
+        let current_pos = self.analysis_history.write_position.load(Ordering::Acquire);
+        let capacity = self.analysis_history.capacity.load(Ordering::Acquire) as u64;
+        
+        // Calculate write index in circular buffer
+        let write_idx = (current_pos % capacity) as usize;
+        
+        // Store in buffer (unsafe access needed for atomic operations on array)
+        unsafe {
+            let history_ptr = &self.analysis_history as *const _ as *mut AnalysisHistoryBuffer;
+            let history_mut = &mut *history_ptr;
+            
+            if history_mut.buffer.len() >= capacity as usize {
+                history_mut.buffer[write_idx] = result;
+            } else {
+                history_mut.buffer.push(result);
+            }
+        }
+        
+        // Update write position
+        self.analysis_history.write_position.store(current_pos.wrapping_add(1), Ordering::Release);
     }
 
     /// Get current time in nanoseconds

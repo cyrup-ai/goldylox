@@ -34,9 +34,11 @@ pub enum ConsistencyLevel {
     Causal,
 }
 
-/// Access event record for pattern analysis
+/// Enhanced access event record for pattern analysis
 #[derive(Debug, Clone)]
 pub struct AccessEvent<K: CacheKey> {
+    /// Unique event identifier
+    pub event_id: u64,
     /// Cache key that was accessed
     pub key: K,
     /// Access timestamp
@@ -45,22 +47,18 @@ pub struct AccessEvent<K: CacheKey> {
     pub access_type: AccessType,
     /// Cache tier where access occurred
     pub tier: CacheTier,
+    /// Whether access was a hit
+    pub hit: bool,
+    /// Optional slot index for hot tier compatibility
+    pub slot_index: Option<usize>,
+    /// Access latency in nanoseconds
+    pub latency_ns: u64,
+    /// Entry size in bytes
+    pub entry_size: usize,
 }
 
-/// Prefetch request with priority and context
-#[derive(Debug, Clone)]
-pub struct PrefetchRequest<K: CacheKey> {
-    /// Key to prefetch
-    pub key: K,
-    /// Predicted access time
-    pub predicted_access: u64, // Nanoseconds since epoch
-    /// Prefetch priority (0-10)
-    pub priority: u8,
-    /// Confidence in prediction (0.0-1.0)
-    pub confidence: f32,
-    /// Request creation time
-    pub created_at: Instant,
-}
+// PrefetchRequest moved to canonical location: crate::cache::tier::hot::prefetch::types::PrefetchRequest
+pub use crate::cache::tier::hot::prefetch::types::PrefetchRequest;
 
 // AccessType moved to canonical location: crate::cache::traits::types_and_enums
 
@@ -79,6 +77,38 @@ impl Default for WriteStrategy {
 impl Default for ConsistencyLevel {
     fn default() -> Self {
         Self::Eventual
+    }
+}
+
+impl<K: CacheKey> AccessEvent<K> {
+    /// Create new access event with current timestamp
+    pub fn new(key: K, access_type: AccessType, tier: CacheTier, hit: bool) -> Self {
+        static EVENT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        
+        Self {
+            event_id: EVENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            key,
+            timestamp: crate::cache::types::timestamp_nanos(std::time::Instant::now()),
+            access_type,
+            tier,
+            hit,
+            slot_index: None,
+            latency_ns: 0,
+            entry_size: 0,
+        }
+    }
+    
+    /// Create event with slot index for hot tier
+    pub fn with_slot_index(mut self, slot_index: usize) -> Self {
+        self.slot_index = Some(slot_index);
+        self
+    }
+    
+    /// Create event with performance metrics
+    pub fn with_metrics(mut self, latency_ns: u64, entry_size: usize) -> Self {
+        self.latency_ns = latency_ns;
+        self.entry_size = entry_size;
+        self
     }
 }
 

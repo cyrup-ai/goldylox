@@ -5,33 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-/// Performance timer for sub-nanosecond precision
-#[derive(Debug)]
-pub struct PrecisionTimer {
-    start_time: Instant,
-}
-
-impl PrecisionTimer {
-    /// Start new precision timer
-    #[inline(always)]
-    pub fn start() -> Self {
-        Self {
-            start_time: Instant::now(),
-        }
-    }
-
-    /// Get elapsed time in nanoseconds
-    #[inline(always)]
-    pub fn elapsed_ns(&self) -> u64 {
-        self.start_time.elapsed().as_nanos() as u64
-    }
-
-    /// Get elapsed time as Duration
-    #[inline(always)]
-    pub fn elapsed(&self) -> Duration {
-        self.start_time.elapsed()
-    }
-}
+// PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
 /// Timestamp conversion utilities
 pub mod timestamp {

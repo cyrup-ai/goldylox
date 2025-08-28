@@ -331,6 +331,10 @@ impl CacheOperationError {
     pub fn invalid_argument(msg: impl Into<String>) -> Self {
         Self::InvalidArgument(msg.into())
     }
+
+    pub fn internal_error(msg: impl Into<String>) -> Self {
+        Self::InvalidState(msg.into())
+    }
 }
 
 /// Policy action types (from types.rs - ML and policy engine support)

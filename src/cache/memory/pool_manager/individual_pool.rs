@@ -3,7 +3,7 @@
 //! This module implements the MemoryPool struct that handles allocation and
 //! deallocation for objects of a specific size using lock-free data structures.
 
-use std::alloc::{alloc, Layout};
+use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::{null_mut, NonNull};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
@@ -13,7 +13,7 @@ use crate::cache::memory::types::PoolAllocationStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Individual memory pool with lock-free allocation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryPool {
     /// Pool name for identification
     pool_name: &'static str,
@@ -107,16 +107,54 @@ impl MemoryPool {
     /// Sophisticated cleanup that integrates with existing fragmentation analysis,
     /// maintenance scheduling, and allocation statistics systems
     pub fn try_cleanup(&self) -> bool {
-        // Directly use simple cleanup since we removed the Arc dependency
-        self.simple_fallback_cleanup()
+        // Perform real memory cleanup by walking the free list and deallocating
+        self.perform_real_cleanup()
     }
 
-    /// Simple fallback cleanup (preserves original behavior)
-    fn simple_fallback_cleanup(&self) -> bool {
-        let current_util = self.current_utilization.load(Ordering::Relaxed);
-        if current_util > 0 {
-            // Simulate some cleanup happening
-            self.current_utilization.fetch_sub(1, Ordering::Relaxed);
+    /// Perform real memory cleanup by deallocating free list entries
+    fn perform_real_cleanup(&self) -> bool {
+        // Atomically take ownership of the entire free list
+        let mut head = self.free_list_head.swap(null_mut(), Ordering::AcqRel);
+        
+        if head.is_null() {
+            // No free entries to clean up
+            return false;
+        }
+        
+        let mut entries_freed = 0usize;
+        let mut bytes_freed = 0usize;
+        
+        // Walk the free list and deallocate each entry
+        while !head.is_null() {
+            unsafe {
+                // Get next entry before deallocating current
+                let next = (*head).next.load(Ordering::Acquire);
+                
+                // Deallocate the current entry back to the system
+                dealloc(head as *mut u8, self.memory_layout);
+                
+                entries_freed += 1;
+                bytes_freed += self.object_size;
+                
+                // Move to next entry
+                head = next;
+            }
+        }
+        
+        // Update utilization counter
+        let freed = entries_freed.min(self.current_utilization.load(Ordering::Relaxed));
+        if freed > 0 {
+            self.current_utilization.fetch_sub(freed, Ordering::Relaxed);
+            
+            // Update pool statistics with real deallocation count
+            for _ in 0..entries_freed {
+                self.pool_allocation_stats.record_deallocation();
+            }
+            
+            // Log cleanup results for monitoring
+            log::debug!("Pool {} cleaned up {} entries ({} bytes)", 
+                       self.pool_name, entries_freed, bytes_freed);
+            
             true
         } else {
             false

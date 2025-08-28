@@ -6,14 +6,17 @@ use std::time::Instant;
 pub type CacheResult<T> = Result<T, crate::cache::traits::CacheOperationError>;
 
 /// Alert severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum AlertSeverity {
-    Low = 0,
-    Medium = 1,
-    High = 2,
-    Critical = 3,
-    Warning = 4,
+    Info = 0,
+    Low = 1,
+    Medium = 2,
+    Warning = 3,
+    High = 4,
+    Error = 5,
+    Critical = 6,
+    Emergency = 7,
 }
 
 impl From<AlertSeverity> for u8 {
@@ -22,41 +25,29 @@ impl From<AlertSeverity> for u8 {
     }
 }
 
+impl AlertSeverity {
+    /// Get numeric priority value
+    pub fn priority(&self) -> u8 {
+        *self as u8
+    }
+    
+    /// Check if severity is critical level
+    pub fn is_critical(&self) -> bool {
+        matches!(self, Self::Critical | Self::Emergency)
+    }
+    
+    /// Check if severity requires immediate action
+    pub fn requires_immediate_action(&self) -> bool {
+        matches!(self, Self::Critical | Self::Emergency | Self::Error)
+    }
+}
+
 // CacheOperationError moved to canonical location: crate::cache::traits::types_and_enums
 
-/// Precision timer for performance measurements
-#[derive(Debug, Clone)]
-pub struct PrecisionTimer {
-    start_time: Instant,
-    label: String,
-}
+// PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
-impl PrecisionTimer {
-    pub fn new(label: impl Into<String>) -> Self {
-        Self {
-            start_time: Instant::now(),
-            label: label.into(),
-        }
-    }
-
-    pub fn elapsed_nanos(&self) -> u64 {
-        self.start_time.elapsed().as_nanos() as u64
-    }
-
-    pub fn elapsed_micros(&self) -> u64 {
-        self.start_time.elapsed().as_micros() as u64
-    }
-}
-
-/// Cache entry with metadata
-#[derive(Debug, Clone)]
-pub struct CacheEntry<V> {
-    pub value: V,
-    pub created_at: Instant,
-    pub last_accessed: Instant,
-    pub access_count: u64,
-    pub size_bytes: usize,
-}
+// CacheEntry moved to canonical location: crate::cache::traits::cache_entry::CacheEntry
+// Use the comprehensive implementation for all cache entry needs
 
 /// Batch operation request
 #[derive(Debug, Clone)]
@@ -81,15 +72,7 @@ pub struct BatchResult<V> {
     pub failed_count: usize,
 }
 
-/// Tier statistics
-#[derive(Debug, Clone)]
-pub struct TierStatistics {
-    pub hit_count: u64,
-    pub miss_count: u64,
-    pub total_size_bytes: u64,
-    pub entry_count: u64,
-    pub avg_access_time_ns: u64,
-}
+// TierStatistics moved to canonical location: crate::cache::types::statistics::tier_stats::TierStatistics
 
 /// Get current timestamp in nanoseconds
 pub fn timestamp_nanos() -> u64 {

@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
-use super::types::{CachePerformanceMetrics, TierStatistics, UnifiedCacheStatistics};
+use super::types::{CachePerformanceMetrics, UnifiedCacheStatistics};
+use crate::cache::types::statistics::tier_stats::TierStatistics;
 
 impl UnifiedCacheStatistics {
     /// Create new unified cache statistics
@@ -44,7 +45,7 @@ impl UnifiedCacheStatistics {
         }
 
         self.total_operations.fetch_add(1, Ordering::Relaxed);
-        self.update_average_latency(access_time_ns);
+        self.update_latency(access_time_ns);
         self.update_hit_rate();
     }
 
@@ -53,7 +54,7 @@ impl UnifiedCacheStatistics {
     pub fn record_miss(&self, access_time_ns: u64) {
         self.total_misses.fetch_add(1, Ordering::Relaxed);
         self.total_operations.fetch_add(1, Ordering::Relaxed);
-        self.update_average_latency(access_time_ns);
+        self.update_latency(access_time_ns);
         self.update_hit_rate();
     }
 
@@ -115,42 +116,39 @@ impl UnifiedCacheStatistics {
             total_memory_usage_bytes: self.total_memory_usage.load(Ordering::Relaxed),
             promotions_performed: self.promotions_performed.load(Ordering::Relaxed),
             demotions_performed: self.demotions_performed.load(Ordering::Relaxed),
-            hot_tier: TierStatistics {
-                hits: hot_hits,
-                misses: 0,             // Simplified - would track per-tier misses
-                avg_access_time_ns: 0, // Would track per-tier access times
-                memory_usage_bytes: 0, // Would track per-tier memory usage
-                entry_count: 0,        // Would track per-tier entry counts
-                hit_rate: if total_ops > 0 {
-                    hot_hits as f64 / total_ops as f64
-                } else {
-                    0.0
-                },
-            },
-            warm_tier: TierStatistics {
-                hits: warm_hits,
-                misses: 0,
-                avg_access_time_ns: 0,
-                memory_usage_bytes: 0,
-                entry_count: 0,
-                hit_rate: if total_ops > 0 {
-                    warm_hits as f64 / total_ops as f64
-                } else {
-                    0.0
-                },
-            },
-            cold_tier: TierStatistics {
-                hits: cold_hits,
-                misses: 0,
-                avg_access_time_ns: 0,
-                memory_usage_bytes: 0,
-                entry_count: 0,
-                hit_rate: if total_ops > 0 {
-                    cold_hits as f64 / total_ops as f64
-                } else {
-                    0.0
-                },
-            },
+            hot_tier: TierStatistics::new(
+                hot_hits,  // hits: u64 - REAL hit count from atomic counter
+                0,          // misses: u64 - no per-tier breakdown available
+                0,          // entry_count: usize - no per-tier data available
+                0,          // memory_usage: usize - no per-tier breakdown available
+                0,          // peak_memory: u64 - no per-tier data available
+                0,          // total_size_bytes: u64 - no per-tier data available
+                0,          // avg_access_time_ns: u64 - no per-tier breakdown available
+                0.0,        // ops_per_second: f64 - not tracked per-tier
+                0,          // error_count: u64 - no per-tier data available
+            ),
+            warm_tier: TierStatistics::new(
+                warm_hits, // hits: u64 - REAL hit count from atomic counter
+                0,          // misses: u64 - no per-tier breakdown available
+                0,          // entry_count: usize - no per-tier data available
+                0,          // memory_usage: usize - no per-tier breakdown available
+                0,          // peak_memory: u64 - no per-tier data available
+                0,          // total_size_bytes: u64 - no per-tier data available
+                0,          // avg_access_time_ns: u64 - no per-tier breakdown available
+                0.0,        // ops_per_second: f64 - not tracked per-tier
+                0,          // error_count: u64 - no per-tier data available
+            ),
+            cold_tier: TierStatistics::new(
+                cold_hits, // hits: u64 - REAL hit count from atomic counter
+                0,          // misses: u64 - no per-tier breakdown available
+                0,          // entry_count: usize - no per-tier data available
+                0,          // memory_usage: usize - no per-tier breakdown available
+                0,          // peak_memory: u64 - no per-tier data available
+                0,          // total_size_bytes: u64 - no per-tier data available
+                0,          // avg_access_time_ns: u64 - no per-tier breakdown available
+                0.0,        // ops_per_second: f64 - not tracked per-tier
+                0,          // error_count: u64 - no per-tier data available
+            ),
         }
     }
 
@@ -168,20 +166,7 @@ impl UnifiedCacheStatistics {
         self.total_memory_usage.store(0, Ordering::Relaxed);
     }
 
-    /// Update running average latency
-    #[inline]
-    fn update_average_latency(&self, new_latency_ns: u64) {
-        let current_avg = self.avg_access_latency_ns.load(Ordering::Relaxed);
-        let total_ops = self.total_operations.load(Ordering::Relaxed);
 
-        if total_ops > 0 {
-            let new_avg = (current_avg * (total_ops - 1) + new_latency_ns) / total_ops;
-            self.avg_access_latency_ns.store(new_avg, Ordering::Relaxed);
-        } else {
-            self.avg_access_latency_ns
-                .store(new_latency_ns, Ordering::Relaxed);
-        }
-    }
 
     /// Update overall hit rate
     #[inline]

@@ -118,15 +118,33 @@ impl ErrorDetector {
     }
 
     fn evaluate_system_health(&self) -> HealthStatus {
-        // Simplified health evaluation - can be expanded with actual metrics
+        // Use detection sensitivity and active rules for comprehensive health evaluation
         let sensitivity = self.detection_state.sensitivity.load();
-
-        // Basic health assessment based on detection sensitivity
-        if sensitivity > 0.8 {
+        let active_rules = self.detection_state.active_rules.load(Ordering::Relaxed);
+        
+        // Get pattern matching stats for additional context
+        let pattern_stats = self.pattern_detector.get_matching_stats();
+        let recent_matches = pattern_stats.recent_matches.load(Ordering::Relaxed);
+        let total_patterns = pattern_stats.total_patterns_detected.load(Ordering::Relaxed);
+        
+        // Calculate health score based on multiple factors
+        let sensitivity_score = sensitivity;
+        let rules_score = if active_rules > 0 { 1.0 } else { 0.0 };
+        let pattern_score = if total_patterns > 0 {
+            (recent_matches as f32 / total_patterns as f32).min(1.0)
+        } else {
+            1.0 // No patterns detected is not necessarily bad
+        };
+        
+        // Weight the factors
+        let overall_score = (sensitivity_score * 0.5) + (rules_score * 0.2) + (pattern_score * 0.3);
+        
+        // Determine health status based on overall score
+        if overall_score > 0.8 {
             HealthStatus::Healthy
-        } else if sensitivity > 0.5 {
+        } else if overall_score > 0.5 {
             HealthStatus::Degraded
-        } else if sensitivity > 0.2 {
+        } else if overall_score > 0.2 {
             HealthStatus::Critical
         } else {
             HealthStatus::Failed

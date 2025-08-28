@@ -5,12 +5,66 @@
 //! AllocationStatistics, and other production-ready systems.
 
 use super::individual_pool::MemoryPool;
-use crate::cache::manager::background::types::{MaintenanceScheduler, MaintenanceTaskType};
-use crate::cache::memory::efficiency_analyzer::MemoryEfficiencyAnalyzer;
+use crate::cache::manager::background::types::MaintenanceTaskType;
 use crate::cache::tier::hot::memory_pool::statistics::MemoryPoolStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
-use crossbeam_channel::{bounded, Sender, Receiver};
+use crossbeam_channel::{bounded, Sender};
 use std::time::Duration;
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+/// Pool cleanup request types
+#[derive(Debug)]
+pub enum PoolCleanupRequest {
+    EmergencyCleanup {
+        response: Sender<Result<usize, CacheOperationError>>,
+    },
+    TriggerDefragmentation {
+        response: Sender<Result<usize, CacheOperationError>>,
+    },
+}
+
+/// Global pool coordinator for cleanup operations
+pub struct PoolCoordinator {
+    /// Cleanup request sender
+    cleanup_sender: Sender<PoolCleanupRequest>,
+}
+
+static POOL_COORDINATOR: AtomicPtr<PoolCoordinator> = AtomicPtr::new(std::ptr::null_mut());
+
+impl PoolCoordinator {
+    /// Initialize the global coordinator
+    pub fn initialize(cleanup_sender: Sender<PoolCleanupRequest>) -> Result<(), CacheOperationError> {
+        if !POOL_COORDINATOR.load(Ordering::Acquire).is_null() {
+            return Ok(()); // Already initialized
+        }
+
+        let coordinator = Box::new(PoolCoordinator {
+            cleanup_sender,
+        });
+
+        let coordinator_ptr = Box::into_raw(coordinator);
+        POOL_COORDINATOR.store(coordinator_ptr, Ordering::Release);
+        Ok(())
+    }
+
+    /// Get the global coordinator instance
+    #[inline]
+    fn get() -> Result<&'static PoolCoordinator, CacheOperationError> {
+        let ptr = POOL_COORDINATOR.load(Ordering::Acquire);
+        if ptr.is_null() {
+            return Err(CacheOperationError::initialization_failed("PoolCoordinator not initialized"));
+        }
+        Ok(unsafe { &*ptr })
+    }
+
+    /// Send cleanup request
+    #[inline]
+    fn send_request(&self, request: PoolCleanupRequest) -> Result<(), CacheOperationError> {
+        self.cleanup_sender
+            .try_send(request)
+            .map_err(|_| CacheOperationError::resource_exhausted("Cleanup queue full"))
+    }
+}
 
 /// Efficiency analysis request types
 pub enum EfficiencyRequest {
@@ -73,7 +127,7 @@ impl PoolCleanupManager {
                         MaintenanceTaskType::MemoryDefragmentation,
                         response_tx,
                     ))
-                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                    .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                 
                 match response_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(()) => {
@@ -93,7 +147,7 @@ impl PoolCleanupManager {
                                 100,
                                 response_tx,
                             ))
-                            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                            .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                         
                         let _ = response_rx.recv_timeout(Duration::from_millis(100));
                         Ok(true)
@@ -109,7 +163,7 @@ impl PoolCleanupManager {
                         200,
                         response_tx,
                     ))
-                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                    .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                 
                 let _ = response_rx.recv_timeout(Duration::from_millis(100));
                 Ok(true)
@@ -136,7 +190,7 @@ impl PoolCleanupManager {
                         MaintenanceTaskType::MemoryDefragmentation,
                         response_tx,
                     ))
-                    .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                    .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                 
                 match response_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(()) => {
@@ -153,7 +207,7 @@ impl PoolCleanupManager {
                                 50,
                                 response_tx,
                             ))
-                            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+                            .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                         
                         let _ = response_rx.recv_timeout(Duration::from_millis(100));
                         cleanup_performed = true;
@@ -172,7 +226,7 @@ impl PoolCleanupManager {
         
         self.efficiency_sender
             .send(EfficiencyRequest::GetSnapshot(response_tx))
-            .map_err(|_| CacheOperationError::InternalError("Efficiency service unavailable".to_string()))?;
+            .map_err(|_| CacheOperationError::internal_error("Efficiency service unavailable"))?;
         
         let (_latency, fragmentation_impact, _throughput) = response_rx
             .recv_timeout(Duration::from_millis(100))
@@ -272,4 +326,30 @@ impl PoolCleanupManager {
             global_stats::ALLOCATION_STATS.fragmentation_level.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0,
         )
     }
+}
+
+/// Emergency cleanup - called by maintenance worker
+pub fn emergency_cleanup() -> Result<usize, CacheOperationError> {
+    let coordinator = PoolCoordinator::get()?;
+    let (response_tx, response_rx) = bounded(1);
+    
+    coordinator.send_request(PoolCleanupRequest::EmergencyCleanup {
+        response: response_tx,
+    })?;
+    
+    response_rx.recv_timeout(Duration::from_millis(500))
+        .map_err(|_| CacheOperationError::timeout_error())?
+}
+
+/// Trigger defragmentation - called by maintenance worker
+pub fn trigger_defragmentation() -> Result<usize, CacheOperationError> {
+    let coordinator = PoolCoordinator::get()?;
+    let (response_tx, response_rx) = bounded(1);
+    
+    coordinator.send_request(PoolCleanupRequest::TriggerDefragmentation {
+        response: response_tx,
+    })?;
+    
+    response_rx.recv_timeout(Duration::from_millis(500))
+        .map_err(|_| CacheOperationError::timeout_error())?
 }

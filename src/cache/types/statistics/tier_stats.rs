@@ -5,45 +5,71 @@
 
 use crate::cache::traits::TierStats;
 
-/// Tier statistics snapshot (zero allocation)
+/// Comprehensive tier statistics snapshot (zero allocation)
+/// Combines best features from all tier statistics implementations
 #[derive(Debug, Clone, Copy)]
 pub struct TierStatistics {
+    /// Explicit hit count
+    pub hits: u64,
+    /// Explicit miss count  
+    pub misses: u64,
     /// Number of entries
     pub entry_count: usize,
     /// Memory usage in bytes
     pub memory_usage: usize,
-    /// Hit rate (0.0 to 1.0)
+    /// Peak memory usage in bytes
+    pub peak_memory: u64,
+    /// Total data size in bytes (for compression ratio calculations)
+    pub total_size_bytes: u64,
+    /// Hit rate (0.0 to 1.0) - computed from hits/misses
     pub hit_rate: f64,
     /// Average access time in nanoseconds
     pub avg_access_time_ns: u64,
     /// Operations per second
     pub ops_per_second: f64,
-    /// Error rate (0.0 to 1.0)
+    /// Error count
+    pub error_count: u64,
+    /// Error rate (0.0 to 1.0) - computed from error_count
     pub error_rate: f64,
 }
 
 impl TierStatistics {
     /// Merge statistics from another TierStatistics
     pub fn merge(&mut self, other: TierStatistics) {
+        // Combine explicit counts
+        self.hits += other.hits;
+        self.misses += other.misses;
+        self.error_count += other.error_count;
         self.entry_count += other.entry_count;
         self.memory_usage += other.memory_usage;
+        self.total_size_bytes += other.total_size_bytes;
 
-        // Average the hit rates weighted by entry count
-        let total_entries = self.entry_count + other.entry_count;
-        if total_entries > 0 {
-            self.hit_rate = (self.hit_rate * self.entry_count as f64
-                + other.hit_rate * other.entry_count as f64)
-                / total_entries as f64;
+        // Update peak memory
+        self.peak_memory = self.peak_memory.max(other.peak_memory);
+
+        // Recalculate derived metrics
+        let total_operations = self.hits + self.misses;
+        if total_operations > 0 {
+            self.hit_rate = self.hits as f64 / total_operations as f64;
+            self.error_rate = self.error_count as f64 / total_operations as f64;
+        } else {
+            self.hit_rate = 0.0;
+            self.error_rate = 0.0;
         }
 
-        // Average access times
-        self.avg_access_time_ns = (self.avg_access_time_ns + other.avg_access_time_ns) / 2;
+        // Average access times weighted by operations
+        let self_ops = (self.hits + self.misses - other.hits - other.misses) as f64;
+        let other_ops = (other.hits + other.misses) as f64;
+        let total_ops = self_ops + other_ops;
+        
+        if total_ops > 0.0 {
+            self.avg_access_time_ns = ((self.avg_access_time_ns as f64 * self_ops + 
+                                       other.avg_access_time_ns as f64 * other_ops) / 
+                                      total_ops) as u64;
+        }
 
         // Sum operations per second
         self.ops_per_second += other.ops_per_second;
-
-        // Average error rates
-        self.error_rate = (self.error_rate + other.error_rate) / 2.0;
     }
 }
 
@@ -80,20 +106,24 @@ impl TierStats for TierStatistics {
 
     #[inline(always)]
     fn memory_capacity(&self) -> usize {
-        // Return a reasonable default capacity based on current usage
-        self.memory_usage * 2
+        // Use peak memory as capacity if available, otherwise estimate
+        if self.peak_memory > 0 {
+            self.peak_memory as usize
+        } else {
+            self.memory_usage * 2
+        }
     }
 
     #[inline(always)]
     fn total_hits(&self) -> u64 {
-        // Calculate total hits from hit rate and entry count
-        (self.hit_rate * self.entry_count as f64) as u64
+        // Return explicit hit count instead of calculation
+        self.hits
     }
 
     #[inline(always)]
     fn total_misses(&self) -> u64 {
-        // Calculate total misses from hit rate and entry count
-        ((1.0 - self.hit_rate) * self.entry_count as f64) as u64
+        // Return explicit miss count instead of calculation
+        self.misses
     }
 
     #[inline(always)]
@@ -104,9 +134,49 @@ impl TierStats for TierStatistics {
 }
 
 impl TierStatistics {
-    /// Create new tier statistics
+    /// Create new comprehensive tier statistics
     #[inline(always)]
     pub fn new(
+        hits: u64,
+        misses: u64,
+        entry_count: usize,
+        memory_usage: usize,
+        peak_memory: u64,
+        total_size_bytes: u64,
+        avg_access_time_ns: u64,
+        ops_per_second: f64,
+        error_count: u64,
+    ) -> Self {
+        let total_operations = hits + misses;
+        let hit_rate = if total_operations > 0 {
+            hits as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+        let error_rate = if total_operations > 0 {
+            error_count as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+        
+        Self {
+            hits,
+            misses,
+            entry_count,
+            memory_usage,
+            peak_memory,
+            total_size_bytes,
+            hit_rate,
+            avg_access_time_ns,
+            ops_per_second,
+            error_count,
+            error_rate,
+        }
+    }
+
+    /// Create from basic metrics (backward compatibility)
+    #[inline(always)]
+    pub fn from_basic(
         entry_count: usize,
         memory_usage: usize,
         hit_rate: f64,
@@ -114,12 +184,23 @@ impl TierStatistics {
         ops_per_second: f64,
         error_rate: f64,
     ) -> Self {
+        // Estimate hits/misses from hit_rate and ops_per_second
+        let estimated_operations = (ops_per_second * 60.0) as u64; // Assume 1 minute of ops
+        let hits = (hit_rate * estimated_operations as f64) as u64;
+        let misses = estimated_operations - hits;
+        let error_count = (error_rate * estimated_operations as f64) as u64;
+        
         Self {
+            hits,
+            misses,
             entry_count,
             memory_usage,
+            peak_memory: memory_usage as u64,
+            total_size_bytes: memory_usage as u64,
             hit_rate,
             avg_access_time_ns,
             ops_per_second,
+            error_count,
             error_rate,
         }
     }
@@ -169,16 +250,47 @@ impl TierStatistics {
             0.0
         }
     }
+
+    /// Get compression ratio if total_size_bytes is available
+    #[inline(always)]
+    pub fn compression_ratio(&self) -> f32 {
+        if self.total_size_bytes > 0 && self.memory_usage > 0 {
+            self.memory_usage as f32 / self.total_size_bytes as f32
+        } else {
+            1.0 // No compression
+        }
+    }
+
+    /// Check if tier is performing well (enhanced version)
+    #[inline(always)]
+    pub fn is_performing_well(&self) -> bool {
+        self.hit_rate > 0.8 && self.avg_access_time_ns < 10_000 && self.error_count == 0
+    }
+
+    /// Get memory utilization ratio (current/peak)
+    #[inline(always)]
+    pub fn memory_utilization(&self) -> f64 {
+        if self.peak_memory > 0 {
+            self.memory_usage as f64 / self.peak_memory as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Default for TierStatistics {
     fn default() -> Self {
         Self {
+            hits: 0,
+            misses: 0,
             entry_count: 0,
             memory_usage: 0,
+            peak_memory: 0,
+            total_size_bytes: 0,
             hit_rate: 0.0,
             avg_access_time_ns: 0,
             ops_per_second: 0.0,
+            error_count: 0,
             error_rate: 0.0,
         }
     }

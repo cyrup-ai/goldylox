@@ -17,10 +17,14 @@ pub use eviction::{EvictionEngine, EvictionPolicy, EvictionStats};
 pub use memory_pool::{CacheSlot, MemoryPool, MemoryPoolStats, SlotMetadata};
 pub use prefetch::{PredictionConfidence, PrefetchPredictor, PrefetchRequest, PrefetchStats};
 pub use simd_tier::SimdHotTier;
-pub use synchronization::{
-    AtomicTierStats, CoordinationState, PrecisionTimer, ReadGuard, SimdHashState, SimdLruTracker,
-    TierStatistics, WriteGuard,
+// Re-export TierStatistics from canonical location
+pub use crate::cache::types::statistics::tier_stats::TierStatistics;
+
+use synchronization::{
+    AtomicTierStats, CoordinationState, ReadGuard, SimdHashState, SimdLruTracker,
+    WriteGuard,
 };
+// PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer
 pub use thread_local::{
     cleanup_expired_entries, compact_hot_tier, get_frequently_accessed_keys, get_idle_keys,
     hot_tier_config, hot_tier_eviction_stats, hot_tier_memory_stats, hot_tier_prefetch_stats,

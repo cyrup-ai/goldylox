@@ -35,16 +35,34 @@ impl<K: CacheKey, V: CacheValue> EvictionCandidate<K, V> {
         score: f64,
         reason: SelectionReason,
         confidence: f32,
-        _metadata: CandidateMetadata,
+        metadata: CandidateMetadata,
     ) -> Self {
         Self {
             key,
             score,
             reason,
             confidence,
-            metadata: CandidateMetadata::default(),
+            metadata,
             _phantom: PhantomData,
         }
+    }
+    
+    /// Create candidate compatible with hot tier slot-based access
+    pub fn from_slot_index(slot_index: usize, key: K, score: f64, reason: SelectionReason) -> Self {
+        let mut metadata = CandidateMetadata::default();
+        metadata.slot_index = Some(slot_index);
+        
+        Self::new(key, score, reason, 0.8, metadata)
+    }
+    
+    /// Get slot index if available (for hot tier compatibility)
+    pub fn slot_index(&self) -> Option<usize> {
+        self.metadata.slot_index
+    }
+    
+    /// Create simple candidate (for warm tier compatibility)  
+    pub fn simple(key: K, score: f64, reason: SelectionReason) -> Self {
+        Self::new(key, score, reason, 0.7, CandidateMetadata::default())
     }
 
     /// Create LRU-based candidate
@@ -181,7 +199,7 @@ where
     }
 }
 
-/// Candidate metadata for eviction decisions
+/// Enhanced candidate metadata for eviction decisions
 #[derive(Debug, Clone, Default)]
 pub struct CandidateMetadata {
     /// Entry size in bytes
@@ -192,6 +210,12 @@ pub struct CandidateMetadata {
     pub access_count: u64,
     /// Entry age
     pub age_ns: u64,
+    /// For hot tier compatibility
+    pub slot_index: Option<usize>,
+    /// Access pattern
+    pub access_pattern: Option<crate::cache::tier::warm::AccessPattern>,
+    /// Creation timestamp
+    pub creation_time_ns: u64,
 }
 
 impl CandidateMetadata {

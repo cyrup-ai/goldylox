@@ -9,6 +9,7 @@ use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::CachePadded;
 
 use crate::cache::traits::{CacheKey, CacheValue};
+pub use crate::cache::types::CacheTier;
 
 /// MESI-like cache coherence controller
 #[derive(Debug)]
@@ -62,12 +63,16 @@ pub struct CoherenceMetadata {
     pub writeback_pending: AtomicBool,
 }
 
-/// Cache tier enumeration for coherence tracking
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheTier {
-    Hot = 1,
-    Warm = 2,
-    Cold = 4,
+// CacheTier enum removed - using cache::types::CacheTier for consistency
+// This eliminates type conflicts and provides better trait implementations
+
+/// Convert CacheTier to bit flag for dirty tier tracking
+fn tier_to_bit_flag(tier: CacheTier) -> u8 {
+    match tier {
+        CacheTier::Hot => 1,
+        CacheTier::Warm => 2,
+        CacheTier::Cold => 4,
+    }
 }
 
 /// MESI state enumeration with atomic representation
@@ -225,17 +230,17 @@ impl CoherenceMetadata {
 
     /// Mark tier as dirty
     pub fn mark_dirty(&self, tier: CacheTier) {
-        self.dirty_tiers.fetch_or(tier as u8, Ordering::Relaxed);
+        self.dirty_tiers.fetch_or(tier_to_bit_flag(tier), Ordering::Relaxed);
     }
 
     /// Clear dirty flag for tier
     pub fn clear_dirty(&self, tier: CacheTier) {
-        self.dirty_tiers.fetch_and(!(tier as u8), Ordering::Relaxed);
+        self.dirty_tiers.fetch_and(!tier_to_bit_flag(tier), Ordering::Relaxed);
     }
 
     /// Check if tier is dirty
     pub fn is_dirty(&self, tier: CacheTier) -> bool {
-        (self.dirty_tiers.load(Ordering::Relaxed) & (tier as u8)) != 0
+        (self.dirty_tiers.load(Ordering::Relaxed) & tier_to_bit_flag(tier)) != 0
     }
 }
 
@@ -564,6 +569,40 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
             CacheTier::Warm => CacheTier::Hot,
             CacheTier::Cold => CacheTier::Warm,
         }
+    }
+
+    /// Validate schema version compatibility
+    pub fn validate_schema_version(&self, version: u32) -> Result<(), super::communication::CoherenceError> {
+        let current_schema_version = self.protocol_config.schema_version;
+        if version > current_schema_version {
+            return Err(super::communication::CoherenceError::UnsupportedSchemaVersion(version));
+        }
+        Ok(())
+    }
+    
+    /// Validate data integrity checksum using coherence invalidation sequence
+    pub fn validate_checksum(&self, key: &K, expected: u64) -> Result<(), super::communication::CoherenceError> {
+        let coherence_key = CoherenceKey::from_cache_key(key);
+        
+        if let Some(cache_line_entry) = self.cache_line_states.get(&coherence_key) {
+            let cache_line = cache_line_entry.value();
+            let actual_sequence = cache_line.metadata.invalidation_seq.load(Ordering::Acquire) as u64;
+            
+            if actual_sequence != expected {
+                return Err(super::communication::CoherenceError::ChecksumMismatch { 
+                    expected, 
+                    actual: actual_sequence 
+                });
+            }
+        } else {
+            return Err(super::communication::CoherenceError::CacheLineNotFound);
+        }
+        Ok(())
+    }
+
+    /// Get coherence statistics
+    pub fn get_statistics(&self) -> crate::cache::coherence::CoherenceStatisticsSnapshot {
+        self.coherence_stats.get_snapshot()
     }
 }
 

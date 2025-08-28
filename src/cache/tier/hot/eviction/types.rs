@@ -3,7 +3,7 @@
 //! This module defines the fundamental types used throughout the eviction
 //! system including policies, candidates, and configuration structures.
 
-use std::time::Duration;
+
 
 pub use crate::cache::traits::{AccessType, EvictionReason};
 
@@ -20,24 +20,24 @@ pub enum EvictionPolicy {
     MachineLearning,
 }
 
-/// Eviction candidate with scoring
-#[derive(Debug, Clone)]
-pub struct EvictionCandidate {
-    pub slot_index: usize,
-    pub score: f64,
-    pub reason: EvictionReason,
+// EvictionCandidate moved to canonical location: crate::cache::types::eviction::candidate::EvictionCandidate
+pub use crate::cache::types::eviction::candidate::EvictionCandidate;
+
+/// Hot tier specific constructor alias
+pub fn create_hot_tier_candidate<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
+    slot_index: usize, 
+    key: K, 
+    score: f64, 
+    reason: crate::cache::traits::types_and_enums::EvictionReason
+) -> EvictionCandidate<K, V> {
+    use crate::cache::types::eviction::candidate::SelectionReason;
+    EvictionCandidate::from_slot_index(slot_index, key, score, SelectionReason::LeastRecentlyUsed)
 }
 
 // EvictionReason moved to canonical location: crate::cache::traits::types_and_enums
 
-/// Access event for pattern learning
-#[derive(Debug, Clone)]
-pub struct AccessEvent {
-    pub timestamp: u64,
-    pub slot_index: usize,
-    pub access_type: AccessType,
-    pub hit: bool,
-}
+// AccessEvent moved to canonical location: crate::cache::eviction::types::AccessEvent
+pub use crate::cache::eviction::types::AccessEvent;
 
 // AccessType moved to canonical location: crate::cache::traits::types_and_enums
 
@@ -61,15 +61,9 @@ pub struct EvictionMetrics {
     pub hit_rate_improvement: f64,
 }
 
-/// Eviction configuration
-#[derive(Debug, Clone)]
-pub struct EvictionConfig {
-    pub default_policy: EvictionPolicy,
-    pub learning_enabled: bool,
-    pub history_size: usize,
-    pub adaptation_interval: Duration,
-    pub performance_threshold: f64,
-}
+// Re-export canonical EvictionConfig from warm tier
+pub use crate::cache::tier::warm::config::{EvictionConfig, HotTierEvictionConfig};
+use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
 
 /// Eviction statistics
 #[derive(Debug, Clone)]
@@ -101,14 +95,22 @@ impl EvictionStats {
     }
 }
 
-impl Default for EvictionConfig {
-    fn default() -> Self {
-        Self {
-            default_policy: EvictionPolicy::Lru,
-            learning_enabled: true,
-            history_size: 1000,
-            adaptation_interval: Duration::from_secs(60),
-            performance_threshold: 0.8,
+impl From<EvictionPolicyType> for EvictionPolicy {
+    fn from(policy_type: EvictionPolicyType) -> Self {
+        match policy_type {
+            EvictionPolicyType::Lru => EvictionPolicy::Lru,
+            EvictionPolicyType::Lfu => EvictionPolicy::Lfu,
+            EvictionPolicyType::Arc => EvictionPolicy::Arc,
+            // Map all advanced policies to MachineLearning (hot tier fallback)
+            EvictionPolicyType::Adaptive 
+            | EvictionPolicyType::Ttl 
+            | EvictionPolicyType::Random
+            | EvictionPolicyType::SizeBased
+            | EvictionPolicyType::CostAware
+            | EvictionPolicyType::MachineLearning
+            | EvictionPolicyType::Fifo
+            | EvictionPolicyType::Clock
+            | EvictionPolicyType::Lru2 => EvictionPolicy::MachineLearning,
         }
     }
 }

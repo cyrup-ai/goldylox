@@ -3,7 +3,7 @@
 //! This module defines the fundamental types used throughout the unified
 //! cache management system.
 
-use std::time::Instant;
+// Removed unused import
 
 use crate::cache::coherence::CacheTier;
 use crate::cache::config::CacheConfig;
@@ -39,90 +39,7 @@ pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
     pub _phantom: std::marker::PhantomData<(K, V)>,
 }
 
-/// Tracks which tiers have been accessed during a cache operation
-#[derive(Debug)]
-pub struct AccessPath {
-    pub tried_hot: bool,
-    pub tried_warm: bool,
-    pub tried_cold: bool,
-    pub start_time: Instant,
-}
-
-impl AccessPath {
-    /// Estimate access frequency based on tier access pattern
-    pub fn frequency_estimate(&self) -> f32 {
-        let mut frequency = 1.0;
-        if self.tried_hot {
-            frequency += 2.0;
-        }
-        if self.tried_warm {
-            frequency += 1.0;
-        }
-        if self.tried_cold {
-            frequency += 0.5;
-        }
-        frequency
-    }
-
-    /// Get recent access count (placeholder implementation)
-    pub fn recent_access_count(&self) -> u32 {
-        let mut count = 0;
-        if self.tried_hot {
-            count += 3;
-        }
-        if self.tried_warm {
-            count += 2;
-        }
-        if self.tried_cold {
-            count += 1;
-        }
-        count
-    }
-
-    /// Calculate temporal locality score
-    pub fn temporal_locality_score(&self) -> f32 {
-        let elapsed = self.start_time.elapsed().as_nanos() as f32;
-        // Higher score for more recent access
-        1.0 / (1.0 + elapsed / 1_000_000.0) // Normalize to milliseconds
-    }
-
-    /// Calculate spatial locality score
-    pub fn spatial_locality_score(&self) -> f32 {
-        // Simple heuristic based on tier access pattern
-        if self.tried_hot && self.tried_warm {
-            0.8
-        } else if self.tried_hot {
-            0.6
-        } else if self.tried_warm {
-            0.4
-        } else {
-            0.2
-        }
-    }
-
-    /// Calculate average access delay
-    pub fn average_access_delay(&self) -> f32 {
-        let elapsed_ns = self.start_time.elapsed().as_nanos() as f32;
-        let tier_count = [self.tried_hot, self.tried_warm, self.tried_cold]
-            .iter()
-            .filter(|&&x| x)
-            .count() as f32;
-
-        if tier_count > 0.0 {
-            elapsed_ns / tier_count
-        } else {
-            0.0
-        }
-    }
-}
-
-/// Decision about where to place a value in the cache hierarchy
-#[derive(Debug)]
-pub struct PlacementDecision {
-    pub primary_tier: CacheTier,
-    pub replication_tiers: Vec<CacheTier>,
-    pub confidence: f32,
-}
+// Removed re-export to eliminate type identity conflicts - use canonical imports instead
 
 /// Characteristics of a cached value for placement decisions
 #[derive(Debug)]
@@ -195,14 +112,3 @@ pub enum StatisticsOperation {
     Report,
 }
 
-impl AccessPath {
-    /// Create new access path tracker
-    pub fn new() -> Self {
-        Self {
-            tried_hot: false,
-            tried_warm: false,
-            tried_cold: false,
-            start_time: Instant::now(),
-        }
-    }
-}

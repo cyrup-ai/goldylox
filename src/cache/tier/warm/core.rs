@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
+use log;
 
 // Removed unused import super::traits
 use crate::cache::types::{timestamp_nanos, *};
 use super::access_tracking::ConcurrentAccessTracker;
-use super::data_structures::{MaintenanceTask, WarmTierConfig};
+use super::data_structures::MaintenanceTask;
+use super::config::WarmTierConfig;
 use super::error::WarmTierInitError;
 use super::eviction::ConcurrentEvictionPolicy;
 use super::memory_monitor_enum::MemoryMonitorImpl;
@@ -24,7 +26,7 @@ use crate::cache::traits::types_and_enums::{CompressionHint, TierLocation, Volat
 use crate::cache::traits::AccessType;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::results::CacheOperationError;
-use crate::cache::tier::warm::timing::PrecisionTimer;
+use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 /// Lock-free warm tier cache with concurrent access optimization
@@ -113,6 +115,7 @@ pub struct WarmCacheEntry<V: CacheValue> {
     /// Entry metadata with atomic fields
     pub metadata: WarmEntryMetadata,
     /// Creation timestamp
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub created_at: Instant,
     /// Entry generation for consistency
     pub generation: u64,
@@ -314,9 +317,8 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     pub fn new(config: WarmTierConfig) -> Result<Self, WarmTierInitError> {
         let (maintenance_tx, maintenance_rx) = crossbeam_channel::unbounded();
 
-        // Use existing fallible constructor with consistent memory limit from config
-        let memory_monitor = MemoryMonitorImpl::new_real(config.max_memory_bytes)
-            .map_err(|e| WarmTierInitError::MemoryMonitorCreation(e))?;
+        // Create memory monitor - cannot fail
+        let memory_monitor = MemoryMonitorImpl::new(config.max_memory_bytes);
 
         Ok(Self {
             storage: SkipMap::new(),
@@ -331,22 +333,6 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
         })
     }
 
-    /// Create warm tier without memory monitoring (fallback mode)
-    pub fn new_without_monitor(config: WarmTierConfig) -> Result<Self, WarmTierInitError> {
-        let (maintenance_tx, maintenance_rx) = crossbeam_channel::unbounded();
-
-        Ok(Self {
-            storage: SkipMap::new(),
-            access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: ConcurrentEvictionPolicy::new(),
-            stats: AtomicTierStats::new(),
-            config,
-            memory_monitor: MemoryMonitorImpl::new_noop(), // No-op implementation
-            maintenance_tx,
-            maintenance_rx,
-            generation_counter: AtomicU64::new(1),
-        })
-    }
 
     /// Try to create warm tier with memory monitor (internal method for retry logic)
     pub fn try_new_with_monitor(config: WarmTierConfig) -> Result<Self, WarmTierInitError> {
@@ -520,7 +506,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
             } else {
                 // Log error but continue operation - negative size shouldn't happen
                 // but we handle it gracefully if it does
-                eprintln!(
+                log::warn!(
                     "Warning: Invalid entry size for deallocation: {}",
                     entry_size
                 );
@@ -823,37 +809,49 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
     }
 
     /// Get current alerts for memory pressure, performance issues, etc.
-    pub fn get_alerts(&self) -> Vec<String> {
+    pub fn get_alerts(&self) -> Vec<super::global_api::CacheAlert> {
         let mut alerts = Vec::new();
 
         // Check memory pressure
         let pressure = self.memory_monitor.get_pressure();
         if pressure > 0.9 {
-            alerts.push(format!(
-                "Critical memory pressure: {:.1}%",
-                pressure * 100.0
-            ));
+            alerts.push(super::global_api::CacheAlert {
+                message: format!(
+                    "Critical memory pressure: {:.1}%",
+                    pressure * 100.0
+                ),
+                severity: super::global_api::AlertSeverity::Critical,
+            });
         } else if pressure > 0.75 {
-            alerts.push(format!("High memory pressure: {:.1}%", pressure * 100.0));
+            alerts.push(super::global_api::CacheAlert {
+                message: format!("High memory pressure: {:.1}%", pressure * 100.0),
+                severity: super::global_api::AlertSeverity::Warning,
+            });
         }
 
         // Check cache efficiency
         let stats = self.stats.snapshot();
         if stats.hit_rate < 0.5 {
-            alerts.push(format!(
-                "Low cache hit rate: {:.1}%",
-                stats.hit_rate * 100.0
-            ));
+            alerts.push(super::global_api::CacheAlert {
+                message: format!(
+                    "Low cache hit rate: {:.1}%",
+                    stats.hit_rate * 100.0
+                ),
+                severity: super::global_api::AlertSeverity::Warning,
+            });
         }
 
         // Check entry count vs capacity
         let entry_count = self.storage.len();
         let max_entries = self.config.max_entries;
         if entry_count as f64 / max_entries as f64 > 0.9 {
-            alerts.push(format!(
-                "Cache nearly full: {}/{} entries",
-                entry_count, max_entries
-            ));
+            alerts.push(super::global_api::CacheAlert {
+                message: format!(
+                    "Cache nearly full: {}/{} entries",
+                    entry_count, max_entries
+                ),
+                severity: super::global_api::AlertSeverity::Warning,
+            });
         }
 
         alerts

@@ -7,6 +7,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use log;
+
 use super::types::{
     AlertConfig, AlertEvent, AlertEventType, AlertSeverity, AlertThresholds, AlertType,
     PerformanceAlert, PerformanceSnapshot,
@@ -295,7 +297,7 @@ impl AlertSystem {
 
     fn send_notification(&self, alert: &PerformanceAlert) {
         // In a real implementation, this would send notifications via email, Slack, etc.
-        println!("ALERT: {:?} - {}", alert.severity, alert.message);
+        log::warn!("ALERT: {:?} - {}", alert.severity, alert.message);
     }
 
     fn trim_alert_history(&mut self) {

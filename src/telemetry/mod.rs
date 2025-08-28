@@ -13,9 +13,13 @@
 
 // Import core types - use specific imports to avoid conflicts
 pub use crate::cache::types::core_types::{
-    timestamp_nanos, BatchOperation, BatchRequest, BatchResult, CacheEntry, CacheResult,
-    PrecisionTimer, ReadGuard, TierStatistics, WriteGuard,
+    timestamp_nanos, BatchOperation, BatchRequest, BatchResult, CacheResult,
 };
+use crate::cache::types::statistics::tier_stats::TierStatistics;
+// PrecisionTimer available from crate::cache::types::performance::timer::PrecisionTimer when needed
+// Import canonical CacheEntry from traits module
+pub use crate::cache::traits::cache_entry::CacheEntry;
+
 
 // Module declarations for comprehensive telemetry functionality
 pub mod alert_system;

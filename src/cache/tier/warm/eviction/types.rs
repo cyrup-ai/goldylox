@@ -9,27 +9,48 @@ use crossbeam_utils::atomic::AtomicCell;
 
 pub use crate::cache::traits::{AccessType, EvictionReason};
 
-/// Eviction policy types for cache management
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Eviction policy types for cache management - CANONICAL IMPLEMENTATION
+/// Consolidated "best of best" with all unique features from duplicates
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EvictionPolicyType {
     /// Least Recently Used policy
+    #[serde(rename = "lru")]
     Lru,
     /// Least Frequently Used policy  
+    #[serde(rename = "lfu")]
     Lfu,
     /// Adaptive Replacement Cache policy
+    #[serde(rename = "arc")]
     Arc,
     /// Time-based TTL eviction
+    #[serde(rename = "ttl")]
     Ttl,
     /// Adaptive policy that switches based on performance
+    #[serde(rename = "adaptive")]
     Adaptive,
     /// Random eviction (for testing/fallback)
+    #[serde(rename = "random")]
     Random,
     /// Size-based eviction for memory pressure
+    #[serde(rename = "size_based")]
     SizeBased,
     /// Cost-aware eviction considering computation cost
+    #[serde(rename = "cost_aware")]
     CostAware,
     /// Machine learning-based eviction
+    #[serde(rename = "machine_learning")]
     MachineLearning,
+    
+    // BEST OF BEST: Unique features from config EvictionPolicy
+    /// First In, First Out - simple queue-based eviction
+    #[serde(rename = "fifo")]
+    Fifo,
+    /// Clock algorithm (second-chance FIFO)
+    #[serde(rename = "clock")]
+    Clock,
+    /// LRU2 - improved LRU with two-level history
+    #[serde(rename = "lru2")]
+    Lru2,
 }
 
 /// Eviction policy performance metrics
@@ -176,24 +197,17 @@ impl Default for MlStats {
     }
 }
 
-/// Eviction candidate with score
-#[derive(Debug, Clone)]
-pub struct EvictionCandidate<K> {
-    /// Cache key
-    pub key: K,
-    /// Eviction score (higher = more likely to evict)
-    pub score: f64,
-    /// Reason for eviction
-    pub reason: EvictionReason,
-}
+// EvictionCandidate moved to canonical location: crate::cache::types::eviction::candidate::EvictionCandidate
+pub use crate::cache::types::eviction::candidate::EvictionCandidate;
 
-// EvictionReason moved to canonical location: crate::cache::traits::types_and_enums
-
-impl<K> EvictionCandidate<K> {
-    /// Create new eviction candidate
-    pub fn new(key: K, score: f64, reason: EvictionReason) -> Self {
-        Self { key, score, reason }
-    }
+/// Warm tier specific constructor alias
+pub fn create_warm_tier_candidate<K: crate::cache::traits::CacheKey>(
+    key: K, 
+    score: f64, 
+    reason: crate::cache::traits::types_and_enums::EvictionReason
+) -> EvictionCandidate<K, ()> {
+    use crate::cache::types::eviction::candidate::SelectionReason;
+    EvictionCandidate::simple(key, score, SelectionReason::LeastRecentlyUsed)
 }
 
 /// Eviction policy trait
@@ -223,26 +237,5 @@ pub trait EvictionPolicyFactory<K> {
     fn create_policy(&self, config: &EvictionConfig) -> Box<dyn EvictionPolicy<K>>;
 }
 
-/// Eviction policy configuration
-#[derive(Debug, Clone)]
-pub struct EvictionConfig {
-    /// Maximum cache size
-    pub max_size: u64,
-    /// Adaptation enabled
-    pub adaptive: bool,
-    /// Machine learning enabled
-    pub ml_enabled: bool,
-    /// Statistics collection enabled
-    pub stats_enabled: bool,
-}
-
-impl Default for EvictionConfig {
-    fn default() -> Self {
-        Self {
-            max_size: 1024,
-            adaptive: true,
-            ml_enabled: false,
-            stats_enabled: true,
-        }
-    }
-}
+/// Re-export the canonical EvictionConfig from warm tier config module
+pub use crate::cache::tier::warm::config::EvictionConfig;

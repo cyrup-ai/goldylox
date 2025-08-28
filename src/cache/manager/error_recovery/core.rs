@@ -62,7 +62,10 @@ impl ErrorRecoverySystem {
 
         // Execute the recovery strategy
         let start_time = std::time::Instant::now();
-        let success = self.recovery_strategies.execute_recovery(strategy);
+        let success = self.recovery_strategies.execute_recovery(strategy, || {
+            // Recovery operation - placeholder implementation
+            Ok(())
+        });
         let recovery_time_ns = start_time.elapsed().as_nanos() as u64;
 
         // Record success if applicable

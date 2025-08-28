@@ -8,6 +8,8 @@ use std::fs::File;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 use dashmap::DashMap;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -15,7 +17,9 @@ use crossbeam_utils::atomic::AtomicCell;
 use memmap2::MmapMut;
 
 use crate::cache::config::ColdTierConfig;
+use crate::cache::tier::cold::sync::SyncStatsSnapshot;
 use crate::cache::traits::*;
+use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
 
 /// Binary format constants for cache value serialization
 /// These constants define a stable, versioned binary format for persistent storage
@@ -59,6 +63,8 @@ pub struct PersistentColdTier<K: CacheKey, V: CacheValue> {
     pub compaction_system: CompactionSystem,
     /// Atomic statistics
     pub stats: AtomicTierStats,
+    /// Error tracking statistics
+    pub error_stats: ErrorStatistics,
     /// Configuration
     pub config: ColdTierConfig,
     /// File synchronization state
@@ -135,6 +141,8 @@ pub struct CompactionSystem {
     pub last_compaction_ns: AtomicU64,
     /// Compaction thread handle
     pub compaction_handle: Option<std::thread::JoinHandle<()>>,
+    /// Last checkpoint snapshot
+    pub last_checkpoint: Option<SyncStatsSnapshot>,
 }
 
 /// File synchronization state for crash safety
@@ -313,30 +321,4 @@ pub struct CompactionState {
     pub bytes_reclaimed: AtomicU64,
 }
 
-/// Atomic tier statistics for thread-safe access
-#[derive(Debug)]
-pub struct AtomicTierStats {
-    /// Total entries count
-    pub entry_count: AtomicU64,
-    /// Total storage size in bytes
-    pub storage_size: AtomicU64,
-    /// Cache hit count
-    pub hit_count: AtomicU64,
-    /// Cache miss count
-    pub miss_count: AtomicU64,
-    /// Last access timestamp
-    pub last_access_ns: AtomicU64,
-}
-
-impl AtomicTierStats {
-    /// Create new atomic tier statistics
-    pub fn new() -> Self {
-        Self {
-            entry_count: AtomicU64::new(0),
-            storage_size: AtomicU64::new(0),
-            hit_count: AtomicU64::new(0),
-            miss_count: AtomicU64::new(0),
-            last_access_ns: AtomicU64::new(0),
-        }
-    }
-}
+// AtomicTierStats moved to canonical location: crate::cache::types::statistics::atomic_stats::AtomicTierStats

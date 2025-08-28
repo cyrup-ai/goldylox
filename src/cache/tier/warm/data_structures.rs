@@ -4,8 +4,8 @@
 //! including configuration, metrics, coordination primitives, maintenance tasks,
 //! and timing utilities. The implementation is decomposed into focused submodules.
 
-// Re-export all types from other modules in the warm_tier directory
-pub use super::config::*;
+// Removed problematic re-export to eliminate type identity conflicts
+// Use direct import: crate::cache::tier::warm::config::{WarmTierConfig, EvictionConfig, ...}
 // Re-export atomic primitives
 pub use super::coordination::atomic_primitives;
 pub use super::coordination::*;

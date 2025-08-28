@@ -121,8 +121,18 @@ impl ErrorStatistics {
     /// Update mean time to recovery
     #[inline]
     pub fn update_mttr(&self, recovery_time_ns: u64) {
-        // Simplified MTTR calculation - in production would use exponential moving average
-        self.mttr_ns.store(recovery_time_ns, Ordering::Relaxed);
+        // Use exponential moving average for MTTR calculation
+        const ALPHA: f64 = 0.1; // EMA smoothing factor
+        
+        let current_mttr = self.mttr_ns.load(Ordering::Relaxed);
+        let new_mttr = if current_mttr == 0 {
+            recovery_time_ns
+        } else {
+            // Exponential moving average: new = α * current + (1-α) * old
+            ((ALPHA * recovery_time_ns as f64) + ((1.0 - ALPHA) * current_mttr as f64)) as u64
+        };
+        
+        self.mttr_ns.store(new_mttr, Ordering::Relaxed);
     }
 
     /// Get error rate for specific error type

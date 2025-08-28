@@ -211,6 +211,10 @@ pub struct PatternMatchingStats {
     pub avg_confidence: AtomicCell<f32>,
     /// Pattern detection accuracy
     pub detection_accuracy: AtomicCell<f32>,
+    /// Recent pattern matches count
+    pub recent_matches: AtomicU64,
+    /// Total patterns detected
+    pub total_patterns_detected: AtomicU64,
 }
 
 /// Error burst detection
@@ -304,6 +308,8 @@ impl PatternMatchingStats {
             successful_recoveries: AtomicU64::new(0),
             avg_confidence: AtomicCell::new(0.0),
             detection_accuracy: AtomicCell::new(0.0),
+            recent_matches: AtomicU64::new(0),
+            total_patterns_detected: AtomicU64::new(0),
         }
     }
 }

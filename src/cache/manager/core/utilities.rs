@@ -3,11 +3,11 @@
 //! This module contains helper methods, stub implementations, and utility
 //! functions used throughout the unified cache management system.
 
-use crate::cache::tier::cold::cold_get;
-use crate::cache::tier::hot::simd_hot_get;
+// Removed unused import
 use crate::cache::tier::warm::warm_get;
 use crate::cache::types::CacheTier;
-use super::types::{AccessPath, UnifiedCacheManager};
+use super::types::UnifiedCacheManager;
+use crate::cache::types::AccessPath;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::traits::entry_and_stats::TierStats;
 
@@ -15,7 +15,7 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Try to get value from hot tier
     pub fn try_hot_tier_get(&self, key: &K, access_path: &mut AccessPath) -> Option<V> {
         access_path.tried_hot = true;
-        simd_hot_get(key)
+        crate::cache::tier::hot::simd_hot_get::<K, V>(key)
     }
 
     /// Try to get value from warm tier
@@ -109,31 +109,4 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     }
 }
 
-/// High-precision timer for performance measurement
-pub struct PrecisionTimer {
-    start_time: std::time::Instant,
-}
-
-impl PrecisionTimer {
-    /// Start timing
-    pub fn start() -> Self {
-        Self {
-            start_time: std::time::Instant::now(),
-        }
-    }
-
-    /// Get elapsed time in nanoseconds
-    pub fn elapsed_ns(&self) -> u64 {
-        self.start_time.elapsed().as_nanos() as u64
-    }
-
-    /// Get elapsed time in microseconds
-    pub fn elapsed_us(&self) -> u64 {
-        self.start_time.elapsed().as_micros() as u64
-    }
-
-    /// Get elapsed time in milliseconds
-    pub fn elapsed_ms(&self) -> u64 {
-        self.start_time.elapsed().as_millis() as u64
-    }
-}
+// PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer

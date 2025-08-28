@@ -12,4 +12,4 @@ pub mod write_operations;
 
 // Re-export main types and functions
 pub use global_api::{coherent_read, coherent_write, init_coherence_controller};
-pub use types::CoherenceController;
+// Removed broken re-export - use direct import: crate::cache::coherence::data_structures::CoherenceController

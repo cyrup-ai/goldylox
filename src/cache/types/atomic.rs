@@ -11,9 +11,11 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Convert Instant to nanosecond timestamp
 #[inline(always)]
-pub fn timestamp_nanos(instant: Instant) -> u64 {
-    instant
-        .duration_since(Instant::now() - Duration::from_nanos(1_000_000_000))
+pub fn timestamp_nanos(_instant: Instant) -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::ZERO)
         .as_nanos() as u64
 }
 

@@ -203,6 +203,11 @@ impl MemoryManager {
             }
         }
     }
+
+    /// Get mutable GC coordinator reference for wiring
+    pub fn gc_coordinator_mut(&mut self) -> &mut GCCoordinator {
+        &mut self.gc_coordinator
+    }
 }
 
 /// Memory monitoring task processor using channel communication

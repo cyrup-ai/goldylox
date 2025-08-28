@@ -3,15 +3,21 @@
 //! This module implements the work-stealing maintenance scheduler
 //! with worker thread pool management and task distribution.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
+use log;
 
 use super::types::{
     MaintenanceConfig, MaintenanceScheduler, MaintenanceStats, MaintenanceTask, MaintenanceTaskType,
 };
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crate::cache::traits::{CacheKey, CacheValue};
 
-impl MaintenanceScheduler {
+impl<K: CacheKey, V: CacheValue> MaintenanceScheduler<K, V> 
+where
+    K: Clone + 'static,
+    V: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
     /// Create new maintenance scheduler with worker thread pool
     pub fn new(config: MaintenanceConfig) -> Result<Self, CacheOperationError> {
         let (task_sender, task_queue) = if config.queue_capacity > 0 {
@@ -61,6 +67,7 @@ impl MaintenanceScheduler {
             stats: MaintenanceStats::default(),
             shutdown_signal,
             shutdown_sender,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -147,7 +154,7 @@ impl MaintenanceScheduler {
         // Wait for all worker threads to complete
         for handle in self.worker_threads.into_iter() {
             if let Err(e) = handle.join() {
-                eprintln!("Worker thread panicked: {:?}", e);
+                log::error!("Worker thread panicked: {:?}", e);
             }
         }
 

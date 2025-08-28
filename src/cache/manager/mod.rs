@@ -10,13 +10,13 @@ pub mod performance;
 pub mod policy;
 pub mod statistics;
 pub mod strategy;
-pub mod tier_manager;
 
-// Re-export main types for convenience
-pub use core::{
-    AccessPath, BackgroundTask, MaintenanceOperation, PlacementDecision, PromotionDecision,
-    StatisticsOperation, UnifiedCacheManager, UnifiedStats, ValueCharacteristics,
-};
+// Removed re-exports to eliminate type identity conflicts - use canonical imports instead
+// Import directly from specific modules:
+// - Use crate::cache::types::AccessPath
+// - Use crate::cache::types::PlacementDecision  
+// - Use crate::cache::manager::core::types::UnifiedCacheManager
+// - etc.
 
 pub use background::{
     BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
@@ -36,12 +36,12 @@ pub use policy::{
     ReplacementPolicies, WritePolicy, WritePolicyManager,
 };
 pub use statistics::types::{
-    CachePerformanceMetrics, StatisticsConfig, TierStatistics, UnifiedCacheStatistics,
+    CachePerformanceMetrics, StatisticsConfig, UnifiedCacheStatistics,
 };
 pub use strategy::{
     CacheStrategy, CacheStrategySelector, StrategyMetrics, StrategySwitcher, StrategyThresholds,
 };
-pub use tier_manager::{
-    DemotionCriteria, PromotionCriteria, PromotionPriority, PromotionQueue, PromotionStatistics,
-    PromotionTask, PromotionTaskType, TierLocation, TierPromotionManager,
-};
+// Re-export TierStatistics from canonical location
+pub use crate::cache::types::statistics::tier_stats::TierStatistics;
+// TierPromotionManager moved to canonical location: crate::cache::tier::manager::TierPromotionManager
+// Use the sophisticated "best of best" implementation for all tier promotion needs

@@ -6,6 +6,7 @@
 use std::sync::atomic::AtomicU64;
 
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
+use crate::cache::types::statistics::tier_stats::TierStatistics;
 
 /// Unified cache statistics across all tiers
 #[derive(Debug)]
@@ -32,22 +33,7 @@ pub struct UnifiedCacheStatistics {
     pub cold_tier_stats: TierStatistics,
 }
 
-/// Cache tier statistics
-#[derive(Debug, Clone, Default)]
-pub struct TierStatistics {
-    /// Hit count for this tier
-    pub hits: u64,
-    /// Miss count for this tier
-    pub misses: u64,
-    /// Average access time for this tier
-    pub avg_access_time_ns: u64,
-    /// Memory usage for this tier
-    pub memory_usage_bytes: u64,
-    /// Entry count for this tier
-    pub entry_count: u64,
-    /// Hit rate (0.0 to 1.0)
-    pub hit_rate: f64,
-}
+// TierStatistics moved to canonical location: crate::cache::types::statistics::tier_stats::TierStatistics
 
 /// Overall cache performance metrics
 #[derive(Debug, Clone)]

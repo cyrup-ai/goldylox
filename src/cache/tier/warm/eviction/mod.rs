@@ -106,6 +106,10 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
             EvictionPolicyType::Random => self.select_random_candidates(count),
             EvictionPolicyType::SizeBased => self.select_size_based_candidates(count),
             EvictionPolicyType::CostAware => self.select_lru_candidates(count), // Fallback to LRU
+            // New "best of best" features - fallback to appropriate algorithms
+            EvictionPolicyType::Fifo => self.select_lru_candidates(count), // FIFO -> LRU fallback
+            EvictionPolicyType::Clock => self.select_lru_candidates(count), // Clock -> LRU fallback  
+            EvictionPolicyType::Lru2 => self.select_lru_candidates(count), // LRU2 -> LRU fallback
         }
     }
 

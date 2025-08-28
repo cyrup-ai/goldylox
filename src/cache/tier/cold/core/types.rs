@@ -5,25 +5,7 @@
 
 use std::time::Instant;
 
-/// Precision timer for performance measurement
-#[derive(Debug)]
-pub struct PrecisionTimer {
-    start: Instant,
-}
-
-impl PrecisionTimer {
-    /// Start a new precision timer
-    pub fn start() -> Self {
-        Self {
-            start: Instant::now(),
-        }
-    }
-
-    /// Get elapsed time in nanoseconds
-    pub fn elapsed_ns(&self) -> u64 {
-        self.start.elapsed().as_nanos() as u64
-    }
-}
+// PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
 /// Convert Instant to nanoseconds timestamp
 pub fn timestamp_nanos(instant: Instant) -> u64 {

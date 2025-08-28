@@ -6,14 +6,15 @@
 use std::any::TypeId;
 use std::sync::OnceLock;
 use crossbeam_channel::{unbounded, Sender, Receiver};
-use bincode::{config, encode_to_vec, decode_from_slice};
+use bincode::{config, encode_to_vec, decode_from_slice, Encode, Decode};
+use log::error;
 
-use self::data_structures::{ColdCacheKey, IndexEntry, PersistentColdTier};
+use self::data_structures::{ColdCacheKey, PersistentColdTier};
 use crate::cache::config::types::ColdTierConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-// Module declarations
+// Module declarations  
 pub mod compaction_system;
 pub mod compression;
 pub mod compression_engine;
@@ -103,15 +104,17 @@ impl ColdTierCoordinator {
         let sender = COLD_TIER_SERVICE_TX.get_or_init(|| {
             let (tx, rx) = unbounded();
             
-            std::thread::Builder::new()
+            if let Err(e) = std::thread::Builder::new()
                 .name("cold-tier-service".to_string())
                 .spawn(move || {
                     let service = ColdTierService {
                         receiver: rx,
                     };
                     service.run();
-                })
-                .expect("Failed to spawn cold tier service");
+                }) {
+                error!("Failed to spawn cold tier service: {:?}", e);
+                // Note: Cannot return error from closure, service will handle degraded mode
+            }
             
             tx
         });
@@ -119,6 +122,34 @@ impl ColdTierCoordinator {
         Ok(COORDINATOR.get_or_init(|| ColdTierCoordinator {
             sender: sender.clone(),
         }))
+    }
+    
+    /// Trigger maintenance operation (compaction, defragmentation, etc.)
+    pub fn trigger_maintenance<K: CacheKey + 'static, V: CacheValue + 'static>(
+        &self,
+        operation: &str,
+    ) -> Result<(), CacheOperationError> {
+        use self::data_structures::CompactionTask;
+        
+        self.execute_operation::<K, V, (), _>(|tier| {
+            match operation {
+                "compact" => {
+                    tier.compaction_system.schedule_compaction(
+                        CompactionTask::CompactData
+                    )?;
+                    Ok(())
+                }
+                "defragment" => {
+                    tier.compaction_system.schedule_compaction(
+                        CompactionTask::OptimizeCompression
+                    )?;
+                    Ok(())
+                }
+                _ => Err(CacheOperationError::invalid_argument(
+                    format!("Unknown maintenance operation: {}", operation)
+                ))
+            }
+        })
     }
 
     pub fn register<K: CacheKey + 'static, V: CacheValue + 'static>(
@@ -133,7 +164,7 @@ impl ColdTierCoordinator {
             type_key,
             tier: boxed_tier,
             response: tx,
-        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        }).map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
         
         rx.recv().map_err(|_| CacheOperationError::TimeoutError)?
     }
@@ -143,7 +174,7 @@ impl ColdTierCoordinator {
         K: CacheKey + 'static,
         V: CacheValue + 'static,
         F: FnOnce(&mut PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
-        R: bincode::Encode + bincode::Decode + 'static,
+        R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         let (tx, rx) = unbounded();
@@ -163,13 +194,13 @@ impl ColdTierCoordinator {
             type_key,
             op,
             response: tx,
-        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        }).map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
         
         let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
         
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
-            .map_err(|_| CacheOperationError::InternalError("Deserialization failed".to_string()))
+            .map_err(|_| CacheOperationError::internal_error("Deserialization failed"))
     }
 
     pub fn execute_read_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
@@ -177,7 +208,7 @@ impl ColdTierCoordinator {
         K: CacheKey + 'static,
         V: CacheValue + 'static,
         F: FnOnce(&PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
-        R: bincode::Encode + bincode::Decode + 'static,
+        R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         let (tx, rx) = unbounded();
@@ -197,13 +228,13 @@ impl ColdTierCoordinator {
             type_key,
             op,
             response: tx,
-        }).map_err(|_| CacheOperationError::InternalError("Service unavailable".to_string()))?;
+        }).map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
         
         let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
         
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
-            .map_err(|_| CacheOperationError::InternalError("Deserialization failed".to_string()))
+            .map_err(|_| CacheOperationError::internal_error("Deserialization failed"))
     }
 }
 
@@ -253,10 +284,25 @@ pub fn get_stats<K: CacheKey + 'static, V: CacheValue + 'static>(
 }
 
 /// Get frequently accessed keys for promotion analysis
-pub fn get_frequently_accessed_keys<K: CacheKey + Clone + 'static>(threshold: u32) -> Vec<K> {
-    // For now return empty - implementation would require type parameter V
-    // Real implementation would iterate metadata_index with proper type handling
-    Vec::new()
+pub fn get_frequently_accessed_keys<K: CacheKey + Clone + 'static, V: CacheValue + 'static>(threshold: u32) -> Vec<K> {
+    let coordinator = ColdTierCoordinator::get();
+    match coordinator {
+        Ok(coordinator) => {
+            coordinator.execute_read_operation::<K, V, Vec<K>, _>(|tier| {
+                let keys: Vec<K> = tier.metadata_index.iter()
+                    .filter_map(|(cold_key, entry)| {
+                        if entry.access_count >= threshold {
+                            Some(cold_key.to_cache_key())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                Ok(keys)
+            }).unwrap_or_else(|_| Vec::new())
+        },
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Check if entry should be promoted to warm tier

@@ -15,7 +15,7 @@ pub use crate::cache::traits::AccessType;
 
 /// Multi-algorithm cache replacement policies with machine learning adaptation
 #[derive(Debug)]
-pub struct ReplacementPolicies {
+pub struct ReplacementPolicies<K: crate::cache::traits::CacheKey> {
     /// Current active replacement algorithm
     pub active_algorithm: AtomicCell<ReplacementAlgorithm>,
     /// Algorithm performance metrics for adaptive selection
@@ -32,13 +32,13 @@ pub struct ReplacementPolicies {
     pub simd_score_buffer: [f32; 8],
     pub simd_weight_buffer: [f32; 8],
     /// Real LRU tracker implementation
-    pub lru_tracker: crate::cache::tier::warm::eviction::ConcurrentLruTracker<String>,
+    pub lru_tracker: crate::cache::tier::warm::eviction::ConcurrentLruTracker<K>,
     /// Real LFU tracker implementation  
-    pub lfu_tracker: crate::cache::tier::warm::eviction::ConcurrentLfuTracker<String>,
+    pub lfu_tracker: crate::cache::tier::warm::eviction::ConcurrentLfuTracker<K>,
     /// Real ARC eviction state implementation
-    pub arc_state: crate::cache::tier::warm::eviction::ArcEvictionState<String>,
+    pub arc_state: crate::cache::tier::warm::eviction::ArcEvictionState<K>,
     /// Real ML eviction policy implementation
-    pub ml_policy: crate::cache::tier::warm::eviction::MachineLearningEvictionPolicy<String>,
+    pub ml_policy: crate::cache::tier::warm::eviction::MachineLearningEvictionPolicy<K>,
 }
 
 /// Cache write policy manager with intelligent dirty tracking

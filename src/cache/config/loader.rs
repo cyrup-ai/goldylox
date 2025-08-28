@@ -252,7 +252,7 @@ impl ConfigLoader {
         }
 
         if let Ok(val) = std::env::var("CACHE_WARM_MAX_SIZE_BYTES") {
-            config.warm_tier.max_size_bytes =
+            config.warm_tier.max_memory_bytes =
                 val.parse().map_err(|_| ConfigError::InvalidFieldValue {
                     field: "CACHE_WARM_MAX_SIZE_BYTES".to_string(),
                     value: val,
@@ -269,12 +269,12 @@ impl ConfigLoader {
         }
 
         if let Ok(val) = std::env::var("CACHE_WARM_ENTRY_TIMEOUT_NS") {
-            config.warm_tier.entry_timeout_ns =
-                val.parse().map_err(|_| ConfigError::InvalidFieldValue {
-                    field: "CACHE_WARM_ENTRY_TIMEOUT_NS".to_string(),
-                    value: val,
-                    reason: "must be a valid positive integer".to_string(),
-                })?;
+            let timeout_ns: u64 = val.parse().map_err(|_| ConfigError::InvalidFieldValue {
+                field: "CACHE_WARM_ENTRY_TIMEOUT_NS".to_string(),
+                value: val,
+                reason: "must be a valid positive integer".to_string(),
+            })?;
+            config.warm_tier.default_ttl_sec = timeout_ns / 1_000_000_000;
         }
 
         // Cold tier overrides
@@ -437,9 +437,9 @@ impl ConfigLoader {
         }
 
         // Timeout validation
-        if config.warm_tier.enabled && config.warm_tier.entry_timeout_ns == 0 {
+        if config.warm_tier.enabled && config.warm_tier.default_ttl_sec == 0 {
             return Err(ConfigError::InvalidFieldValue {
-                field: "warm_tier.entry_timeout_ns".to_string(),
+                field: "warm_tier.default_ttl_sec".to_string(),
                 value: "0".to_string(),
                 reason: "must be greater than 0 when warm tier is enabled".to_string(),
             });
@@ -492,7 +492,7 @@ impl ConfigLoader {
 
         // Cross-tier consistency validation
         if config.hot_tier.enabled && config.warm_tier.enabled {
-            if config.hot_tier.max_entries >= config.warm_tier.max_entries {
+            if config.hot_tier.max_entries as usize >= config.warm_tier.max_entries {
                 return Err(ConfigError::ValidationError(
                     "Hot tier max_entries should be smaller than warm tier max_entries for optimal performance".to_string()
                 ));

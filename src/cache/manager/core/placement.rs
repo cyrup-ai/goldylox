@@ -8,7 +8,7 @@ use crate::cache::types::{AccessPath, CacheTier, PlacementDecision};
 use super::types::UnifiedCacheManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
-impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
+impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Analyze value characteristics and determine optimal placement
     pub fn analyze_placement(&self, _key: &K, _value: &V) -> PlacementDecision {
         PlacementDecision {
@@ -21,18 +21,34 @@ impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
     /// Consider promoting a value from one tier to another
     pub fn consider_promotion(
         &self,
-        _key: &K,
-        _current_tier: CacheTier,
-        _to: CacheTier,
-        _path: &AccessPath,
+        key: &K,
+        value: &V,
+        current_tier: CacheTier,
+        to_tier: CacheTier,
+        path: &AccessPath,
     ) -> Option<CacheTier> {
-        // Implementation would analyze access patterns and decide on promotion
-        None
+        let promotion_decision = self.tier_manager.should_promote(key, value, current_tier, to_tier, path);
+        if promotion_decision.should_promote {
+            let _ = self.tier_manager.schedule_promotion(key.clone(), current_tier, to_tier, promotion_decision.priority);
+            Some(to_tier)
+        } else {
+            None
+        }
     }
 
     /// Consider promotion across multiple tiers based on access patterns
-    pub fn consider_multi_tier_promotion(&self, _key: &K, _path: &AccessPath) {
-        // Implementation would analyze which tier would be optimal for promotion
+    pub fn consider_multi_tier_promotion(&self, key: &K, value: &V, path: &AccessPath) {
+        // Try to promote from cold to warm tier first
+        let cold_to_warm = self.tier_manager.should_promote(key, value, CacheTier::Cold, CacheTier::Warm, path);
+        if cold_to_warm.should_promote {
+            let _ = self.tier_manager.schedule_promotion(key.clone(), CacheTier::Cold, CacheTier::Warm, cold_to_warm.priority);
+        }
+        
+        // Then consider promotion from warm to hot tier if appropriate
+        let warm_to_hot = self.tier_manager.should_promote(key, value, CacheTier::Warm, CacheTier::Hot, path);
+        if warm_to_hot.should_promote {
+            let _ = self.tier_manager.schedule_promotion(key.clone(), CacheTier::Warm, CacheTier::Hot, warm_to_hot.priority);
+        }
     }
 
     /// Place value with replication across multiple tiers

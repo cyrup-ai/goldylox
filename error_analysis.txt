@@ -1,0 +1,1439 @@
+
+error[E0107]: missing generics for trait `Decode`
+   --> src/cache/tier/cold/mod.rs:182:21
+    |
+182 |         R: Encode + Decode + 'static,
+--
+
+error[E0107]: missing generics for trait `Decode`
+   --> src/cache/tier/cold/mod.rs:216:21
+    |
+216 |         R: Encode + Decode + 'static,
+--
+
+error[E0592]: duplicate definitions with name `new`
+   --> src/cache/manager/background/types.rs:257:5
+    |
+257 |     pub fn new(worker_id: u32) -> Self {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/coherence/protocol/global_api.rs:48:9
+    |
+ 46 |     let envelope = SerializationEnvelope::new_with_coherence(
+--
+
+error[E0308]: `match` arms have incompatible types
+   --> src/cache/coherence/protocol/global_api.rs:52:14
+    |
+ 49 |       ).map_err(|e| match e {
+--
+
+error[E0277]: the trait bound `K: Decode<()>` is not satisfied
+   --> src/cache/coherence/protocol/global_api.rs:144:49
+    |
+144 |     let envelope: SerializationEnvelope<K, V> = bincode::decode_from_slice(&data, bincode::config::standard())
+--
+
+error[E0277]: the trait bound `V: Decode<()>` is not satisfied
+   --> src/cache/coherence/protocol/global_api.rs:144:49
+    |
+144 |     let envelope: SerializationEnvelope<K, V> = bincode::decode_from_slice(&data, bincode::config::standard())
+--
+
+error[E0034]: multiple applicable items in scope
+   --> src/cache/coordinator/background_coordinator.rs:68:51
+    |
+ 68 |         let worker_state = BackgroundWorkerState::new(0);
+--
+
+error[E0277]: `BackgroundCoordinator<K, V>` doesn't implement `std::fmt::Debug`
+  --> src/cache/coordinator/unified_manager.rs:34:5
+   |
+23 | #[derive(Debug)]
+--
+
+error[E0277]: the trait bound `K: Default` is not satisfied
+   --> src/cache/coordinator/unified_manager.rs:58:55
+    |
+ 58 |         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
+--
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> src/cache/coordinator/unified_manager.rs:58:9
+   |
+58 |         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
+--
+
+error[E0308]: mismatched types
+   --> src/cache/coordinator/unified_manager.rs:64:30
+    |
+ 64 |             eviction_config: crate::cache::tier::warm::eviction::EvictionConfig::default(),
+--
+
+error[E0308]: mismatched types
+   --> src/cache/coordinator/unified_manager.rs:292:65
+    |
+292 |                 .should_promote(key, value, from_tier, to_tier, access_path);
+--
+
+error[E0599]: the method `as_ref` exists for reference `&V`, but its trait bounds were not satisfied
+   --> src/cache/coordinator/unified_manager.rs:323:57
+    |
+323 |             if access_pattern.frequency > 10.0 && value.as_ref().estimated_size() < 1024 {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/coordinator/unified_manager.rs:323:85
+    |
+ 45 | impl<K: CacheKey, V: CacheValue> UnifiedCacheManager<K, V> {
+--
+
+error[E0277]: `cache::eviction::prefetch::PrefetchPredictor<K>` doesn't implement `std::fmt::Debug`
+  --> src/cache/eviction/policy_engine.rs:32:5
+   |
+23 | #[derive(Debug)]
+--
+
+error[E0308]: mismatched types
+   --> src/cache/eviction/policy_engine.rs:149:33
+    |
+149 |                     confidence: p.confidence,
+--
+
+error[E0599]: no method named `as_bytes` found for reference `&K` in the current scope
+   --> src/cache/eviction/write_policies.rs:293:29
+    |
+293 |         let key_bytes = key.as_bytes();
+--
+
+error[E0277]: `K` doesn't implement `std::fmt::Display`
+   --> src/cache/eviction/write_policies.rs:382:69
+    |
+382 |                 log::error!("Failed to flush dirty entry {}: {:?}", dirty_entry.key, e);
+--
+
+error[E0277]: `K` doesn't implement `std::fmt::Display`
+   --> src/cache/eviction/write_policies.rs:434:21
+    |
+433 |                     "Failed to execute pending write for {}: {:?}",
+--
+
+error[E0277]: `cache::eviction::prefetch::PrefetchPredictor<K>` doesn't implement `std::fmt::Debug`
+  --> src/cache/eviction/mod.rs:87:5
+   |
+82 | #[derive(Debug)]
+--
+
+error[E0283]: type annotations needed
+  --> src/cache/manager/background/scheduler.rs:40:21
+   |
+40 |                     Self::worker_loop(
+--
+
+error[E0034]: multiple applicable items in scope
+   --> src/cache/manager/background/worker.rs:32:55
+    |
+ 32 |         let mut worker_state = BackgroundWorkerState::new(worker_id);
+--
+
+error[E0061]: this function takes 1 argument but 0 arguments were supplied
+   --> src/cache/manager/background/worker.rs:336:23
+    |
+336 |                 match ColdTierCache::<K, V>::validate_integrity() {
+--
+
+error[E0277]: the trait bound `K: Default` is not satisfied
+   --> src/cache/manager/core/initialization.rs:26:69
+    |
+ 26 |         crate::cache::tier::hot::thread_local::init_simd_hot_tier::<K, V>(hot_tier_config);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/core/initialization.rs:29:58
+    |
+ 29 |         crate::cache::tier::warm::init_warm_tier::<K, V>(config.warm_tier.clone())?;
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/core/initialization.rs:32:58
+    |
+ 32 |         crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.clone())?;
+--
+
+error[E0308]: mismatched types
+  --> src/cache/manager/core/initialization.rs:59:13
+   |
+59 |             strategy_selector,
+--
+
+error[E0308]: mismatched types
+  --> src/cache/manager/core/initialization.rs:60:13
+   |
+60 |             tier_manager,
+--
+
+error[E0599]: no method named `consider_promotion` found for struct `tier::manager::TierPromotionManager<K>` in the current scope
+  --> src/cache/manager/core/operations.rs:40:31
+   |
+40 |             self.tier_manager.consider_promotion::<K, V>(
+--
+
+error[E0599]: no method named `consider_multi_tier_promotion` found for struct `tier::manager::TierPromotionManager<K>` in the current scope
+   --> src/cache/manager/core/operations.rs:58:18
+    |
+ 57 | /             self.tier_manager
+--
+
+error[E0277]: `BackgroundCoordinator<K, V>` doesn't implement `std::fmt::Debug`
+  --> src/cache/manager/core/types.rs:31:5
+   |
+20 | #[derive(Debug)]
+--
+
+error[E0308]: mismatched types
+  --> src/cache/manager/core/types.rs:78:16
+   |
+78 |         if let Some(pattern) = analyzer.analyze_access_pattern(key) {
+--
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> src/cache/manager/error_recovery/core.rs:65:48
+   |
+65 |         let success = self.recovery_strategies.execute_recovery(strategy);
+--
+
+error[E0061]: this method takes 0 arguments but 2 arguments were supplied
+   --> src/cache/manager/error_recovery/core.rs:127:51
+    |
+127 |         let detector_health = self.error_detector.perform_health_check(
+--
+
+error[E0063]: missing fields `recent_matches` and `total_patterns_detected` in initializer of `PatternMatchingStats`
+   --> src/cache/manager/error_recovery/types.rs:306:9
+    |
+306 |         Self {
+--
+
+error[E0308]: mismatched types
+  --> src/cache/manager/policy/prefetch_prediction.rs:46:46
+   |
+46 |         let key_hash = current_key.fast_hash(&());
+--
+
+error[E0560]: struct `PrefetchTarget` has no field named `predicted_key_hash`
+  --> src/cache/manager/policy/prefetch_prediction.rs:65:21
+   |
+65 |                     predicted_key_hash: access_sequence.sequence_id + i as u64 + 1,
+--
+
+error[E0560]: struct `PrefetchTarget` has no field named `confidence_score`
+  --> src/cache/manager/policy/prefetch_prediction.rs:66:21
+   |
+66 |                     confidence_score: confidence as f32 / 1000.0,
+--
+
+error[E0560]: struct `PrefetchTarget` has no field named `prediction_type`
+  --> src/cache/manager/policy/prefetch_prediction.rs:67:21
+   |
+67 |                     prediction_type: crate::cache::manager::policy::types::PatternType::Sequential,
+--
+
+error[E0560]: struct `PrefetchTarget` has no field named `expected_access_time_ns`
+  --> src/cache/manager/policy/prefetch_prediction.rs:68:21
+   |
+68 |                     expected_access_time_ns: access_sequence.timestamp + (i as u64 * 1000000), // 1ms intervals
+--
+
+error[E0609]: no field `timestamp` on type `cache::manager::policy::types::AccessSequence`
+  --> src/cache/manager/policy/prefetch_prediction.rs:68:62
+   |
+68 |                     expected_access_time_ns: access_sequence.timestamp + (i as u64 * 1000000), // 1ms intervals
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:79:73
+    |
+ 79 |         if let Some(selected_warm_key) = self.lru_tracker.select_victim(&warm_candidates) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:80:18
+    |
+ 72 |     fn lru_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:93:73
+    |
+ 93 |         if let Some(selected_warm_key) = self.lfu_tracker.select_victim(&warm_candidates) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:94:18
+    |
+ 86 |     fn lfu_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:110:18
+    |
+100 |     fn arc_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:124:77
+    |
+124 |         if let Some(selected_warm_key) = self.ml_policy.select_ml_candidate(&warm_candidates, cache_pressure) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/manager/policy/replacement_policies.rs:125:18
+    |
+116 |     fn ml_select<K: CacheKey>(&self, candidates: &[K]) -> Option<K> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/allocation_manager.rs:150:72
+    |
+150 |                     let result = self.scheduler.submit_task(task_type, priority);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/allocation_manager.rs:151:43
+    |
+151 |                     let _ = response.send(result);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/allocation_manager.rs:155:43
+    |
+155 |                     let _ = response.send(result);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/allocation_manager.rs:294:58
+    |
+294 |             pressure_monitor: MemoryPressureMonitor::new(config)?,
+--
+
+error[E0599]: no method named `current_pressure` found for struct `MemoryPressureMonitor` in the current scope
+   --> src/cache/memory/allocation_manager.rs:485:34
+    |
+485 |         if self.pressure_monitor.current_pressure() > 0.95 {
+--
+
+error[E0599]: no variant or associated item named `circuit_breaker_open` found for enum `types_and_enums::CacheOperationError` in the current scope
+   --> src/cache/memory/allocation_manager.rs:502:49
+    |
+502 |                 return Err(CacheOperationError::circuit_breaker_open(
+--
+
+error[E0609]: no field `capacity` on type `AnalysisHistoryBuffer`
+   --> src/cache/memory/efficiency_analyzer.rs:326:46
+    |
+326 |         let capacity = self.analysis_history.capacity.load(Ordering::Acquire) as u64;
+--
+
+error[E0609]: no field `buffer` on type `&mut AnalysisHistoryBuffer`
+   --> src/cache/memory/efficiency_analyzer.rs:336:28
+    |
+336 |             if history_mut.buffer.len() >= capacity as usize {
+--
+
+error[E0609]: no field `buffer` on type `&mut AnalysisHistoryBuffer`
+   --> src/cache/memory/efficiency_analyzer.rs:337:29
+    |
+337 |                 history_mut.buffer[write_idx] = result;
+--
+
+error[E0609]: no field `buffer` on type `&mut AnalysisHistoryBuffer`
+   --> src/cache/memory/efficiency_analyzer.rs:339:29
+    |
+339 |                 history_mut.buffer.push(result);
+--
+
+error[E0599]: no method named `allocation_operations` found for reference `&AllocationStatistics` in the current scope
+   --> src/cache/memory/efficiency_analyzer.rs:369:42
+    |
+369 |         let total_ops = allocation_stats.allocation_operations();
+--
+
+error[E0599]: no method named `peak_allocation` found for reference `&AllocationStatistics` in the current scope
+   --> src/cache/memory/efficiency_analyzer.rs:383:48
+    |
+383 |         let peak_allocation = allocation_stats.peak_allocation();
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/gc_coordinator.rs:194:12
+    |
+194 |         if self.lock_free_queue.push(_task) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/pool_manager/cleanup_manager.rs:136:24
+    |
+135 |                 match response_rx.recv_timeout(Duration::from_millis(100)) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/memory/pool_manager/cleanup_manager.rs:199:24
+    |
+198 |                 match response_rx.recv_timeout(Duration::from_millis(100)) {
+--
+
+error[E0618]: expected function, found `types_and_enums::CacheOperationError`
+   --> src/cache/memory/pool_manager/cleanup_manager.rs:288:26
+    |
+288 |             .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+--
+
+error[E0599]: no variant or associated item named `timeout_error` found for enum `types_and_enums::CacheOperationError` in the current scope
+   --> src/cache/memory/pool_manager/cleanup_manager.rs:344:43
+    |
+344 |         .map_err(|_| CacheOperationError::timeout_error())?
+--
+
+error[E0599]: no variant or associated item named `timeout_error` found for enum `types_and_enums::CacheOperationError` in the current scope
+   --> src/cache/memory/pool_manager/cleanup_manager.rs:357:43
+    |
+357 |         .map_err(|_| CacheOperationError::timeout_error())?
+--
+
+error[E0277]: the trait bound `AtomicUsize: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/individual_pool.rs:23:5
+   |
+16 | #[derive(Debug, Clone)]
+--
+
+error[E0277]: the trait bound `AtomicUsize: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/individual_pool.rs:25:5
+   |
+16 | #[derive(Debug, Clone)]
+--
+
+error[E0277]: the trait bound `AtomicPtr<individual_pool::PoolEntry>: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/individual_pool.rs:27:5
+   |
+16 | #[derive(Debug, Clone)]
+--
+
+error[E0277]: the trait bound `PoolAllocationStats: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/individual_pool.rs:29:5
+   |
+16 | #[derive(Debug, Clone)]
+--
+
+error[E0277]: the trait bound `PoolStatistics: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/manager.rs:23:5
+   |
+14 | #[derive(Debug, Clone)]
+--
+
+error[E0277]: the trait bound `PoolConfiguration: Clone` is not satisfied
+  --> src/cache/memory/pool_manager/manager.rs:25:5
+   |
+14 | #[derive(Debug, Clone)]
+--
+
+error[E0599]: no variant or associated item named `Internal` found for enum `types_and_enums::CacheOperationError` in the current scope
+   --> src/cache/memory/mod.rs:234:47
+    |
+234 |             .map_err(|_| CacheOperationError::Internal("Failed to send monitoring task".into()))
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `timestamp_ns`
+   --> src/cache/tier/cold/compaction_system.rs:270:13
+    |
+270 |             timestamp_ns: now_ns,
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `entries_synced`
+   --> src/cache/tier/cold/compaction_system.rs:271:13
+    |
+271 |             entries_synced: self.compaction_stats.files_compacted.load(Ordering::Relaxed),
+--
+
+error[E0609]: no field `compaction_stats` on type `&cold::data_structures::RecoverySystem`
+   --> src/cache/tier/cold/compaction_system.rs:271:34
+    |
+271 |             entries_synced: self.compaction_stats.files_compacted.load(Ordering::Relaxed),
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `bytes_synced`
+   --> src/cache/tier/cold/compaction_system.rs:272:13
+    |
+272 |             bytes_synced: self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed),
+--
+
+error[E0609]: no field `compaction_stats` on type `&cold::data_structures::RecoverySystem`
+   --> src/cache/tier/cold/compaction_system.rs:272:32
+    |
+272 |             bytes_synced: self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed),
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `sync_duration_ns`
+   --> src/cache/tier/cold/compaction_system.rs:273:13
+    |
+273 |             sync_duration_ns: now_ns - self.last_checkpoint_ns.load(Ordering::Relaxed),
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `avg_entry_size`
+   --> src/cache/tier/cold/compaction_system.rs:274:13
+    |
+274 |             avg_entry_size: {
+--
+
+error[E0609]: no field `compaction_stats` on type `&cold::data_structures::RecoverySystem`
+   --> src/cache/tier/cold/compaction_system.rs:275:36
+    |
+275 |                 let entries = self.compaction_stats.files_compacted.load(Ordering::Relaxed);
+--
+
+error[E0609]: no field `compaction_stats` on type `&cold::data_structures::RecoverySystem`
+   --> src/cache/tier/cold/compaction_system.rs:276:34
+    |
+276 |                 let bytes = self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed);
+--
+
+error[E0560]: struct `SyncStatsSnapshot` has no field named `sync_throughput_mbps`
+   --> src/cache/tier/cold/compaction_system.rs:279:13
+    |
+279 |             sync_throughput_mbps: {
+--
+
+error[E0609]: no field `compaction_stats` on type `&cold::data_structures::RecoverySystem`
+   --> src/cache/tier/cold/compaction_system.rs:280:34
+    |
+280 |                 let bytes = self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed) as f64;
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/compression_engine.rs:436:13
+    |
+436 |         for (&algorithm, metrics) in &self.algorithm_metrics {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/compression_engine.rs:516:13
+    |
+516 |         for (&algorithm, metrics) in &self.algorithm_metrics {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/compression_engine.rs:531:13
+    |
+531 |         for (&algorithm, metrics) in &self.algorithm_metrics {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/compression_engine.rs:546:13
+    |
+546 |         for (&algorithm, metrics) in &self.algorithm_metrics {
+--
+
+error[E0277]: the trait bound `V: Decode<()>` is not satisfied
+   --> src/cache/tier/cold/core/operations.rs:56:64
+    |
+ 56 | ...                   match bincode::decode_from_slice::<V, _>(&decompressed_data, bincode::config::standard())
+--
+
+error[E0308]: mismatched types
+  --> src/cache/tier/cold/core/operations.rs:60:76
+   |
+60 | ...                   self.update_access_metadata(&cold_key, &index_entry);
+--
+
+error[E0277]: the trait bound `V: Encode` is not satisfied
+   --> src/cache/tier/cold/core/operations.rs:131:61
+    |
+131 |         let serialized_data = match bincode::encode_to_vec(&value, bincode::config::standard()) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/core/operations.rs:293:13
+    |
+293 |             entry_count,
+--
+
+error[E0560]: struct `cache::manager::statistics::types::TierStatistics` has no field named `memory_usage`
+   --> src/cache/tier/cold/core/operations.rs:294:13
+    |
+294 |             memory_usage,
+--
+
+error[E0560]: struct `cache::manager::statistics::types::TierStatistics` has no field named `ops_per_second`
+   --> src/cache/tier/cold/core/operations.rs:304:13
+    |
+304 |             ops_per_second,
+--
+
+error[E0560]: struct `cache::manager::statistics::types::TierStatistics` has no field named `error_rate`
+   --> src/cache/tier/cold/core/operations.rs:305:13
+    |
+305 |             error_rate,
+--
+
+error[E0277]: the trait bound `V: Decode<()>` is not satisfied
+   --> src/cache/tier/cold/core/storage.rs:44:56
+    |
+ 44 |         let cache_value = bincode::decode_from_slice::<V, _>(&decompressed_data, bincode::config::standard())
+--
+
+error[E0599]: no method named `needs_compaction` found for reference `&PersistentColdTier<K, V>` in the current scope
+  --> src/cache/tier/cold/core/utilities.rs:46:17
+   |
+46 |         if self.needs_compaction(fragmentation_threshold) {
+--
+
+error[E0599]: no method named `get_maintenance_scheduler` found for reference `&PersistentColdTier<K, V>` in the current scope
+  --> src/cache/tier/cold/core/utilities.rs:48:43
+   |
+48 |             if let Some(scheduler) = self.get_maintenance_scheduler() {
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/optimization.rs:152:14
+    |
+150 |           let index = cache
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/optimization.rs:157:50
+    |
+141 |         K: crate::cache::traits::CacheKey,
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/optimization.rs:187:33
+    |
+187 |         let index = cache.index.lock().map_err(|_| {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/optimization.rs:193:41
+    |
+178 |         K: crate::cache::traits::CacheKey,
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/optimization.rs:193:76
+    |
+178 |         K: crate::cache::traits::CacheKey,
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/optimization.rs:222:14
+    |
+220 |           let index = cache
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/optimization.rs:245:14
+    |
+243 |           let index = cache
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/optimization.rs:318:10
+    |
+316 |       let index = cache
+--
+
+error[E0277]: the trait bound `V: Encode` is not satisfied
+  --> src/cache/tier/cold/serialization/binary_format.rs:33:19
+   |
+33 |     encode_to_vec(value, config::standard()).map_err(|e| format!("Bincode serialization failed: {}", e))
+--
+
+error[E0277]: the trait bound `V: Decode<()>` is not satisfied
+   --> src/cache/tier/cold/serialization/binary_format.rs:47:5
+    |
+ 47 |     decode_from_slice(data, config::standard())
+--
+
+error[E0277]: the trait bound `V: Encode` is not satisfied
+  --> src/cache/tier/cold/serialization/binary_format.rs:71:41
+   |
+71 |     let serialized_data = encode_to_vec(value, config::standard()).map_err(|e| {
+--
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> src/cache/tier/cold/storage.rs:191:15
+    |
+191 |         match PersistentColdTier::get(key) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/storage.rs:192:13
+    |
+191 |         match PersistentColdTier::get(key) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/storage.rs:196:13
+    |
+191 |         match PersistentColdTier::get(key) {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/storage.rs:200:13
+    |
+191 |         match PersistentColdTier::get(key) {
+--
+
+error[E0277]: the trait bound `V: traits::core::CacheKey` is not satisfied
+   --> src/cache/tier/cold/storage.rs:212:22
+    |
+212 |         let result = PersistentColdTier::put(key, value);
+--
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+   --> src/cache/tier/cold/storage.rs:212:22
+    |
+212 |         let result = PersistentColdTier::put(key, value);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/storage.rs:216:9
+    |
+208 |     pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
+--
+
+error[E0624]: method `remove_expired_entries` is private
+   --> src/cache/tier/cold/storage.rs:245:39
+    |
+245 |           let removed_count = optimizer.remove_expired_entries(self)?;
+--
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+   --> src/cache/tier/cold/storage_manager.rs:202:39
+    |
+202 |             fragmentation_ratio: self.calculate_fragmentation_ratio(),
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/storage_manager.rs:202:34
+    |
+202 |             fragmentation_ratio: self.calculate_fragmentation_ratio(),
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/cold/storage_manager.rs:212:33
+    |
+212 |         let index = cache.index.lock()
+--
+
+error[E0599]: no variant or associated item named `ServiceInitializationFailed` found for enum `types_and_enums::CacheOperationError` in the current scope
+   --> src/cache/tier/cold/mod.rs:118:53
+    |
+118 |                     return Err(CacheOperationError::ServiceInitializationFailed(
+--
+
+error[E0277]: `?` couldn't convert the error to `types_and_enums::CacheOperationError`
+   --> src/cache/tier/cold/mod.rs:144:22
+    |
+142 |                       tier.compaction_system.schedule_compaction(
+--
+
+error[E0277]: `?` couldn't convert the error to `types_and_enums::CacheOperationError`
+   --> src/cache/tier/cold/mod.rs:150:22
+    |
+148 |                       tier.compaction_system.schedule_compaction(
+--
+
+error[E0277]: the trait bound `V: Encode` is not satisfied
+   --> src/cache/tier/cold/mod.rs:279:48
+    |
+279 |     coordinator.execute_read_operation::<K, V, Option<V>, _>(|tier| Ok(tier.get(key)))
+--
+
+error[E0277]: the trait bound `cache::types::statistics::tier_stats::TierStatistics: Encode` is not satisfied
+   --> src/cache/tier/cold/mod.rs:286:48
+    |
+286 |     coordinator.execute_read_operation::<K, V, crate::cache::types::TierStatistics, _>(|tier| {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/mod.rs:287:12
+    |
+287 |         Ok(tier.stats())
+--
+
+error[E0277]: the trait bound `K: Encode` is not satisfied
+   --> src/cache/tier/cold/mod.rs:296:56
+    |
+296 |             coordinator.execute_read_operation::<K, V, Vec<K>, _>(|tier| {
+--
+
+error[E0599]: no method named `iter` found for struct `cold::data_structures::MetadataIndex<K>` in the current scope
+   --> src/cache/tier/cold/mod.rs:297:56
+    |
+297 |                 let keys: Vec<K> = tier.metadata_index.iter()
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/mod.rs:299:50
+    |
+292 | pub fn get_frequently_accessed_keys<K: CacheKey + Clone + 'static, V: CacheValue + 'static>(threshold: u32) -> Vec<K> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/cold/mod.rs:338:57
+    |
+338 |     coordinator.execute_operation::<K, V, (), _>(|tier| tier.put(key, value))
+--
+
+error[E0308]: mismatched types
+  --> src/cache/tier/hot/simd_tier/management.rs:16:9
+   |
+15 |     pub fn stats(&self) -> TierStatistics {
+--
+
+error[E0308]: mismatched types
+  --> src/cache/tier/hot/simd_tier/operations.rs:67:28
+   |
+11 | impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
+--
+
+error[E0599]: no method named `merge` found for struct `cache::manager::statistics::types::TierStatistics` in the current scope
+   --> src/cache/tier/hot/thread_local.rs:429:30
+    |
+429 |             aggregated_stats.merge(worker_stats);
+--
+
+error[E0107]: method takes 1 generic argument but 2 generic arguments were supplied
+   --> src/cache/tier/manager.rs:138:18
+    |
+138 |             self.execute_promotion::<K, V>(&task, key)?;
+--
+
+error[E0277]: the trait bound `K: traits::core::CacheValue` is not satisfied
+   --> src/cache/tier/manager.rs:138:38
+    |
+138 |             self.execute_promotion::<K, V>(&task, key)?;
+--
+
+error[E0107]: method takes 1 generic argument but 2 generic arguments were supplied
+   --> src/cache/tier/manager.rs:160:26
+    |
+160 |         let value = self.read_from_tier::<K, V>(key, task.from_tier)?;
+--
+
+error[E0277]: the trait bound `K: traits::core::CacheValue` is not satisfied
+   --> src/cache/tier/manager.rs:160:43
+    |
+160 |         let value = self.read_from_tier::<K, V>(key, task.from_tier)?;
+--
+
+error[E0277]: the trait bound `K: traits::core::CacheValue` is not satisfied
+   --> src/cache/tier/manager.rs:164:45
+    |
+164 |             self.write_to_tier(key.clone(), cached_value, task.to_tier)?;
+--
+
+error[E0107]: method takes 1 generic argument but 2 generic arguments were supplied
+   --> src/cache/tier/manager.rs:167:26
+    |
+167 |             let _ = self.remove_from_tier::<K, V>(key, task.from_tier);
+--
+
+error[E0277]: the trait bound `K: traits::core::CacheValue` is not satisfied
+   --> src/cache/tier/manager.rs:167:45
+    |
+167 |             let _ = self.remove_from_tier::<K, V>(key, task.from_tier);
+--
+
+error[E0283]: type annotations needed
+   --> src/cache/tier/manager.rs:256:17
+    |
+256 |                 super::cold::remove_entry(key)
+--
+
+error[E0599]: no method named `frequency_estimate` found for reference `&cache::types::AccessPath` in the current scope
+   --> src/cache/tier/manager.rs:270:43
+    |
+270 |             access_frequency: access_path.frequency_estimate(),
+--
+
+error[E0599]: no method named `recent_access_count` found for reference `&cache::types::AccessPath` in the current scope
+   --> src/cache/tier/manager.rs:271:42
+    |
+271 |             recent_accesses: access_path.recent_access_count() as f32,
+--
+
+error[E0599]: no method named `temporal_locality_score` found for reference `&cache::types::AccessPath` in the current scope
+   --> src/cache/tier/manager.rs:272:44
+    |
+272 |             temporal_locality: access_path.temporal_locality_score(),
+--
+
+error[E0599]: no method named `spatial_locality_score` found for reference `&cache::types::AccessPath` in the current scope
+   --> src/cache/tier/manager.rs:273:43
+    |
+273 |             spatial_locality: access_path.spatial_locality_score(),
+--
+
+error[E0599]: no method named `average_access_delay` found for reference `&cache::types::AccessPath` in the current scope
+   --> src/cache/tier/manager.rs:275:39
+    |
+275 |             access_delay: access_path.average_access_delay(),
+--
+
+error[E0599]: no variant or associated item named `Burst` found for enum `TemporalPattern` in the current scope
+   --> src/cache/tier/warm/access_tracking/pattern_classifier.rs:87:30
+    |
+ 87 |             TemporalPattern::Burst
+--
+
+error[E0599]: no variant or associated item named `Burst` found for enum `TemporalPattern` in the current scope
+   --> src/cache/tier/warm/access_tracking/pattern_classifier.rs:124:30
+    |
+124 |             TemporalPattern::Burst => self.calculate_burst_confidence(intervals),
+--
+
+error[E0277]: the trait bound `WarmEntryMetadata: serde::_::_serde::Serialize` is not satisfied
+    --> src/cache/tier/warm/core.rs:109:38
+     |
+ 109 |   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `Instant: serde::_::_serde::Serialize` is not satisfied
+    --> src/cache/tier/warm/core.rs:109:38
+     |
+ 109 |   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `WarmEntryMetadata: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/tier/warm/core.rs:115:19
+     |
+ 115 |     pub metadata: WarmEntryMetadata,
+--
+
+error[E0277]: the trait bound `Instant: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/tier/warm/core.rs:117:21
+     |
+ 117 |     pub created_at: Instant,
+--
+
+error[E0277]: the trait bound `WarmEntryMetadata: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/tier/warm/core.rs:115:19
+     |
+ 115 |     pub metadata: WarmEntryMetadata,
+--
+
+error[E0277]: the trait bound `Instant: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/tier/warm/core.rs:117:21
+     |
+ 117 |     pub created_at: Instant,
+--
+
+error[E0277]: the trait bound `WarmEntryMetadata: serde::_::_serde::Deserialize<'_>` is not satisfied
+   --> src/cache/tier/warm/core.rs:109:56
+    |
+109 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `Instant: serde::_::_serde::Deserialize<'_>` is not satisfied
+   --> src/cache/tier/warm/core.rs:109:56
+    |
+109 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0599]: no function or associated item named `start` found for struct `warm::timing::PrecisionTimer` in the current scope
+   --> src/cache/tier/warm/core.rs:388:37
+    |
+388 |         let timer = PrecisionTimer::start();
+--
+
+error[E0599]: no function or associated item named `start` found for struct `warm::timing::PrecisionTimer` in the current scope
+   --> src/cache/tier/warm/core.rs:451:37
+    |
+451 |         let timer = PrecisionTimer::start();
+--
+
+error[E0609]: no field `entries` on type `&MachineLearningEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/ml/policy.rs:309:40
+    |
+309 |         for (_key, entry) in &mut self.entries {
+--
+
+error[E0609]: no field `model_parameters` on type `&MachineLearningEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/ml/policy.rs:329:14
+    |
+329 |         self.model_parameters.feature_weights = 
+--
+
+error[E0609]: no field `neural_ml` on type `&ConcurrentEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/mod.rs:227:36
+    |
+227 |         let neural_accuracy = self.neural_ml.get_metrics().accuracy;
+--
+
+error[E0609]: no field `linear_ml` on type `&ConcurrentEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/mod.rs:228:36
+    |
+228 |         let linear_accuracy = self.linear_ml.accuracy(); 
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/eviction/mod.rs:231:37
+    |
+ 39 | impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
+--
+
+error[E0609]: no field `arc_policy` on type `&ConcurrentEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/mod.rs:233:18
+    |
+233 |             self.arc_policy.select_candidates(count)
+--
+
+error[E0609]: no field `adaptive_lfu` on type `&ConcurrentEvictionPolicy<K>`
+   --> src/cache/tier/warm/eviction/mod.rs:243:31
+    |
+243 |         let candidates = self.adaptive_lfu.select_candidates_by_size(count);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/eviction/mod.rs:244:31
+    |
+ 39 | impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
+--
+
+error[E0599]: no method named `intelligent_fallback_selection_sized` found for reference `&ConcurrentEvictionPolicy<K>` in the current scope
+   --> src/cache/tier/warm/eviction/mod.rs:248:32
+    |
+248 |             result.extend(self.intelligent_fallback_selection_sized(remaining));
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/global_api.rs:151:47
+    |
+151 |                         let _ = response.send(result);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/global_api.rs:159:47
+    |
+159 |                         let _ = response.send(result);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/global_api.rs:163:47
+    |
+163 |                         let _ = response.send(result);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/global_api.rs:167:47
+    |
+167 |                         let _ = response.send(result);
+--
+
+error[E0599]: no method named `lock` found for struct `DashMap<K, V, S>` in the current scope
+   --> src/cache/tier/warm/global_api.rs:549:44
+    |
+549 |         let tiers = coordinator.warm_tiers.lock().ok();
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/monitoring/mod.rs:34:5
+    |
+ 33 | ) -> Result<MemoryPressureMonitor, CacheOperationError> {
+--
+
+error[E0308]: mismatched types
+   --> src/cache/tier/warm/monitoring/mod.rs:44:5
+    |
+ 43 | pub fn create_usage_history() -> Result<MemoryUsageHistory, CacheOperationError> {
+--
+
+error[E0277]: the trait bound `Instant: Encode` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:40
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: Encode` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:40
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: Decode<__Context>` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:57
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: Decode<__Context>` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:57
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: BorrowDecode<'_, __Context>` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:57
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: BorrowDecode<'_, __Context>` is not satisfied
+  --> src/cache/traits/cache_entry.rs:95:57
+   |
+95 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: serde::_::_serde::Serialize` is not satisfied
+    --> src/cache/traits/cache_entry.rs:94:38
+     |
+  94 |   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:112:24
+     |
+ 112 |     pub health_status: HealthStatus,
+--
+
+error[E0277]: the trait bound `Instant: Default` is not satisfied
+  --> src/cache/traits/cache_entry.rs:94:56
+   |
+94 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:112:24
+     |
+ 112 |     pub health_status: HealthStatus,
+--
+
+error[E0277]: the trait bound `cache_entry::HealthStatus: serde::_::_serde::Deserialize<'_>` is not satisfied
+  --> src/cache/traits/cache_entry.rs:94:56
+   |
+94 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `SerializationFormat: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:40
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:40
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `SerializationFormat: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:57
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:57
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `SerializationFormat: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:57
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:556:57
+    |
+556 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:40
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `TierInfo: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:40
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:57
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `TierInfo: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:57
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:57
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `TierInfo: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:608:57
+    |
+608 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: serde::_::_serde::Serialize` is not satisfied
+    --> src/cache/traits/cache_entry.rs:607:38
+     |
+ 607 |   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `TierInfo: serde::_::_serde::Serialize` is not satisfied
+    --> src/cache/traits/cache_entry.rs:607:38
+     |
+ 607 |   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:625:25
+     |
+ 625 |     pub access_tracker: AccessTracker,
+--
+
+error[E0277]: the trait bound `TierInfo: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:627:20
+     |
+ 627 |     pub tier_info: TierInfo,
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:625:25
+     |
+ 625 |     pub access_tracker: AccessTracker,
+--
+
+error[E0277]: the trait bound `TierInfo: serde::_::_serde::Deserialize<'_>` is not satisfied
+    --> src/cache/traits/cache_entry.rs:627:20
+     |
+ 627 |     pub tier_info: TierInfo,
+--
+
+error[E0277]: the trait bound `cache_entry::AccessTracker: serde::_::_serde::Deserialize<'_>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:607:56
+    |
+607 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `TierInfo: serde::_::_serde::Deserialize<'_>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:607:56
+    |
+607 | #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:40
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:40
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:57
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:57
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `supporting_types::CompressionAlgorithm: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:57
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:800:57
+    |
+800 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `Instant: Default` is not satisfied
+   --> src/cache/traits/cache_entry.rs:799:49
+    |
+799 | #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+--
+
+error[E0277]: the trait bound `types_and_enums::TierLocation: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:832:40
+    |
+832 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `types_and_enums::TierLocation: Decode<__Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:832:57
+    |
+832 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `types_and_enums::TierLocation: BorrowDecode<'_, __Context>` is not satisfied
+   --> src/cache/traits/cache_entry.rs:832:57
+    |
+832 | #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+--
+
+error[E0277]: the trait bound `K: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:921:55
+    |
+921 |         let serialized_data = bincode::encode_to_vec(&entry, bincode::config::standard())?;
+--
+
+error[E0277]: the trait bound `V: Encode` is not satisfied
+   --> src/cache/traits/cache_entry.rs:921:55
+    |
+921 |         let serialized_data = bincode::encode_to_vec(&entry, bincode::config::standard())?;
+--
+
+error[E0277]: the trait bound `V: std::marker::Copy` is not satisfied
+  --> src/cache/types/atomic.rs:62:5
+   |
+56 | #[derive(Debug)]
+--
+
+error[E0599]: the method `load` exists for struct `AtomicCell<V>`, but its trait bounds were not satisfied
+   --> src/cache/types/atomic.rs:108:20
+    |
+108 |         self.value.load()
+--
+
+error[E0308]: mismatched types
+  --> src/cache/worker/global_api.rs:75:5
+   |
+74 | ) -> WorkerStats {
+--
+
+error[E0277]: `BackgroundCoordinator<K, V>` doesn't implement `std::fmt::Debug`
+  --> src/cache/worker/task_coordination.rs:97:5
+   |
+94 | #[derive(Debug)]
+--
+
+error[E0599]: no method named `clone` found for struct `CommandQueueStats` in the current scope
+   --> src/cache/worker/task_coordination.rs:299:31
+    |
+ 80 | pub struct CommandQueueStats {
+--
+
+error[E0283]: type annotations needed
+   --> src/cache/worker/tier_transitions.rs:54:13
+    |
+ 54 |             cold::get_frequently_accessed_keys(COLD_TO_WARM_ACCESS_THRESHOLD);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/worker/mod.rs:50:56
+    |
+ 50 |         let processor = MemoryMonitoringProcessor::new(memory_manager);
+--
+
+error[E0308]: mismatched types
+   --> src/cache/worker/mod.rs:65:33
+    |
+ 65 |         Ok(TaskCoordinator::new(background_coordinator, max_command_queue_size))
+--
+
+error[E0308]: mismatched types
+  --> src/telemetry/trend_analyzer.rs:36:53
+   |
+36 |         self.advanced_trends.analyze_current_trends(history)
+--
+
+error[E0616]: field `regression_coefficients` of struct `trends::TrendAnalyzer` is private
+  --> src/telemetry/trend_analyzer.rs:71:34
+   |
+71 |             self.advanced_trends.regression_coefficients[0].load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0 + adjustment,
+--
+
+error[E0616]: field `regression_coefficients` of struct `trends::TrendAnalyzer` is private
+  --> src/telemetry/trend_analyzer.rs:72:34
+   |
+72 |             self.advanced_trends.regression_coefficients[1].load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0,
+--
+
+error[E0616]: field `regression_coefficients` of struct `trends::TrendAnalyzer` is private
+  --> src/telemetry/trend_analyzer.rs:73:34
+   |
+73 |             self.advanced_trends.regression_coefficients[2].load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0,
+--
+
+error[E0616]: field `regression_coefficients` of struct `trends::TrendAnalyzer` is private
+  --> src/telemetry/trend_analyzer.rs:74:34
+   |
+74 |             self.advanced_trends.regression_coefficients[3].load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0,
+--
+
+error[E0599]: no method named `get_performance_summary` found for reference `&Box<history::PerformanceHistory>` in the current scope
+   --> src/telemetry/trends.rs:159:35
+    |
+159 |             let summary = history.get_performance_summary();
+--
+
+error[E0599]: no method named `get_error_rate` found for reference `&ErrorRateTracker` in the current scope
+   --> src/telemetry/trends.rs:172:21
+    |
+172 |             tracker.get_error_rate()
+--
+
+error[E0599]: no method named `get_performance_summary` found for reference `&Box<history::PerformanceHistory>` in the current scope
+   --> src/telemetry/trends.rs:184:47
+    |
+184 |             let summary = performance_history.get_performance_summary();
+--
+
+error[E0596]: cannot borrow `self.prefetch_predictor` as mutable, as it is behind a `&` reference
+   --> src/cache/eviction/policy_engine.rs:191:9
+    |
+191 |         self.prefetch_predictor.record_access(&event);
+--
+
+error[E0596]: cannot borrow `self.prefetch_predictor` as mutable, as it is behind a `&` reference
+   --> src/cache/eviction/policy_engine.rs:253:9
+    |
+253 |         self.prefetch_predictor.execute_prefetch(requests)
+--
+
+error[E0596]: cannot borrow `self.prefetch_predictor` as mutable, as it is behind a `&` reference
+   --> src/cache/eviction/policy_engine.rs:265:9
+    |
+265 |         self.prefetch_predictor.shutdown()?;
+--
+
+error[E0596]: cannot borrow `self.prefetch_predictor` as mutable, as it is behind a `&` reference
+   --> src/cache/eviction/mod.rs:101:9
+    |
+101 |         self.prefetch_predictor.record_access(&event);
+--
+
+error[E0596]: cannot borrow `self.prefetch_predictor` as mutable, as it is behind a `&` reference
+   --> src/cache/eviction/mod.rs:137:9
+    |
+137 |         self.prefetch_predictor.shutdown()?;
+--
+
+error[E0596]: cannot borrow `self.command_queue` as mutable, as it is behind a `&` reference
+   --> src/cache/worker/task_coordination.rs:442:24
+    |
+442 |         let _cleared = self.command_queue.clear()?;

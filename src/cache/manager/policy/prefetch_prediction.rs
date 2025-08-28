@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicU32;
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
 use super::types::{
-    AccessSequence, LockFreeCircularBuffer, LockFreeQueue, PrefetchPredictor,
+    AccessSequence, LockFreeCircularBuffer, LockFreeQueue, PatternType, PrefetchPredictor,
     PrefetchSuccessTracker, PrefetchTarget,
 };
 use crate::cache::traits::core::CacheKey;
@@ -35,15 +35,22 @@ impl PrefetchPredictor {
 
     /// Predict prefetch targets based on current access
     #[inline]
-    pub fn predict_targets<K: CacheKey>(&self, _current_key: &K) -> Vec<PrefetchTarget> {
+    pub fn predict_targets<K: CacheKey>(&self, current_key: &K) -> Vec<PrefetchTarget> {
         // Connect to real ML-based prediction using existing infrastructure
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        
+        // Compute key hash using trait method
+        let hash_context = current_key.hash_context();
+        let key_hash = current_key.fast_hash(&hash_context);
+        
         let access_sequence = AccessSequence {
             sequence_id: self.success_tracker.predictions_made.load(std::sync::atomic::Ordering::Relaxed),
-            access_count: 1,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
+            keys: vec![key_hash],
+            timestamps: vec![timestamp],
+            pattern_type: PatternType::Random,
         };
         
         self.update_model(&access_sequence);
@@ -56,10 +63,10 @@ impl PrefetchPredictor {
             let confidence = self.confidence_scores[i].load(std::sync::atomic::Ordering::Relaxed);
             if confidence > 600 { // 60% confidence threshold
                 predictions.push(PrefetchTarget {
-                    predicted_key_hash: access_sequence.sequence_id + i as u64 + 1,
-                    confidence_score: confidence as f32 / 1000.0,
-                    prediction_type: crate::cache::manager::policy::types::PatternType::Sequential,
-                    expected_access_time_ns: access_sequence.timestamp + (i as u64 * 1000000), // 1ms intervals
+                    key_hash: access_sequence.sequence_id + i as u64 + 1,
+                    confidence: confidence as f32 / 1000.0,
+                    predicted_access_time: std::time::Instant::now() + std::time::Duration::from_millis(i as u64),
+                    priority: (confidence / 100) as u8, // Convert confidence to priority (0-10)
                 });
             }
         }

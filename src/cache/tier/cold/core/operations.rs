@@ -3,19 +3,21 @@
 //! This module implements the core cache operations including get, put, remove,
 //! and statistics retrieval for the persistent cold tier cache.
 
-use crate::cache::tier::cold::core::types::*;
+
 use crate::cache::tier::cold::compression_engine::CompressedData;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::types::results::CacheOperationError;
-use crate::cache::manager::TierStatistics;
-use super::types::{timestamp_nanos, PrecisionTimer};
+use crate::cache::types::statistics::tier_stats::TierStatistics;
+use super::types::timestamp_nanos;
+use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::manager::error_recovery::types::ErrorType;
 
 #[cfg(feature = "bincode")]
-use bincode::{config, decode_from_slice, encode_to_vec};
 
-impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned>
+
+impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()> + bincode::Encode>
     PersistentColdTier<K, V>
 {
     /// Get value from persistent storage
@@ -69,6 +71,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                                     Some(cache_value)
                                 }
                                 Err(_) => {
+                                    // Track deserialization error
+                                    self.error_stats.record_error(ErrorType::CorruptedData);
                                     let elapsed_ns = timer.elapsed_ns();
                                     self.stats
                                         .miss_count
@@ -81,6 +85,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                             }
                         }
                         Err(_) => {
+                            // Track decompression error
+                            self.error_stats.record_error(ErrorType::CorruptedData);
                             let elapsed_ns = timer.elapsed_ns();
                             self.stats
                                 .miss_count
@@ -93,6 +99,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                     }
                 }
                 Err(_) => {
+                    // Track IO error
+                    self.error_stats.record_error(ErrorType::DiskIOError);
                     let elapsed_ns = timer.elapsed_ns();
                     self.stats
                         .miss_count
@@ -124,6 +132,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         let serialized_data = match bincode::encode_to_vec(&value, bincode::config::standard()) {
             Ok(data) => data,
             Err(_) => {
+                // Track serialization error
+                self.error_stats.record_error(ErrorType::CorruptedData);
                 let elapsed_ns = timer.elapsed_ns();
                 self.stats
                     .miss_count
@@ -137,6 +147,9 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
             }
         };
 
+        // Track uncompressed size for compression ratio calculation
+        let uncompressed_size = serialized_data.len() as u64;
+
         // Select optimal compression algorithm
         let compression_algo = self.compression_engine.select_algorithm(&serialized_data);
 
@@ -147,6 +160,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         {
             Ok(data) => data,
             Err(_) => {
+                // Track compression error
+                self.error_stats.record_error(ErrorType::CorruptedData);
                 let elapsed_ns = timer.elapsed_ns();
                 self.stats
                     .miss_count
@@ -164,6 +179,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         let file_offset = match self.write_compressed_data(&compressed_data.data) {
             Ok(offset) => offset,
             Err(_) => {
+                // Track storage write error
+                self.error_stats.record_error(ErrorType::DiskIOError);
                 let elapsed_ns = timer.elapsed_ns();
                 self.stats
                     .miss_count
@@ -203,6 +220,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
             compressed_data.data.len() as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
+        // Track uncompressed size
+        self.stats.update_uncompressed_size(uncompressed_size as i64);
 
         let elapsed_ns = timer.elapsed_ns();
         self.stats
@@ -222,6 +241,9 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         if let Some(index_entry) = self.metadata_index.remove_entry(&cold_key) {
             // Mark space as free (actual cleanup happens during compaction)
             self.mark_space_free(index_entry.file_offset, index_entry.compressed_size);
+
+            // Track uncompressed size reduction
+            self.stats.update_uncompressed_size(-(index_entry.uncompressed_size as i64));
 
             // Update statistics
             self.stats
@@ -268,31 +290,24 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
             0.0
         };
 
-        // Calculate error_rate based on miss ratio as proxy for errors
-        // In a real implementation, this would track actual errors
+        // Calculate error_rate based on actual tracked errors
         let error_rate = if total_requests > 0 {
-            // Use miss rate as a proxy for error rate (misses indicate potential issues)
-            let miss_rate = miss_count as f64 / total_requests as f64;
-            // Scale down miss rate since not all misses are errors
-            miss_rate * 0.1 // 10% of misses considered as errors
+            let total_errors = self.error_stats.get_total_error_count();
+            total_errors as f64 / total_requests as f64
         } else {
             0.0
         };
 
-        TierStatistics {
-            entry_count,
-            memory_usage,
-            hit_rate: if total_requests > 0 {
-                hit_count as f64 / total_requests as f64
-            } else {
-                0.0
-            },
-            avg_access_time_ns: self
-                .stats
-                .last_access_ns
-                .load(std::sync::atomic::Ordering::Relaxed),
-            ops_per_second,
-            error_rate,
-        }
+        TierStatistics::new(
+            hit_count,      // hits: u64 - REAL hit count from atomic
+            miss_count,     // misses: u64 - REAL miss count from atomic  
+            entry_count,    // entry_count: usize - REAL entry count
+            memory_usage,   // memory_usage: usize - REAL memory usage
+            0,              // peak_memory: u64 - not tracked in cold tier
+            self.stats.total_uncompressed_bytes(), // total_size_bytes: u64 - REAL tracked uncompressed total
+            self.stats.last_access_ns.load(std::sync::atomic::Ordering::Relaxed), // avg_access_time_ns: u64 - REAL data
+            ops_per_second, // ops_per_second: f64 - CALCULATED from real data
+            self.error_stats.get_total_error_count(), // error_count: u64 - REAL error count
+        )
     }
 }

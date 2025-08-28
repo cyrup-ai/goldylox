@@ -14,15 +14,17 @@ pub mod validator;
 pub use builder::CacheConfigBuilder;
 pub use global::{
     get_global_config, get_global_config_version, init_global_config, is_global_config_initialized,
-    update_global_config, AtomicCacheConfig,
+    update_global_config,
 };
 pub use loader::ConfigLoader;
 pub use presets::ConfigPresets;
 pub use types::{
     AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig, ConfigError,
-    EvictionPolicy, HashFunction, HotTierConfig, MonitoringConfig, SkipMapConfig, WarmTierConfig,
-    WorkerConfig,
+    HashFunction, HotTierConfig, MonitoringConfig, WorkerConfig,
 };
+// Import consolidated eviction types from canonical location
+pub use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
+pub use crate::cache::tier::warm::config::{SkipMapConfig, WarmTierConfig};
 pub use validator::ConfigValidator;
 
 /// Initialize configuration with default settings

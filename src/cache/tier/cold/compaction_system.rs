@@ -8,10 +8,13 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::cache::traits::{CacheKey, CacheValue};
+
+use crate::cache::tier::cold::sync::SyncStatsSnapshot;
 use crossbeam_channel::{unbounded, Receiver};
 use crossbeam_utils::atomic::AtomicCell;
 
-use super::data_structures::{
+pub use super::data_structures::{
     CompactionState, CompactionSystem, CompactionTask, RecoverySystem, SyncState,
 };
 
@@ -25,6 +28,7 @@ impl CompactionSystem {
             compaction_state: CompactionState::new(),
             last_compaction_ns: AtomicU64::new(0),
             compaction_handle: None,
+            last_checkpoint: None,
         })
     }
 
@@ -121,7 +125,7 @@ impl CompactionSystem {
     }
 
     /// Rebuild index file
-    fn rebuild_index_file(state: &CompactionState) {
+    pub fn rebuild_index_file(state: &CompactionState) {
         // Simulate index rebuild progress
         for i in 0..50 {
             state.progress.store(i as f32 / 50.0);
@@ -130,7 +134,7 @@ impl CompactionSystem {
     }
 
     /// Cleanup expired entries
-    fn cleanup_expired_entries(state: &CompactionState) {
+    pub fn cleanup_expired_entries(state: &CompactionState) {
         // Simulate cleanup progress
         for i in 0..25 {
             state.progress.store(i as f32 / 25.0);
@@ -156,6 +160,12 @@ impl CompactionState {
             last_duration_ns: AtomicU64::new(0),
             bytes_reclaimed: AtomicU64::new(0),
         }
+    }
+}
+
+impl Default for CompactionState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -257,8 +267,30 @@ impl RecoverySystem {
 
         self.last_checkpoint_ns.store(now_ns, Ordering::Relaxed);
 
-        // In a real implementation, this would create a consistent snapshot
-        // of the cache state for recovery purposes
+        // Create a consistent snapshot using existing pattern
+        let snapshot = SyncStatsSnapshot {
+            timestamp_ns: now_ns,
+            entries_synced: self.compaction_stats.files_compacted.load(Ordering::Relaxed),
+            bytes_synced: self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed),
+            sync_duration_ns: now_ns - self.last_checkpoint_ns.load(Ordering::Relaxed),
+            avg_entry_size: {
+                let entries = self.compaction_stats.files_compacted.load(Ordering::Relaxed);
+                let bytes = self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed);
+                if entries > 0 { bytes / entries } else { 0 }
+            },
+            sync_throughput_mbps: {
+                let bytes = self.compaction_stats.bytes_reclaimed.load(Ordering::Relaxed) as f64;
+                let duration_s = (now_ns - self.last_checkpoint_ns.load(Ordering::Relaxed)) as f64 / 1e9;
+                if duration_s > 0.0 { (bytes / 1e6) / duration_s } else { 0.0 }
+            },
+        };
+        
+        // Store checkpoint for recovery
+        unsafe {
+            let self_mut = &self as *const _ as *mut CompactionSystem;
+            (*self_mut).last_checkpoint = Some(snapshot);
+        }
+        
         Ok(())
     }
 
@@ -274,21 +306,47 @@ impl RecoverySystem {
     }
 
     /// Recover from log
-    pub fn recover_from_log(&self) -> io::Result<Vec<String>> {
+    pub fn recover_from_log<K: CacheKey + serde::de::DeserializeOwned>(&self) -> io::Result<Vec<K>> {
         use std::io::{BufRead, BufReader};
 
-        let mut operations = Vec::new();
+        let mut recovered_keys = Vec::new();
 
         if let Ok(file) = File::open(&self.log_path) {
             let reader = BufReader::new(file);
             for line in reader.lines() {
                 if let Ok(line) = line {
-                    operations.push(line);
+                    if let Some(operation_data) = line.split_once(':') {
+                        let (_timestamp, operation) = operation_data;
+                        
+                        // Parse different operation types based on log format
+                        if let Some(key_start) = operation.find("key=") {
+                            let key_section = &operation[key_start + 4..];
+                            if let Some(key_end) = key_section.find(',').or_else(|| key_section.find(' ')) {
+                                let key_json = &key_section[..key_end];
+                                if let Ok(key) = serde_json::from_str::<K>(key_json) {
+                                    recovered_keys.push(key);
+                                }
+                            } else {
+                                // Key is at the end of the line
+                                if let Ok(key) = serde_json::from_str::<K>(key_section.trim()) {
+                                    recovered_keys.push(key);
+                                }
+                            }
+                        } else if operation.contains("PUT") || operation.contains("GET") || operation.contains("DELETE") {
+                            // Extract key from structured operation format
+                            let parts: Vec<&str> = operation.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                if let Ok(key) = serde_json::from_str::<K>(parts[1]) {
+                                    recovered_keys.push(key);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Ok(operations)
+        Ok(recovered_keys)
     }
 }
 

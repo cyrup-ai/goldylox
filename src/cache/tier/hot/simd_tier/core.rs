@@ -6,7 +6,7 @@
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use crate::cache::tier::hot::eviction::{EvictionEngine, EvictionPolicy};
+use crate::cache::tier::hot::eviction::EvictionEngine;
 use crate::cache::tier::hot::memory_pool::MemoryPool;
 use crate::cache::tier::hot::prefetch::PrefetchPredictor;
 use crate::cache::tier::hot::synchronization::{CoordinationState, SimdHashState, SimdLruTracker};
@@ -40,12 +40,19 @@ pub struct SimdHotTier<K: CacheKey + Default, V: CacheValue> {
 impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     /// Create new SIMD-optimized hot tier cache
     pub fn new(config: HotTierConfig) -> Self {
-        let eviction_config = crate::cache::tier::hot::eviction::EvictionConfig {
-            default_policy: EvictionPolicy::MachineLearning,
-            learning_enabled: true,
-            history_size: 1000,
-            adaptation_interval: Duration::from_secs(60),
+        let eviction_config = crate::cache::tier::warm::config::EvictionConfig {
+            primary_policy: crate::cache::tier::warm::eviction::types::EvictionPolicyType::Adaptive,
+            fallback_policy: crate::cache::tier::warm::eviction::types::EvictionPolicyType::Lru,
+            ml_enabled: true,
+            adaptive_switching: true,
+            history_buffer_size: 1000,
+            adaptation_interval_sec: 60,
             performance_threshold: 0.8,
+            hot_tier_overrides: Some(crate::cache::tier::warm::config::HotTierEvictionOverrides {
+                force_policy: Some(crate::cache::tier::warm::eviction::types::EvictionPolicyType::Adaptive),
+                batch_size_override: Some(16), // Smaller batches for hot tier
+            }),
+            ..Default::default()
         };
 
         let prefetch_config = crate::cache::tier::hot::prefetch::PrefetchConfig {

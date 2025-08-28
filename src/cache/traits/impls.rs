@@ -5,7 +5,6 @@
 
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use super::core::{CacheKey, CacheValue};
 use super::metadata::CacheValueMetadata;

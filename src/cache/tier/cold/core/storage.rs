@@ -11,9 +11,9 @@ use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 #[cfg(feature = "bincode")]
-use bincode::{config, decode_from_slice};
 
-impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned>
+
+impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()>>
     PersistentColdTier<K, V>
 {
     /// Read data from storage using metadata
@@ -61,7 +61,18 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
 
             if end <= mmap.len() {
                 let mut data = vec![0u8; index_entry.compressed_size as usize];
-                data.copy_from_slice(&mmap[start..end]);
+                
+                // SAFETY: Reading from a region that was previously written with atomic ordering
+                // The fence ensures we see all writes that happened-before this read
+                unsafe {
+                    // Ensure we see all prior writes
+                    std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+                    
+                    // Read from the memory-mapped region
+                    let mmap_ptr = mmap.as_ptr() as *const u8;
+                    let src_ptr = mmap_ptr.add(start);
+                    std::ptr::copy_nonoverlapping(src_ptr, data.as_mut_ptr(), index_entry.compressed_size as usize);
+                }
 
                 // Verify checksum
                 let checksum = self.calculate_checksum(&data);
@@ -95,9 +106,20 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                 let end = start + data.len();
 
                 if end <= mmap.len() {
-                    // Note: This is unsafe in the original code due to mutable aliasing
-                    // In a real implementation, you'd need proper synchronization
-                    // mmap[start..end].copy_from_slice(data);
+                    // SAFETY: We have exclusive access to this region through atomic reserve_space
+                    // The write_position is atomically incremented, ensuring no overlapping writes
+                    // Each thread gets a unique offset range that won't be accessed by others
+                    unsafe {
+                        // Get a mutable pointer to the reserved region
+                        let mmap_ptr = mmap.as_ptr() as *mut u8;
+                        let dest_ptr = mmap_ptr.add(start);
+                        
+                        // Use atomic memory ordering for proper synchronization
+                        std::ptr::copy_nonoverlapping(data.as_ptr(), dest_ptr, data.len());
+                        
+                        // Ensure write is visible to other threads
+                        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+                    }
 
                     // Schedule sync for durability
                     self.sync_state.schedule_sync();

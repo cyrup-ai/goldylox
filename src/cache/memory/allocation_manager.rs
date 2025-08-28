@@ -4,10 +4,9 @@
 //! statistics tracking and optimal pool selection for high-performance allocation.
 
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-use crossbeam_utils::CachePadded;
+use log;
 
 use super::pool_manager::MemoryPoolManager;
 use super::pressure_monitor::MemoryPressureMonitor;
@@ -17,8 +16,9 @@ use crate::cache::manager::error_recovery::core::ErrorRecoverySystem;
 use crate::cache::manager::error_recovery::types::{BackoffStrategy, ErrorType, RecoveryStrategy};
 use crate::cache::manager::background::types::{MaintenanceConfig, MaintenanceScheduler};
 use crate::cache::memory::efficiency_analyzer::MemoryEfficiencyAnalyzer;
-use crate::cache::memory::pool_manager::cleanup_manager::{PoolCleanupManager, EfficiencyRequest, MaintenanceRequest};
+use crate::cache::memory::pool_manager::cleanup_manager::{PoolCleanupManager, EfficiencyRequest, MaintenanceRequest, PoolCleanupRequest, trigger_defragmentation};
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crate::cache::traits::{CacheKey, CacheValue};
 use crossbeam_channel::{bounded, Receiver};
 
 /// Global allocation statistics module - no Arc needed
@@ -87,7 +87,7 @@ pub mod global_stats {
 
 /// Advanced memory manager with atomic allocation tracking
 #[derive(Debug)]
-pub struct AllocationManager {
+pub struct AllocationManager<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue> {
     /// Memory pool manager for efficient allocation
     pool_manager: MemoryPoolManager,
     /// Cleanup manager owned directly
@@ -96,6 +96,8 @@ pub struct AllocationManager {
     error_recovery: ErrorRecoverySystem,
     /// Memory pressure monitor for pressure-aware retries
     pressure_monitor: MemoryPressureMonitor,
+    /// Phantom data for generic parameters
+    _phantom: std::marker::PhantomData<(K, V)>,
 }
 
 /// Efficiency analysis worker
@@ -135,17 +137,22 @@ impl EfficiencyWorker {
 }
 
 /// Maintenance scheduler worker
-pub struct MaintenanceWorker {
+pub struct MaintenanceWorker<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue> {
     receiver: Receiver<MaintenanceRequest>,
-    scheduler: MaintenanceScheduler,
+    scheduler: MaintenanceScheduler<K, V>,
 }
 
-impl MaintenanceWorker {
+impl<K: CacheKey, V: CacheValue> MaintenanceWorker<K, V>
+where
+    K: Clone + 'static,
+    V: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
     pub fn run(mut self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
                 MaintenanceRequest::SubmitTask(task_type, priority, response) => {
-                    let result = self.scheduler.submit_task(task_type, priority);
+                    let result = self.scheduler.submit_task(task_type, priority as u16)
+                        .map_err(|_| crate::cache::traits::types_and_enums::CacheOperationError::MaintenanceError);
                     let _ = response.send(result);
                 }
                 MaintenanceRequest::SubmitUrgentTask(task_type, response) => {
@@ -167,7 +174,41 @@ impl MaintenanceWorker {
     }
 }
 
-impl AllocationManager {
+/// Pool cleanup worker that owns pools
+pub struct PoolCleanupWorker {
+    receiver: Receiver<PoolCleanupRequest>,
+    pool_manager: MemoryPoolManager,
+}
+
+impl PoolCleanupWorker {
+    pub fn run(self) {
+        while let Ok(request) = self.receiver.recv() {
+            match request {
+                    PoolCleanupRequest::EmergencyCleanup { response } => {
+                        let result = if self.pool_manager.try_emergency_cleanup() {
+                            // Get actual bytes freed from pools
+                            let small_freed = self.pool_manager.small_pool().current_utilization() 
+                                * self.pool_manager.small_pool().object_size();
+                            let medium_freed = self.pool_manager.medium_pool().current_utilization()
+                                * self.pool_manager.medium_pool().object_size();
+                            let large_freed = self.pool_manager.large_pool().current_utilization()
+                                * self.pool_manager.large_pool().object_size();
+                            Ok(small_freed + medium_freed + large_freed)
+                        } else {
+                            Ok(0)
+                        };
+                        let _ = response.send(result);
+                    }
+                    PoolCleanupRequest::TriggerDefragmentation { response } => {
+                        let result = trigger_defragmentation();
+                        let _ = response.send(result);
+                    }
+                }
+        }
+    }
+}
+
+impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
     /// Create new allocation manager with configuration
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
         // Create channels for background services
@@ -183,7 +224,7 @@ impl AllocationManager {
                 let analyzer = match MemoryEfficiencyAnalyzer::new(&config_clone) {
                     Ok(a) => a,
                     Err(e) => {
-                        eprintln!("Efficiency analyzer failed to start: {:?}", e);
+                        log::error!("Efficiency analyzer failed to start: {:?}", e);
                         return;
                     }
                 };
@@ -193,16 +234,16 @@ impl AllocationManager {
                 };
                 worker.run();
             })
-            .map_err(|e| CacheOperationError::InitializationFailed(e.to_string()))?;
+            .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
         
         // Spawn maintenance scheduler worker
         std::thread::Builder::new()
             .name("maintenance-scheduler".to_string())
             .spawn(move || {
-                let scheduler = match MaintenanceScheduler::new(MaintenanceConfig::default()) {
+                let scheduler = match MaintenanceScheduler::<K, V>::new(MaintenanceConfig::default()) {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("Maintenance scheduler failed to start: {:?}", e);
+                        log::error!("Maintenance scheduler failed to start: {:?}", e);
                         return;
                     }
                 };
@@ -212,7 +253,7 @@ impl AllocationManager {
                 };
                 worker.run();
             })
-            .map_err(|e| CacheOperationError::InitializationFailed(e.to_string()))?;
+            .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
         
         // Create cleanup manager with channels
         let cleanup_manager = PoolCleanupManager::new(
@@ -223,11 +264,35 @@ impl AllocationManager {
         // Create pool manager
         let pool_manager = MemoryPoolManager::new(config)?;
         
+        // Create pool cleanup channel
+        let (pool_cleanup_sender, pool_cleanup_receiver) = bounded::<PoolCleanupRequest>(256);
+
+        // Initialize global coordinator
+        use super::pool_manager::cleanup_manager::PoolCoordinator;
+        PoolCoordinator::initialize(pool_cleanup_sender)
+            .map_err(|e| CacheOperationError::initialization_failed(format!("Pool coordinator: {:?}", e)))?;
+
+        // Clone pool_manager for worker ownership
+        let worker_pool_manager = pool_manager.clone();
+
+        // Spawn pool cleanup worker
+        std::thread::Builder::new()
+            .name("pool-cleanup-worker".to_string())
+            .spawn(move || {
+                let worker = PoolCleanupWorker {
+                    receiver: pool_cleanup_receiver,
+                    pool_manager: worker_pool_manager,
+                };
+                worker.run();
+            })
+            .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
+        
         Ok(Self {
             pool_manager,
             cleanup_manager,
             error_recovery: ErrorRecoverySystem::new(),
             pressure_monitor: MemoryPressureMonitor::new(config)?,
+            _phantom: std::marker::PhantomData,
         })
     }
 

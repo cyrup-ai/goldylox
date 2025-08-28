@@ -4,7 +4,7 @@
 //! retry logic, graceful degradation, and proper error handling.
 
 use super::core::LockFreeWarmTier;
-use super::data_structures::WarmTierConfig;
+use super::config::WarmTierConfig;
 use super::error::{DegradationMode, RetryConfig, WarmTierInitError};
 
 /// Builder for warm tier cache with retry logic and graceful degradation

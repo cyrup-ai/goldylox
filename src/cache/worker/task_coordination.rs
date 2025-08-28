@@ -3,19 +3,19 @@
 //! This module provides safe coordination between async tasks and cache state,
 //! implementing patterns from bevy's CommandQueue for deferred mutations.
 
-use std::collections::VecDeque;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use crossbeam_channel::{bounded, Sender, Receiver, TryRecvError};
+use crossbeam_channel::{bounded, Sender, Receiver};
 
-use log::{warn, debug};
+use log::warn;
 use dashmap::DashMap;
 
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
 use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
-use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask};
+use crate::cache::manager::background::types::BackgroundTask;
 
 /// Command queue for safe cache mutations from async contexts
 #[derive(Debug)]
@@ -98,7 +98,7 @@ pub struct TaskCoordinator<K: CacheKey, V: CacheValue> {
     /// Command queue for safe mutations
     command_queue: CacheCommandQueue<K, V>,
     /// Active task tracking
-    active_tasks: DashMap<u64, TaskInfo>,
+    active_tasks: DashMap<u64, TaskInfo<K>>,
     /// Task ID generator
     next_task_id: AtomicU64,
     /// Coordination statistics
@@ -109,7 +109,7 @@ pub struct TaskCoordinator<K: CacheKey, V: CacheValue> {
 
 /// Information about active tasks
 #[derive(Debug, Clone)]
-pub struct TaskInfo {
+pub struct TaskInfo<K: CacheKey> {
     /// Task ID
     id: u64,
     /// Task type description
@@ -121,7 +121,7 @@ pub struct TaskInfo {
     /// Estimated completion time
     estimated_completion: Option<Instant>,
     /// Associated cache keys
-    keys: Vec<String>, // Serialized keys for tracking
+    keys: Vec<K>, // Generic keys for tracking
 }
 
 /// Coordinator statistics
@@ -215,7 +215,7 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
             // Execute command
             if let Err(e) = executor(command) {
                 // Log error but continue processing other commands
-                eprintln!("Command execution failed: {:?}", e);
+                warn!("Command execution failed: {:?}", e);
             }
 
             // Update statistics
@@ -333,17 +333,13 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
         let start_time = Instant::now();
 
         // Create task info
-        let task_info = TaskInfo {
+        let task_info = TaskInfo::<K> {
             id: task_id,
             task_type: task_type.clone(),
             priority,
             started_at: start_time,
             estimated_completion: None,
-            keys: keys
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("key_{}", i))
-                .collect(),
+            keys: keys,
         };
 
         // Track active task
@@ -368,7 +364,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
         let active_tasks = self.active_tasks.clone();
         let stats = self.stats.clone();
 
-        let future = async move {
+        let _future = async move {
             let result = operation(context);
 
             // Update statistics
@@ -415,7 +411,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
     }
 
     /// Get active task information
-    pub fn get_active_tasks(&self) -> Vec<TaskInfo> {
+    pub fn get_active_tasks(&self) -> Vec<TaskInfo<K>> {
         self.active_tasks
             .iter()
             .map(|entry| entry.value().clone())
@@ -435,7 +431,7 @@ impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
     }
 
     /// Shutdown coordinator gracefully
-    pub fn shutdown(&self) -> Result<(), CacheOperationError> {
+    pub fn shutdown(&mut self) -> Result<(), CacheOperationError> {
         self.shutdown.store(true, Ordering::Relaxed);
 
         // Clear command queue

@@ -6,8 +6,13 @@
 use arrayvec::ArrayString;
 
 use crate::cache::config::types::{
-    AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig, EvictionPolicy,
-    HashFunction, HotTierConfig, MonitoringConfig, SkipMapConfig, WarmTierConfig, WorkerConfig,
+    AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig,
+    HashFunction, HotTierConfig, MemoryConfig, MonitoringConfig, WorkerConfig,
+};
+use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
+use crate::cache::tier::warm::config::{
+    WarmTierConfig, SkipMapConfig, PressureConfig, EvictionConfig as WarmEvictionConfig,
+    TrackingConfig, BackgroundConfig, PerformanceConfig,
 };
 
 /// Cache configuration builder
@@ -26,27 +31,24 @@ impl CacheConfigBuilder {
                     max_entries: 128,
                     enabled: true,
                     hash_function: HashFunction::AHash,
-                    eviction_policy: EvictionPolicy::LRU,
+                    eviction_policy: EvictionPolicyType::Lru,
                     cache_line_size: 64,
                     prefetch_distance: 2,
                     _padding: [0; 5],
                 },
                 warm_tier: WarmTierConfig {
-                    max_entries: 8192,
-                    max_size_bytes: 256 * 1024 * 1024, // 256MB default
-                    entry_timeout_ns: 300_000_000_000,
                     enabled: true,
-                    skip_map: SkipMapConfig {
-                        max_level: 16,
-                        skip_probability_x1000: 500,
-                        node_pool_size: 1024,
-                        _padding: [0; 1],
-                    },
+                    max_memory_bytes: 256 * 1024 * 1024,
+                    max_entries: 8192,
+                    default_ttl_sec: 300, // Convert from nanoseconds
                     promotion_threshold: 3,
                     demotion_age_threshold_ns: 600_000_000_000,
-                    concurrency_level: 16,
-                    load_factor_threshold: 750,
-                    _padding: [0; 4],
+                    skip_map: SkipMapConfig::default(),
+                    pressure_thresholds: PressureConfig::default(),
+                    eviction_config: WarmEvictionConfig::default_const(),
+                    tracking_config: TrackingConfig::default(),
+                    background_config: BackgroundConfig::default(),
+                    performance_config: PerformanceConfig::default(),
                 },
                 cold_tier: ColdTierConfig {
                     enabled: false,
@@ -99,6 +101,18 @@ impl CacheConfigBuilder {
                     time_bucket_count: 60, // 1 minute of buckets at 1 second each
                     time_bucket_duration_ns: 1_000_000_000, // 1 second
                     pattern_analysis_window: 100,
+                },
+                memory_config: MemoryConfig {
+                    max_memory_usage: None,
+                    monitoring_enabled: true,
+                    low_pressure_threshold: 0.5,
+                    medium_pressure_threshold: 0.7,
+                    high_pressure_threshold: 0.85,
+                    critical_pressure_threshold: 0.95,
+                    leak_detection_enabled: false,
+                    alert_cooldown_ms: 5000,
+                    sample_interval_ms: 1000,
+                    max_history_samples: 60,
                 },
                 version: 1,
             },

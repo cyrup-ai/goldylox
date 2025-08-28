@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::time::Instant;
 
-use crossbeam_channel::{Receiver, Sender};
+// Removed unused imports - using full qualification instead
 use crossbeam_utils::atomic::AtomicCell;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
@@ -200,7 +200,7 @@ pub enum SyncOperation {
 
 /// Maintenance scheduler with atomic coordination and worker thread pool
 #[derive(Debug)]
-pub struct MaintenanceScheduler {
+pub struct MaintenanceScheduler<K: CacheKey, V: CacheValue> {
     /// Maintenance interval in nanoseconds
     pub maintenance_interval_ns: u64,
     /// Last maintenance timestamp
@@ -224,6 +224,8 @@ pub struct MaintenanceScheduler {
     pub shutdown_signal: crossbeam_channel::Receiver<()>,
     /// Shutdown sender for graceful shutdown
     pub shutdown_sender: crossbeam_channel::Sender<()>,
+    /// Phantom data for generic parameters
+    _phantom: std::marker::PhantomData<(K, V)>,
 }
 
 /// Background worker state with work-stealing coordination
@@ -250,6 +252,9 @@ pub struct BackgroundWorkerState {
     /// Number of tasks processed since last heartbeat
     pub tasks_since_heartbeat: AtomicU64,
 }
+
+// BackgroundWorkerState implementation moved to worker_state.rs module
+// This provides better separation of concerns and avoids duplicate methods
 
 /// Maintenance scheduler configuration
 #[derive(Debug, Clone)]

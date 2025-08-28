@@ -123,28 +123,41 @@ impl<K: CacheKey, V: CacheValue> CachePolicyEngine<K, V> {
         access_history: &[AccessEvent<K>],
     ) -> Vec<super::types::PrefetchRequest<K>> {
         let pattern = self.pattern_analyzer.analyze_access_pattern(current_key);
-        let predictions = Vec::new();
 
         // Only generate predictions for keys with good access patterns
         if pattern.frequency < 1.0 || pattern.recency < 0.3 {
-            return predictions;
+            return Vec::new();
         }
 
         // Analyze access history for sequential patterns
         if access_history.len() >= 2 && pattern.temporal_locality > 0.6 {
-            // Simple sequential prediction based on recent access patterns
-            let _recent_keys: Vec<&K> = access_history
-                .iter()
-                .rev()
-                .take(3)
-                .map(|event| &event.key)
-                .collect();
-
-            // For now, limit to empty predictions until PrefetchRequest is properly defined
-            // In a full implementation, this would analyze key patterns and generate predictions
+            // Record the recent access events to build pattern history
+            for event in access_history.iter().take(10) {
+                self.prefetch_predictor.record_access(event);
+            }
+            
+            // Use the existing PrefetchPredictor to generate predictions
+            // The predictor has its own pattern detection and ML-based prediction
+            let predictions = self.prefetch_predictor.get_next_prefetches(5);
+            
+            // Convert hot tier predictions to eviction tier format
+            predictions.into_iter()
+                .map(|p| super::types::PrefetchRequest {
+                    key: p.key,
+                    predicted_access: p.predicted_access_time,
+                    priority: 5, // Default medium priority
+                    confidence: match p.confidence {
+                        crate::cache::tier::hot::prefetch::PredictionConfidence::Low => 0.25,
+                        crate::cache::tier::hot::prefetch::PredictionConfidence::Medium => 0.50,
+                        crate::cache::tier::hot::prefetch::PredictionConfidence::High => 0.75,
+                        crate::cache::tier::hot::prefetch::PredictionConfidence::VeryHigh => 0.95,
+                    },
+                    created_at: std::time::Instant::now(),
+                })
+                .collect()
+        } else {
+            Vec::new()
         }
-
-        predictions
     }
 
     /// Update policy performance metrics and adapt if necessary
@@ -302,6 +315,17 @@ pub struct PrefetchStats {
     pub failed_count: u64,
 }
 
+impl Default for PrefetchStats {
+    fn default() -> Self {
+        Self {
+            hit_rate: 0.0,
+            average_latency_ns: 0,
+            successful_count: 0,
+            failed_count: 0,
+        }
+    }
+}
+
 impl Default for PolicyStats {
     fn default() -> Self {
         Self {
@@ -340,17 +364,6 @@ impl Default for PrefetchResult {
             successful_prefetches: 0,
             failed_prefetches: 0,
             total_latency_ns: 0,
-        }
-    }
-}
-
-impl Default for PrefetchStats {
-    fn default() -> Self {
-        Self {
-            hit_rate: 0.0,
-            average_latency_ns: 0,
-            successful_count: 0,
-            failed_count: 0,
         }
     }
 }

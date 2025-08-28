@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use crossbeam_utils::CachePadded;
 
 use crossbeam::channel::{Sender, Receiver};

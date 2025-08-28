@@ -14,8 +14,9 @@ pub mod utilities;
 // Re-export management types
 pub use management::{CacheHealthStatus, HealthLevel};
 pub use types::{
-    AccessPath, BackgroundTask, MaintenanceOperation, PlacementDecision, PromotionDecision,
+    BackgroundTask, MaintenanceOperation, PromotionDecision,
     StatisticsOperation, UnifiedCacheManager, UnifiedStats, ValueCharacteristics,
 };
-// Re-export utility types
-pub use utilities::PrecisionTimer;
+// Re-export from correct locations
+pub use crate::cache::types::{AccessPath, PlacementDecision};
+// PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer

@@ -6,9 +6,11 @@
 use std::fs::{File, OpenOptions};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+
+use log;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
-use crossbeam_channel::{bounded, Sender, Receiver};
+use crossbeam_channel::{bounded, Sender};
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -242,7 +244,7 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
         // - Statistics tracking and error handling
         let removed_count = optimizer.remove_expired_entries(self)?;
         
-        println!("Cold tier cleanup completed: {} expired entries removed", removed_count);
+        log::info!("Cold tier cleanup completed: {} expired entries removed", removed_count);
         
         Ok(removed_count)
     }
@@ -250,7 +252,6 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
     /// Validate storage integrity
     pub fn validate_integrity(&self) -> Result<bool, CacheOperationError> {
         use crate::cache::tier::cold::serialization::utilities::calculate_checksum;
-        use std::io::{Read, Seek, SeekFrom};
         
         let index = &self.index;
         
@@ -268,7 +269,7 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
                 response: tx,
             }) {
                 validation_errors += 1;
-                eprintln!("Failed to send read request for key validation");
+                log::error!("Failed to send read request for key validation");
                 continue;
             }
             
@@ -276,7 +277,7 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
                 Ok(Ok(data)) => data,
                 _ => {
                     validation_errors += 1;
-                    eprintln!("Failed to read data for key validation");
+                    log::error!("Failed to read data for key validation");
                     continue;
                 }
             };
@@ -285,17 +286,17 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
             let calculated_checksum = calculate_checksum(&data);
             if calculated_checksum != entry.checksum {
                 validation_errors += 1;
-                eprintln!("Checksum mismatch detected: expected {}, got {}", 
+                log::error!("Checksum mismatch detected: expected {}, got {}", 
                          entry.checksum, calculated_checksum);
             }
         }
         
         let integrity_valid = validation_errors == 0;
         if !integrity_valid {
-            eprintln!("Storage integrity validation failed: {}/{} entries corrupted", 
+            log::error!("Storage integrity validation failed: {}/{} entries corrupted", 
                      validation_errors, total_entries);
         } else {
-            println!("Storage integrity validation passed: {}/{} entries verified", 
+            log::info!("Storage integrity validation passed: {}/{} entries verified", 
                     total_entries, total_entries);
         }
         
@@ -465,7 +466,7 @@ impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
         let result = optimizer.optimize_storage(self)?;
         
         // Log compaction results using existing metrics
-        println!("Compaction completed: {} entries removed, efficiency improved from {:.2} to {:.2}",
+        log::info!("Compaction completed: {} entries removed, efficiency improved from {:.2} to {:.2}",
                  result.entries_removed,
                  result.efficiency_before,
                  result.efficiency_after);

@@ -86,9 +86,12 @@ impl RecoveryStrategies {
         self.strategy_registry.insert(error_type, strategy);
     }
 
-    /// Execute recovery strategy
+    /// Execute recovery strategy with operation closure
     #[inline]
-    pub fn execute_recovery(&self, strategy: RecoveryStrategy) -> bool {
+    pub fn execute_recovery<F>(&self, strategy: RecoveryStrategy, operation: F) -> bool
+    where
+        F: Fn() -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Clone,
+    {
         // Check if we can start a new recovery
         let active = self.active_recoveries.load(Ordering::Relaxed);
         if active >= self.recovery_config.max_concurrent_recoveries {
@@ -98,8 +101,8 @@ impl RecoveryStrategies {
         // Increment active recovery counter
         self.active_recoveries.fetch_add(1, Ordering::Relaxed);
 
-        // Execute the strategy
-        let success = self.execute_strategy_impl(strategy);
+        // Execute the strategy with operation
+        let success = self.execute_strategy_impl(strategy, operation);
 
         // Update success rates
         if success {
@@ -193,7 +196,10 @@ impl RecoveryStrategies {
         self.strategy_registry.len()
     }
 
-    fn execute_strategy_impl(&self, strategy: RecoveryStrategy) -> bool {
+    fn execute_strategy_impl<F>(&self, strategy: RecoveryStrategy, operation: F) -> bool
+    where
+        F: Fn() -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Clone,
+    {
         match strategy {
             RecoveryStrategy::Retry => {
                 // Implement retry logic with exponential backoff
@@ -222,10 +228,18 @@ impl RecoveryStrategies {
                         std::time::Duration::from_millis((backoff_ms as u64).min(5000));
                     std::thread::sleep(sleep_duration);
 
-                    // For retry strategy, we consider it successful if we completed the backoff
-                    // In a real implementation, this would retry the actual failed operation
-                    if attempt == retry_limit {
-                        return true; // Final attempt completed
+                    // Execute the actual failed operation
+                    match operation() {
+                        Ok(()) => {
+                            // Operation succeeded, record success and return
+                            return true;
+                        }
+                        Err(_) => {
+                            // Operation failed, continue to next attempt
+                            if attempt == retry_limit {
+                                return false; // All retries exhausted
+                            }
+                        }
                     }
                 }
                 false

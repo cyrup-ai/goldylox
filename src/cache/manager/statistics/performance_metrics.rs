@@ -3,7 +3,8 @@
 //! This module provides implementation for cache performance analysis including
 //! efficiency scoring, tier distribution analysis, and health monitoring.
 
-use super::types::{CachePerformanceMetrics, TierStatistics};
+use super::types::CachePerformanceMetrics;
+use crate::cache::types::statistics::tier_stats::TierStatistics;
 
 impl CachePerformanceMetrics {
     /// Create new performance metrics
@@ -15,9 +16,9 @@ impl CachePerformanceMetrics {
             total_memory_usage_bytes: 0,
             promotions_performed: 0,
             demotions_performed: 0,
-            hot_tier: TierStatistics::new(),
-            warm_tier: TierStatistics::new(),
-            cold_tier: TierStatistics::new(),
+            hot_tier: TierStatistics::default(),
+            warm_tier: TierStatistics::default(),
+            cold_tier: TierStatistics::default(),
         }
     }
 

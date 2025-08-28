@@ -4,8 +4,8 @@
 //! with TRUE lock-free access using crossbeam epoch-based reclamation.
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use crossbeam_epoch::{self as epoch, Atomic, Owned, Shared};
+use std::sync::atomic::{AtomicU64, Ordering};
+use crossbeam_epoch::{self as epoch, Atomic, Owned};
 
 use super::types::{CacheConfig, ConfigError};
 

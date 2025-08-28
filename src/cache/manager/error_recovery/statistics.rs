@@ -115,12 +115,14 @@ impl ErrorStatistics {
             self.recovery_successes[strategy_idx].fetch_add(1, Ordering::Relaxed);
 
             // Update mean time to recovery using exponential moving average
+            const ALPHA: f64 = 0.1; // EMA smoothing factor
+            
             let current_mttr = self.mttr_ns.load(Ordering::Relaxed);
             let new_mttr = if current_mttr == 0 {
                 recovery_time_ns
             } else {
-                // Simple exponential moving average with alpha = 0.1
-                (current_mttr * 9 + recovery_time_ns) / 10
+                // Exponential moving average: new = α * current + (1-α) * old
+                ((ALPHA * recovery_time_ns as f64) + ((1.0 - ALPHA) * current_mttr as f64)) as u64
             };
             self.mttr_ns.store(new_mttr, Ordering::Relaxed);
         }
@@ -193,6 +195,15 @@ impl ErrorStatistics {
     #[inline(always)]
     pub fn get_mttr_ms(&self) -> f64 {
         self.get_mttr_ns() as f64 / 1_000_000.0
+    }
+
+    /// Update error rate for specific error type
+    #[inline]
+    pub fn update_error_rate(&self, error_type: ErrorType, rate: u32) {
+        let error_idx = error_type as usize;
+        if error_idx < 16 {
+            self.error_rates[error_idx].store(rate, Ordering::Relaxed);
+        }
     }
 
     /// Check if system is in error burst

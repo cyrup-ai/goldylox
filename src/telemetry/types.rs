@@ -22,15 +22,8 @@ pub struct MeasurementStats {
     pub average_time_ns: u64,
 }
 
-/// Alert severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlertSeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-    Warning,
-}
+// AlertSeverity moved to canonical location: crate::cache::types::core_types::AlertSeverity
+pub use crate::cache::types::core_types::AlertSeverity;
 
 /// Alert type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

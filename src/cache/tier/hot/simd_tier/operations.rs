@@ -3,7 +3,8 @@
 //! This module contains the main cache operations including get, put, and remove
 //! with SIMD-accelerated lookup and intelligent eviction.
 
-use crate::cache::tier::hot::synchronization::{PrecisionTimer, ReadGuard, WriteGuard};
+use crate::cache::tier::hot::synchronization::{ReadGuard, WriteGuard};
+use crate::cache::types::performance::timer::PrecisionTimer;
 use super::core::SimdHotTier;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};

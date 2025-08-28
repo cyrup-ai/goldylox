@@ -6,6 +6,10 @@
 use arrayvec::ArrayString;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+// Import canonical types directly to avoid type identity conflicts
+use crate::cache::tier::warm::config::WarmTierConfig;
+use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
+
 /// Custom ArrayString serialization module
 mod arraystring_serde {
     use super::*;
@@ -37,31 +41,8 @@ pub enum HashFunction {
     FnvHash,
 }
 
-/// Eviction policy types for cache management
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EvictionPolicy {
-    /// Least Recently Used - classic LRU
-    #[serde(rename = "lru")]
-    LRU,
-    /// Least Frequently Used
-    #[serde(rename = "lfu")]
-    LFU,
-    /// First In, First Out
-    #[serde(rename = "fifo")]
-    FIFO,
-    /// Random eviction (fastest)
-    #[serde(rename = "random")]
-    Random,
-    /// Adaptive Replacement Cache (advanced)
-    #[serde(rename = "arc")]
-    ARC,
-    /// Clock algorithm (second-chance FIFO)
-    #[serde(rename = "clock")]
-    Clock,
-    /// LRU2 - improved LRU with two-level history
-    #[serde(rename = "lru2")]
-    LRU2,
-}
+// EvictionPolicy moved to canonical location: crate::cache::tier::warm::eviction::types::EvictionPolicyType
+// Use the comprehensive "best of best" implementation for all eviction policy needs
 
 /// Hot tier configuration (cache-aligned, 64 bytes)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,38 +51,15 @@ pub struct HotTierConfig {
     pub max_entries: u32,
     pub enabled: bool,
     pub hash_function: HashFunction,
-    pub eviction_policy: EvictionPolicy,
+    pub eviction_policy: EvictionPolicyType,
     pub cache_line_size: u8,
     pub prefetch_distance: u8,
     #[serde(skip)]
     pub _padding: [u8; 5],
 }
 
-/// Skip map configuration for warm tier
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkipMapConfig {
-    pub max_level: u8,
-    pub skip_probability_x1000: u16,
-    pub node_pool_size: u32,
-    pub _padding: [u8; 1],
-}
-
-/// Warm tier configuration (cache-aligned)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[repr(align(64))]
-pub struct WarmTierConfig {
-    pub max_entries: u32,
-    pub max_size_bytes: u64,
-    pub entry_timeout_ns: u64,
-    pub enabled: bool,
-    pub skip_map: SkipMapConfig,
-    pub promotion_threshold: u16,
-    pub demotion_age_threshold_ns: u64,
-    pub concurrency_level: u16,
-    pub load_factor_threshold: u16,
-    #[serde(skip)]
-    pub _padding: [u8; 4],
-}
+// Removed re-export to eliminate type identity conflicts  
+// Use direct imports: crate::cache::tier::warm::config::{WarmTierConfig, SkipMapConfig}
 
 /// Cold tier configuration with persistent storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,7 +273,7 @@ impl Default for HotTierConfig {
             max_entries: 128,
             enabled: true,
             hash_function: HashFunction::AHash,
-            eviction_policy: EvictionPolicy::LRU,
+            eviction_policy: EvictionPolicyType::Lru,
             cache_line_size: 64,
             prefetch_distance: 2,
             _padding: [0; 5],
@@ -323,33 +281,7 @@ impl Default for HotTierConfig {
     }
 }
 
-impl Default for SkipMapConfig {
-    fn default() -> Self {
-        Self {
-            max_level: 16,
-            skip_probability_x1000: 500,
-            node_pool_size: 1024,
-            _padding: [0; 1],
-        }
-    }
-}
 
-impl Default for WarmTierConfig {
-    fn default() -> Self {
-        Self {
-            max_entries: 8192,
-            max_size_bytes: 256 * 1024 * 1024, // 256MB like the feature-rich version
-            entry_timeout_ns: 300_000_000_000,
-            enabled: true,
-            skip_map: SkipMapConfig::default(),
-            promotion_threshold: 3,
-            demotion_age_threshold_ns: 600_000_000_000,
-            concurrency_level: 16,
-            load_factor_threshold: 750,
-            _padding: [0; 4],
-        }
-    }
-}
 
 impl Default for ColdTierConfig {
     fn default() -> Self {
@@ -571,7 +503,7 @@ impl CacheConfig {
                 max_entries: 1024,
                 enabled: true,
                 hash_function: HashFunction::XxHash,
-                eviction_policy: EvictionPolicy::LRU,
+                eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 64,
                 prefetch_distance: 8,
                 _padding: [0; 5],
@@ -593,7 +525,7 @@ impl CacheConfig {
                 max_entries: 64,
                 enabled: true,
                 hash_function: HashFunction::XxHash,
-                eviction_policy: EvictionPolicy::LRU,
+                eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 32,
                 prefetch_distance: 2,
                 _padding: [0; 5],

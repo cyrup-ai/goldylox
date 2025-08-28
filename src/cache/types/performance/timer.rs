@@ -86,17 +86,21 @@ fn cycles_to_nanos(cycles: u64) -> u64 {
 
 /// Convert Instant to nanosecond timestamp
 #[inline(always)]
-pub fn timestamp_nanos(instant: Instant) -> u64 {
-    instant
-        .duration_since(Instant::now() - Duration::from_nanos(1_000_000_000))
+pub fn timestamp_nanos(_instant: Instant) -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::ZERO)
         .as_nanos() as u64
 }
 
 /// RDTSC-based high-precision timing for cycle-accurate measurements
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PrecisionTimer {
     /// Start timestamp in CPU cycles
     start_cycles: u64,
+    /// Optional label for debugging
+    label: Option<String>,
 }
 
 impl PrecisionTimer {
@@ -105,6 +109,7 @@ impl PrecisionTimer {
     pub fn new() -> Self {
         Self {
             start_cycles: read_tsc(),
+            label: None,
         }
     }
 
@@ -112,6 +117,21 @@ impl PrecisionTimer {
     #[inline(always)]
     pub fn start() -> Self {
         Self::new()
+    }
+
+    /// Create new precision timer with label for debugging
+    #[inline(always)]
+    pub fn with_label(label: impl Into<String>) -> Self {
+        Self {
+            start_cycles: read_tsc(),
+            label: Some(label.into()),
+        }
+    }
+
+    /// Get the timer's label if any
+    #[inline(always)]
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
     }
 
     /// Get elapsed time in nanoseconds using RDTSC cycle conversion
@@ -161,7 +181,10 @@ impl PrecisionTimer {
     /// Create timer with specific start cycles
     #[inline(always)]
     pub fn with_start_cycles(start_cycles: u64) -> Self {
-        Self { start_cycles }
+        Self { 
+            start_cycles,
+            label: None,
+        }
     }
 
     /// Get current RDTSC timestamp

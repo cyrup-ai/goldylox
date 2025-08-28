@@ -10,9 +10,8 @@ use crate::cache::coherence::data_structures::{
     CacheTier, CoherenceController, ProtocolConfiguration,
 };
 use crate::cache::eviction::CachePolicyEngine;
-use crate::cache::manager::{AccessPath, PlacementDecision};
+use crate::cache::types::{AccessPath, PlacementDecision};
 use crate::cache::tier::cold::{cold_get, insert_demoted, remove_entry};
-use crate::cache::tier::hot::{simd_hot_get, simd_hot_put, simd_hot_remove};
 use crate::cache::tier::warm::{warm_get, warm_put, warm_remove};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -39,7 +38,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
             .coherence_controller
             .handle_read_request(key, CacheTier::Hot)
         {
-            Ok(ReadResponse::Hit) | Ok(ReadResponse::SharedGranted) => simd_hot_get(key),
+            Ok(ReadResponse::Hit) | Ok(ReadResponse::SharedGranted) => crate::cache::tier::hot::simd_hot_get::<K, V>(key),
             Ok(ReadResponse::Miss) => None,
             Err(_) => None,
         }
@@ -189,7 +188,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
             .handle_write_request(&key, tier, value.clone())
         {
             Ok(WriteResponse::Success) => match tier {
-                CacheTier::Hot => simd_hot_put(key, value),
+                CacheTier::Hot => crate::cache::tier::hot::simd_hot_put::<K, V>(key, value),
                 CacheTier::Warm => warm_put(key, value),
                 CacheTier::Cold => insert_demoted(key, value),
             },
@@ -203,7 +202,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     /// Remove value from specific tier
     fn remove_from_tier(&self, key: &K, tier: CacheTier) -> Result<bool, CacheOperationError> {
         match tier {
-            CacheTier::Hot => match simd_hot_remove::<K, V>(key) {
+            CacheTier::Hot => match crate::cache::tier::hot::simd_hot_remove::<K, V>(key) {
                 Ok(Some(_)) => Ok(true),
                 Ok(None) => Ok(false),
                 Err(_) => Err(CacheOperationError::TierOperationFailed),

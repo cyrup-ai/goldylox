@@ -135,20 +135,8 @@ pub struct TrainingExample {
     pub weight: f64,
 }
 
-/// Access event for ML training and policy adaptation
-#[derive(Debug, Clone)]
-pub struct AccessEvent<K, V: CacheValue> {
-    /// The key that was accessed
-    pub key: K,
-    /// Access timestamp
-    pub timestamp: Instant,
-    /// Type of access
-    pub access_type: AccessType,
-    /// Latency of the access in nanoseconds
-    pub latency_ns: u64,
-    /// Value metadata at time of access
-    pub value_metadata: Option<V::Metadata>,
-}
+// AccessEvent moved to canonical location: crate::cache::eviction::types::AccessEvent
+pub use crate::cache::eviction::types::AccessEvent;
 
 /// Access tracking statistics for monitoring and optimization
 #[derive(Debug, Clone)]

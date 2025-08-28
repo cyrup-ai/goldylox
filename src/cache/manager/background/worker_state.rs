@@ -53,9 +53,9 @@ impl BackgroundWorkerState {
         now.duration_since(last_heartbeat) < Duration::from_secs(30)
     }
 
-    /// Shutdown workers (placeholder for comprehensive shutdown)
+    /// Shutdown workers
     #[inline(always)]
-    pub fn shutdown_workers(&self, scheduler: &crate::cache::manager::MaintenanceScheduler) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
+    pub fn shutdown_workers<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(&self, scheduler: &crate::cache::manager::MaintenanceScheduler<K, V>) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Update local status to shutdown
         self.status.store(WorkerStatus::Shutdown);
         

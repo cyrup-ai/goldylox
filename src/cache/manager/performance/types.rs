@@ -48,14 +48,8 @@ pub enum TrendDirection {
     Degrading,
 }
 
-/// Alert severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AlertSeverity {
-    Info,
-    Warning,
-    Critical,
-    Emergency,
-}
+// AlertSeverity moved to canonical location: crate::cache::types::core_types::AlertSeverity
+pub use crate::cache::types::core_types::AlertSeverity;
 
 /// Types of performance alerts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,9 +12,9 @@ fn test_toml_config_parsing() {
 
     // Verify warm tier settings
     assert_eq!(config.warm_tier.max_entries, 8192);
-    assert_eq!(config.warm_tier.max_size_bytes, 16777216);
+    assert_eq!(config.warm_tier.max_memory_bytes, 16777216);
     assert!(config.warm_tier.enabled);
-    assert_eq!(config.warm_tier.entry_timeout_ns, 300000000000);
+    assert_eq!(config.warm_tier.default_ttl_sec, 300); // 300 seconds (was 300000000000 ns)
 
     // Verify cold tier settings
     assert!(config.cold_tier.enabled);
@@ -44,9 +44,9 @@ fn test_json_config_parsing() {
 
     // Verify warm tier settings
     assert_eq!(config.warm_tier.max_entries, 4096);
-    assert_eq!(config.warm_tier.max_size_bytes, 8388608);
+    assert_eq!(config.warm_tier.max_memory_bytes, 8388608);
     assert!(config.warm_tier.enabled);
-    assert_eq!(config.warm_tier.entry_timeout_ns, 600000000000);
+    assert_eq!(config.warm_tier.default_ttl_sec, 600); // 600 seconds (was 600000000000 ns)
 
     // Verify cold tier settings (disabled in JSON config)
     assert!(!config.cold_tier.enabled);

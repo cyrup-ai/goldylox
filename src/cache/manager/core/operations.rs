@@ -7,8 +7,9 @@ use std::sync::atomic::Ordering;
 
 use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
-use super::types::{AccessPath, UnifiedCacheManager, UnifiedStats};
-use super::utilities::PrecisionTimer;
+use super::types::{UnifiedCacheManager, UnifiedStats};
+use crate::cache::types::AccessPath;
+use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
@@ -36,9 +37,10 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
             self.record_hit(CacheTier::Warm, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
 
-            // Consider promotion to hot tier
-            self.tier_manager.consider_promotion::<K, V>(
+            // Consider promotion to hot tier using sophisticated API
+            self.consider_promotion(
                 key,
+                &value,
                 CacheTier::Warm,
                 CacheTier::Hot,
                 &access_path,
@@ -53,9 +55,8 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
             self.record_hit(CacheTier::Cold, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
 
-            // Consider promotion to warm or hot tier
-            self.tier_manager
-                .consider_multi_tier_promotion(key, &access_path);
+            // Consider promotion to warm or hot tier using sophisticated API
+            self.consider_multi_tier_promotion(key, &value, &access_path);
 
             return Some(value);
         }

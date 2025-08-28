@@ -5,7 +5,8 @@
 
 use arrayvec::ArrayString;
 
-use crate::cache::config::types::{ConfigError, SkipMapConfig};
+use crate::cache::config::types::ConfigError;
+use crate::cache::tier::warm::config::SkipMapConfig;
 use super::core::CacheConfigBuilder;
 
 impl CacheConfigBuilder {
@@ -40,14 +41,14 @@ impl CacheConfigBuilder {
     /// Set warm tier capacity (must be power of 2)
     #[inline(always)]
     pub const fn warm_tier_capacity(mut self, capacity: u32) -> Self {
-        self.config.warm_tier.max_entries = capacity;
+        self.config.warm_tier.max_entries = capacity as usize;
         self
     }
 
     /// Set warm tier timeout in nanoseconds
     #[inline(always)]
     pub const fn warm_tier_timeout_ns(mut self, timeout_ns: u64) -> Self {
-        self.config.warm_tier.entry_timeout_ns = timeout_ns;
+        self.config.warm_tier.default_ttl_sec = timeout_ns / 1_000_000_000;
         self
     }
 
@@ -79,19 +80,6 @@ impl CacheConfigBuilder {
         self
     }
 
-    /// Set concurrency level for warm tier
-    #[inline(always)]
-    pub const fn concurrency_level(mut self, level: u16) -> Self {
-        self.config.warm_tier.concurrency_level = level;
-        self
-    }
-
-    /// Set load factor threshold
-    #[inline(always)]
-    pub const fn load_factor_threshold(mut self, threshold: u16) -> Self {
-        self.config.warm_tier.load_factor_threshold = threshold;
-        self
-    }
 
     /// Enable cold tier with storage path (fixed-size string)
     #[inline(always)]
