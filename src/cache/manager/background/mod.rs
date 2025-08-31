@@ -14,5 +14,5 @@ pub mod worker_state;
 
 pub use types::{
     BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
-    MaintenanceStats, MaintenanceTask, MaintenanceTaskType, WorkerStatus,
+    MaintenanceStats, MaintenanceTask, CanonicalMaintenanceTask, WorkerStatus,
 };

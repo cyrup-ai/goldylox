@@ -18,7 +18,7 @@ pub mod trend_analysis;
 pub mod types;
 pub mod usage_history;
 
-use crate::cache::types::results::CacheOperationError;
+
 use usage_history::MemoryUsageHistory;
 use types::MemoryAlertSystem;
 

@@ -14,8 +14,8 @@ use dashmap::DashMap;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
-use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
-use crate::cache::manager::background::types::BackgroundTask;
+use crate::cache::coordinator::background_coordinator::{BackgroundCoordinator, DefaultProcessor};
+use crate::cache::manager::background::types::{BackgroundTask, TaskProcessor};
 
 /// Command queue for safe cache mutations from async contexts
 #[derive(Debug)]
@@ -90,11 +90,23 @@ pub struct CommandQueueStats {
     throughput: AtomicU64, // Commands per second
 }
 
+impl Clone for CommandQueueStats {
+    fn clone(&self) -> Self {
+        Self {
+            total_commands: AtomicU64::new(self.total_commands.load(std::sync::atomic::Ordering::Relaxed)),
+            queued_commands: AtomicUsize::new(self.queued_commands.load(std::sync::atomic::Ordering::Relaxed)),
+            max_queue_depth: AtomicUsize::new(self.max_queue_depth.load(std::sync::atomic::Ordering::Relaxed)),
+            avg_execution_time: AtomicU64::new(self.avg_execution_time.load(std::sync::atomic::Ordering::Relaxed)),
+            throughput: AtomicU64::new(self.throughput.load(std::sync::atomic::Ordering::Relaxed)),
+        }
+    }
+}
+
 /// Task coordinator for managing cache operations
 #[derive(Debug)]
-pub struct TaskCoordinator<K: CacheKey, V: CacheValue> {
+pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static, P: TaskProcessor = DefaultProcessor> {
     /// Background coordinator for task processing
-    background_coordinator: BackgroundCoordinator<K, V>,
+    background_coordinator: BackgroundCoordinator<K, V, P>,
     /// Command queue for safe mutations
     command_queue: CacheCommandQueue<K, V>,
     /// Active task tracking
@@ -302,9 +314,9 @@ impl<K: CacheKey, V: CacheValue> Clone for CacheCommandQueue<K, V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> TaskCoordinator<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static, P: TaskProcessor + 'static> TaskCoordinator<K, V, P> {
     /// Create new task coordinator
-    pub fn new(background_coordinator: BackgroundCoordinator<K, V>, max_command_queue_size: usize) -> Self {
+    pub fn new(background_coordinator: BackgroundCoordinator<K, V, P>, max_command_queue_size: usize) -> Self {
         let command_queue = CacheCommandQueue::new(max_command_queue_size);
 
         Self {

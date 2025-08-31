@@ -1,7 +1,7 @@
 //! Background maintenance operations for warm tier cache
 //!
-//! This module handles all background maintenance tasks including cleanup,
-//! eviction, optimization, and memory management.
+//! This module handles all background maintenance tasks using the CANONICAL
+//! MaintenanceTask definition - NO MORE DUPLICATES!
 
 use std::time::Duration;
 
@@ -16,24 +16,17 @@ use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::CacheKey;
 
-/// Maintenance task for background operations
-#[derive(Debug)]
-pub enum MaintenanceTask {
-    /// Cleanup expired entries
-    CleanupExpired { ttl: Duration },
-    /// Perform eviction to reduce memory pressure
-    PerformEviction { target_pressure: f64 },
-    /// Update cache statistics
-    UpdateStatistics,
-    /// Optimize cache structure
-    OptimizeStructure,
-    /// Compact storage
-    CompactStorage,
-    /// Analyze access patterns
-    AnalyzePatterns,
-    /// Sync with other tiers
-    SyncTiers,
-}
+// Use ONLY the canonical MaintenanceTask - no duplicates!
+pub use crate::cache::tier::warm::maintenance::{
+    MaintenanceTask,
+    OptimizationLevel,
+    AnalysisDepth,
+    SyncDirection,
+    ConsistencyLevel,
+    ValidationLevel,
+    ModelComplexity,
+    TaskPriority,
+};
 
 impl LockFreeWarmTier {
     /// Check for expired entries and clean them up
@@ -152,32 +145,46 @@ impl LockFreeWarmTier {
         Ok(tasks_processed)
     }
 
-    /// Handle individual maintenance task
+    /// Handle canonical maintenance task directly - no more adapters!
     pub fn handle_maintenance_task(&self, task: MaintenanceTask) -> Result<(), CacheOperationError> {
         match task {
-            MaintenanceTask::CleanupExpired { ttl } => {
+            MaintenanceTask::CleanupExpired { ttl, .. } => {
                 self.cleanup_expired(ttl)?;
             }
-            MaintenanceTask::PerformEviction { target_pressure } => {
+            MaintenanceTask::PerformEviction { target_pressure, .. } => {
                 self.trigger_eviction(target_pressure)?;
             }
-            MaintenanceTask::UpdateStatistics => {
+            MaintenanceTask::Evict { target_count, .. } => {
+                // Convert target count to pressure - rough estimate
+                let target_pressure = 1.0 - (target_count as f64 / 1000.0);
+                self.trigger_eviction(target_pressure.max(0.1))?;
+            }
+            MaintenanceTask::UpdateStatistics { .. } => {
                 // Statistics are updated automatically, but we could do deeper analysis here
             }
-            MaintenanceTask::OptimizeStructure => {
+            MaintenanceTask::OptimizeStructure { .. } => {
                 // Could implement skiplist optimization here
             }
-            MaintenanceTask::CompactStorage => {
+            MaintenanceTask::CompactStorage { .. } => {
                 // Could implement storage compaction here
             }
-            MaintenanceTask::AnalyzePatterns => {
+            MaintenanceTask::AnalyzePatterns { .. } => {
                 // Trigger pattern analysis
                 let _ = self
                     .access_tracker
                     .cleanup_old_records(Duration::from_secs(300));
             }
-            MaintenanceTask::SyncTiers => {
+            MaintenanceTask::SyncTiers { .. } => {
                 // Could implement tier synchronization here
+            }
+            MaintenanceTask::ValidateIntegrity { .. } => {
+                // Could implement integrity validation here
+            }
+            MaintenanceTask::DefragmentMemory { .. } => {
+                // Could implement memory defragmentation here
+            }
+            MaintenanceTask::UpdateMLModels { .. } => {
+                // Could implement ML model updates here
             }
         }
 

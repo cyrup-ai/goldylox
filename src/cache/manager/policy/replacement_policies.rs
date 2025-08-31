@@ -12,7 +12,7 @@ use super::types::{
     AccessSequence, AccessType, AlgorithmMetrics, LockFreeCircularBuffer, ReplacementAlgorithm,
     ReplacementPolicies, TemporalAccess,
 };
-use crate::cache::traits::core::CacheKey;
+
 use crate::cache::tier::warm::core::WarmCacheKey;
 use crate::cache::tier::warm::eviction::{
     ArcEvictionState, ConcurrentLfuTracker, ConcurrentLruTracker, MachineLearningEvictionPolicy,
@@ -55,10 +55,10 @@ impl<K: crate::cache::traits::CacheKey> ReplacementPolicies<K> {
 
     /// Adapt algorithm based on access patterns
     #[inline]
-    pub fn adapt_algorithm(&self, access_pattern: &AccessSequence) {
+    pub fn adapt_algorithm(&self, access_pattern: &AccessSequence<K>) {
         let _ = self.temporal_history.push(TemporalAccess {
             timestamp: Instant::now(),
-            key_hash: access_pattern.sequence_id,
+            key_hash: access_pattern.context_hash,
             access_type: AccessType::Read,
             tier: 0,
         });

@@ -13,7 +13,7 @@ use crate::cache::memory::types::PoolAllocationStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Individual memory pool with lock-free allocation
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemoryPool {
     /// Pool name for identification
     pool_name: &'static str,

@@ -1,6 +1,7 @@
 //! Performance monitoring module - consolidated from performance_tracking
 
 use super::types::*;
+use super::data_structures::AlertHistoryBuffer;
 
 /// Performance monitor for cache operations
 #[derive(Debug)]
@@ -13,8 +14,8 @@ pub struct PerformanceMonitor {
 impl PerformanceMonitor {
     pub fn new(config: MonitorConfig) -> Self {
         Self {
-            alert_history: AlertHistoryBuffer::new(config.history_size),
-            rate_limits: AlertRateLimits::new(60), // 60 alerts per minute max
+            alert_history: AlertHistoryBuffer::new(), // Canonical version uses fixed capacity of 128
+            rate_limits: AlertRateLimits::with_single_limit(60), // 60 alerts per minute max for all types
             config,
         }
     }

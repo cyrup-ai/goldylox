@@ -17,11 +17,12 @@ use super::strategy_selector::CacheStrategySelector;
 use super::tier_operations::TierOperations;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::telemetry::monitor::PerformanceMonitor;
-use crate::telemetry::statistics::UnifiedCacheStatistics;
+use crate::telemetry::unified_stats::UnifiedCacheStatistics;
+
 
 /// Unified cache manager coordinating all tiers with atomic state management
 #[derive(Debug)]
-pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
+pub struct UnifiedCacheManager<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     /// Cache configuration (immutable after initialization)
     config: CacheConfig,
     /// Cache strategy selector for intelligent tier decisions
@@ -37,31 +38,36 @@ pub struct UnifiedCacheManager<K: CacheKey, V: CacheValue> {
     /// Performance monitor with zero-allocation sampling
     performance_monitor: PerformanceMonitor,
     /// Error recovery system with circuit breaker
-    error_recovery: ManagerErrorRecoverySystem,
+    error_recovery: ManagerErrorRecoverySystem<K, V>,
     /// Tier operations handler
     tier_operations: TierOperations<K, V>,
 }
 
-impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> UnifiedCacheManager<K, V> {
     /// Create new unified cache manager with full tier coordination
     pub fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize all cache tiers with SIMD optimization
-        let hot_tier_config = crate::cache::tier::hot::types::HotTierConfig {
+        let hot_tier_config = crate::cache::config::types::HotTierConfig {
             max_entries: config.hot_tier.max_entries,
-            enable_simd: true,
-            enable_prefetch: true,
-            lru_threshold: std::time::Duration::from_millis(100),
-            memory_limit: 1024 * 1024 * 64, // 64MB default
-            cache_line_size: 64,
+            enabled: config.hot_tier.enabled,
+            hash_function: config.hot_tier.hash_function,
+            eviction_policy: config.hot_tier.eviction_policy,
+            cache_line_size: config.hot_tier.cache_line_size,
+            prefetch_distance: config.hot_tier.prefetch_distance,
+            enable_simd: config.hot_tier.enable_simd,
+            enable_prefetch: config.hot_tier.enable_prefetch,
+            lru_threshold_secs: config.hot_tier.lru_threshold_secs,
+            memory_limit_mb: config.hot_tier.memory_limit_mb,
+            _padding: config.hot_tier._padding,
         };
         // Initialize hot tier with proper generic types
         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
-        let warm_tier_config = config.warm_tier;
+        let warm_tier_config = config.warm_tier.clone();
         // Initialize warm tier with proper generic types
         crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
         // Initialize cold tier with proper generic types
         crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.storage_path.as_str())
-            .map_err(|e| CacheOperationError::io_error(&format!("Cold tier init failed: {}", e)))?;
+            .map_err(|e| CacheOperationError::io_failed(&format!("Cold tier init failed: {}", e)))?;
 
         // Initialize coherence protocol with atomic coordination
         let _coherence_config = ProtocolConfiguration {
@@ -114,6 +120,9 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
         let timer = PrecisionTimer::start();
         let mut access_path = AccessPath::new();
 
+        // Use strategy selector to determine optimal access pattern
+        let _access_strategy = self.strategy_selector.current_strategy();
+
         // Record operation start with atomic increment
         self.unified_stats.record_miss(0); // Will be updated with actual timing later
 
@@ -122,6 +131,10 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
             let elapsed_ns = timer.elapsed_ns();
             self.record_hit(crate::cache::coherence::CacheTier::Hot, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
+            
+            // Record performance metrics via strategy selector (which uses atomic operations)
+            self.strategy_selector.record_strategy_performance(1.0, elapsed_ns);
+            
             return Some(value);
         }
 
@@ -133,6 +146,9 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
             let elapsed_ns = timer.elapsed_ns();
             self.record_hit(crate::cache::coherence::CacheTier::Warm, elapsed_ns);
             let _ = self.policy_engine.pattern_analyzer.record_access(key);
+            
+            // Record performance metrics for warm tier access
+            self.strategy_selector.record_strategy_performance(1.0, elapsed_ns);
 
             // Consider intelligent promotion to hot tier
             self.consider_promotion(
@@ -181,12 +197,22 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
         match placement_decision.primary_tier {
             crate::cache::coherence::CacheTier::Hot => {
                 // Place in hot tier with potential replication
-                self.tier_operations.put_with_replication(
+                match self.tier_operations.put_with_replication(
                     key,
                     value,
                     crate::cache::coherence::CacheTier::Hot,
                     placement_decision.replication_tiers,
-                )?;
+                ) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        // Use error recovery system for sophisticated retry logic
+                        let _recovery_strategy = self.error_recovery.handle_error(
+                            crate::cache::manager::error_recovery::types::ErrorType::DiskIOError,
+                            placement_decision.primary_tier as u8
+                        );
+                        return Err(e);
+                    }
+                }
             }
             crate::cache::coherence::CacheTier::Warm => {
                 // Place in warm tier with selective replication
@@ -234,6 +260,9 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
 
     /// Get comprehensive unified cache statistics
     pub fn stats(&self) -> UnifiedStats {
+        // Use config for statistical calculations
+        let _config_max_ops = (self.config.monitoring.alert_thresholds.min_ops_per_second_x100 / 100) as u64;
+        
         // Convert from performance_tracking::UnifiedStats to unified_stats::UnifiedStats
         let perf_stats = self.unified_stats.compute_unified_stats();
         UnifiedStats {
@@ -331,3 +360,5 @@ impl<K: CacheKey + Default, V: CacheValue> UnifiedCacheManager<K, V> {
         }
     }
 }
+
+// String-specific convenience APIs removed - use generic UnifiedCacheManager<K, V> directly

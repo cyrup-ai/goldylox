@@ -9,10 +9,6 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "bincode")]
 
 
 use super::core::{CacheKey, CacheValue};
@@ -38,7 +34,7 @@ impl From<TierLocation> for CacheTier {
 }
 
 /// Health status for error tracking and circuit breaker functionality
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub enum HealthStatus {
     /// Entry is healthy and operational
     Healthy,
@@ -54,10 +50,10 @@ pub enum HealthStatus {
 pub use crate::cache::eviction::types::AccessEvent;
 
 /// Tier transition event for tracking migration history
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct TierTransition {
-    /// When the transition occurred
-    pub timestamp: Instant,
+    /// When the transition occurred (nanoseconds since epoch)
+    pub timestamp_ns: u64,
     /// Source tier
     pub from_tier: TierLocation,
     /// Destination tier  
@@ -68,27 +64,47 @@ pub struct TierTransition {
     pub success: bool,
 }
 
+impl Default for TierTransition {
+    fn default() -> Self {
+        Self {
+            timestamp_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
+            from_tier: TierLocation::Hot,
+            to_tier: TierLocation::Warm,
+            reason: String::new(),
+            success: false,
+        }
+    }
+}
+
 /// Migration lock to prevent concurrent tier transitions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct MigrationLock {
-    /// When the lock was acquired
-    pub acquired_at: Instant,
+    /// When the lock was acquired (nanoseconds since epoch)
+    pub acquired_at_ns: u64,
     /// Target tier for migration
     pub target_tier: TierLocation,
     /// Migration operation ID
     pub operation_id: u64,
 }
 
+impl Default for MigrationLock {
+    fn default() -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        Self {
+            acquired_at_ns: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
+            target_tier: TierLocation::Warm,
+            operation_id: 0,
+        }
+    }
+}
+
 /// Cache entry metadata containing infrastructure data
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct CacheEntryMetadata {
-    /// Exact creation timestamp  
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub created_at: Instant,
-    /// Last access timestamp
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub last_accessed: Instant,
+    /// Exact creation timestamp (nanoseconds since epoch)
+    pub created_at_ns: u64,
+    /// Last access timestamp (nanoseconds since epoch)
+    pub last_accessed_ns: u64,
     /// Total access count (atomic for concurrent access)
     pub access_count: AtomicU64,
     /// Entry size in bytes
@@ -105,18 +121,17 @@ pub struct CacheEntryMetadata {
     pub error_count: AtomicU32,
     /// Version for coherence protocol
     pub version: u64,
-    /// Last error timestamp
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub last_error: Option<Instant>,
+    /// Last error timestamp (nanoseconds since epoch)
+    pub last_error_ns: Option<u64>,
 }
 
 impl CacheEntryMetadata {
     /// Create new metadata for cache entry
     pub fn new(size_bytes: usize, creation_cost: u64) -> Self {
-        let now = Instant::now();
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
         Self {
-            created_at: now,
-            last_accessed: now,
+            created_at_ns: now_ns,
+            last_accessed_ns: now_ns,
             access_count: AtomicU64::new(0),
             size_bytes,
             creation_cost,
@@ -125,7 +140,7 @@ impl CacheEntryMetadata {
             priority_score: 0.5, // Medium priority by default
             error_count: AtomicU32::new(0),
             version: 1,
-            last_error: None,
+            last_error_ns: None,
         }
     }
 
@@ -153,7 +168,7 @@ impl CacheEntryMetadata {
     /// Record error occurrence
     pub fn record_error(&mut self) {
         let error_count = self.error_count.fetch_add(1, Ordering::Relaxed) + 1;
-        self.last_error = Some(Instant::now());
+        self.last_error_ns = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64);
 
         // Update health status based on error frequency
         self.health_status = match error_count {
@@ -178,21 +193,23 @@ impl CacheEntryMetadata {
     /// Calculate age since creation
     #[inline]
     pub fn age(&self) -> Duration {
-        Instant::now().duration_since(self.created_at)
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        Duration::from_nanos(now_ns.saturating_sub(self.created_at_ns))
     }
 
     /// Calculate time since last access
     #[inline]
     pub fn time_since_last_access(&self) -> Duration {
-        Instant::now().duration_since(self.last_accessed)
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        Duration::from_nanos(now_ns.saturating_sub(self.last_accessed_ns))
     }
 }
 
 impl Clone for CacheEntryMetadata {
     fn clone(&self) -> Self {
         Self {
-            created_at: self.created_at,
-            last_accessed: self.last_accessed,
+            created_at_ns: self.created_at_ns,
+            last_accessed_ns: self.last_accessed_ns,
             access_count: AtomicU64::new(self.access_count.load(Ordering::Relaxed)),
             size_bytes: self.size_bytes,
             creation_cost: self.creation_cost,
@@ -201,17 +218,37 @@ impl Clone for CacheEntryMetadata {
             priority_score: self.priority_score,
             error_count: AtomicU32::new(self.error_count.load(Ordering::Relaxed)),
             version: self.version,
-            last_error: self.last_error,
+            last_error_ns: self.last_error_ns,
+        }
+    }
+}
+
+impl Default for CacheEntryMetadata {
+    fn default() -> Self {
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        Self {
+            created_at_ns: now_ns,
+            last_accessed_ns: now_ns,
+            access_count: AtomicU64::new(0),
+            size_bytes: 0,
+            creation_cost: 0,
+            compression_ratio: 1.0,
+            health_status: HealthStatus::Healthy,
+            priority_score: 0.5,
+            error_count: AtomicU32::new(0),
+            version: 1,
+            last_error_ns: None,
         }
     }
 }
 
 /// Sophisticated access pattern tracker for cache intelligence
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct AccessTracker {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[serde(default)]
+#[serde(bound(deserialize = "K: serde::de::DeserializeOwned"))]
+pub struct AccessTracker<K: CacheKey> {
     /// Recent access events (bounded circular buffer)
-    pub access_history: VecDeque<AccessEvent>,
+    pub access_history: VecDeque<AccessEvent<K>>,
     /// Maximum history size
     pub max_history_size: usize,
     /// Frequency estimation using exponential moving average
@@ -220,9 +257,8 @@ pub struct AccessTracker {
     pub frequency_decay: f64,
     /// Detected temporal pattern
     pub temporal_pattern: TemporalPattern,
-    /// Last pattern analysis timestamp
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub last_pattern_update: Instant,
+    /// Last pattern analysis timestamp (nanoseconds since epoch)
+    pub last_pattern_update_ns: u64,
     /// Pattern confidence score (0.0-1.0)
     pub pattern_confidence: f32,
     /// Average access latency in nanoseconds
@@ -231,7 +267,7 @@ pub struct AccessTracker {
     pub hit_rate: f64,
 }
 
-impl AccessTracker {
+impl<K: CacheKey> AccessTracker<K> {
     /// Create new access tracker
     pub fn new() -> Self {
         Self {
@@ -240,7 +276,7 @@ impl AccessTracker {
             frequency_estimate: 0.0,
             frequency_decay: 0.9, // 10% decay per time unit
             temporal_pattern: TemporalPattern::Steady,
-            last_pattern_update: Instant::now(),
+            last_pattern_update_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
             pattern_confidence: 0.0,
             avg_latency_ns: 0,
             hit_rate: 0.0,
@@ -248,21 +284,19 @@ impl AccessTracker {
     }
 
     /// Record new access event and update statistics
-    pub fn record_access(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
-        let now = Instant::now();
-        let event = AccessEvent {
-            timestamp: now,
-            access_type,
-            latency_ns,
-            hit,
-        };
+    pub fn record_access(&mut self, key: &K, tier: CacheTier, entry_size: usize, access_type: AccessType, latency_ns: u64, hit: bool) {
+        // Use proper AccessEvent constructor that handles event_id generation
+        let mut event = AccessEvent::new(key.clone(), access_type, tier, hit);
+        event.latency_ns = latency_ns;
+        event.entry_size = entry_size;
 
         // Update frequency estimate using exponential moving average
         let time_delta = if let Some(last_event) = self.access_history.back() {
-            event
-                .timestamp
-                .duration_since(last_event.timestamp)
-                .as_secs_f64()
+            if event.timestamp > last_event.timestamp {
+                (event.timestamp - last_event.timestamp) as f64 / 1_000_000_000.0 // Convert nanoseconds to seconds
+            } else {
+                1.0 // Fallback if timestamps are equal or reversed
+            }
         } else {
             1.0 // Default time delta for first access
         };
@@ -283,7 +317,8 @@ impl AccessTracker {
         self.update_running_stats();
 
         // Update temporal pattern if enough time has passed
-        if now.duration_since(self.last_pattern_update).as_secs() >= 60 {
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        if (now_ns.saturating_sub(self.last_pattern_update_ns)) >= 60_000_000_000 { // 60 seconds in nanoseconds
             self.analyze_temporal_pattern();
         }
     }
@@ -302,7 +337,7 @@ impl AccessTracker {
     }
 
     /// Analyze temporal access pattern using coherence statistics infrastructure
-    pub fn analyze_temporal_pattern_with_coherence<K: CacheKey, V: CacheValue>(
+    pub fn analyze_temporal_pattern_with_coherence<V: CacheValue>(
         &mut self,
         cache_key: &K,
         coherence_controller: &CoherenceController<K, V>,
@@ -320,9 +355,8 @@ impl AccessTracker {
             // Use existing sophisticated statistics for pattern analysis
             if total_accesses >= 10 {
                 // Calculate access frequency from coherence data
-                let time_span = std::time::Instant::now()
-                    .duration_since(self.last_pattern_update)
-                    .as_secs_f64();
+                let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+                let time_span = (now_ns.saturating_sub(self.last_pattern_update_ns)) as f64 / 1_000_000_000.0;
 
                 let access_rate = total_accesses as f64 / time_span;
 
@@ -345,7 +379,7 @@ impl AccessTracker {
                 self.pattern_confidence = ((total_accesses as f64 / 100.0).min(1.0)
                     * (stats_snapshot.success_rate() / 100.0))
                     as f32;
-                self.last_pattern_update = std::time::Instant::now();
+                self.last_pattern_update_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
             }
         }
     }
@@ -361,7 +395,7 @@ impl AccessTracker {
         let mut intervals: Vec<u64> = Vec::new();
         for window in self.access_history.iter().collect::<Vec<_>>().windows(2) {
             if let [first, second] = window {
-                let interval = second.timestamp.duration_since(first.timestamp).as_millis() as u64;
+                let interval = (second.timestamp.saturating_sub(first.timestamp)) / 1_000_000; // Convert nanoseconds to milliseconds
                 intervals.push(interval);
             }
         }
@@ -393,7 +427,7 @@ impl AccessTracker {
         };
 
         self.pattern_confidence = (1.0 - coefficient_of_variation.min(1.0)) as f32;
-        self.last_pattern_update = Instant::now();
+        self.last_pattern_update_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     }
 
     /// Get current access frequency estimate
@@ -409,15 +443,15 @@ impl AccessTracker {
     }
 }
 
-impl Default for AccessTracker {
+impl<K: CacheKey> Default for AccessTracker<K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Multi-tier management information for intelligent tier transitions
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[serde(default)]
 pub struct TierInfo {
     /// Current tier location
     pub current_tier: TierLocation,
@@ -433,9 +467,8 @@ pub struct TierInfo {
     pub migration_lock: Option<MigrationLock>,
     /// Tier residency time (how long in current tier)
     pub tier_residency: Duration,
-    /// Tier entry timestamp
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub tier_entry_time: Instant,
+    /// Tier entry timestamp (nanoseconds since epoch)
+    pub tier_entry_time_ns: u64,
     /// Number of tier transitions
     pub transition_count: u32,
 }
@@ -443,7 +476,7 @@ pub struct TierInfo {
 impl TierInfo {
     /// Create new tier info for specified tier
     pub fn new(initial_tier: TierLocation) -> Self {
-        let now = Instant::now();
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
         Self {
             current_tier: initial_tier,
             tier_affinity: TierAffinity::Auto,
@@ -452,7 +485,7 @@ impl TierInfo {
             tier_transition_history: Vec::new(),
             migration_lock: None,
             tier_residency: Duration::from_secs(0),
-            tier_entry_time: now,
+            tier_entry_time_ns: now_ns,
             transition_count: 0,
         }
     }
@@ -465,14 +498,14 @@ impl TierInfo {
         cache_key: &K,
         coherence_controller: &CoherenceController<K, V>,
     ) -> Result<(), CoherenceError> {
-        let now = Instant::now();
-
+        let _now = Instant::now();
+        
         // DELEGATE to existing coherence communication hub for coordination
         let coherence_message = CoherenceMessage::RequestExclusive {
             key: CoherenceKey::from_cache_key(cache_key),
             requester_tier: new_tier.into(),
             version: 0,
-            timestamp_ns: now.elapsed().as_nanos() as u64,
+            timestamp_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
         };
 
         // Use existing communication hub broadcasting for tier coordination
@@ -481,8 +514,9 @@ impl TierInfo {
             .broadcast(coherence_message);
 
         // Record transition with actual success/failure status from coherence protocol
+        let now = std::time::SystemTime::now();
         let transition = TierTransition {
-            timestamp: now,
+            timestamp_ns: now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
             from_tier: self.current_tier,
             to_tier: new_tier,
             reason,
@@ -493,10 +527,12 @@ impl TierInfo {
         // Only update state if coherence protocol succeeded
         if transition_result.is_ok() {
             // Update tier residency
-            self.tier_residency = now.duration_since(self.tier_entry_time);
+            let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+            self.tier_residency = Duration::from_nanos(now_ns.saturating_sub(self.tier_entry_time_ns));
 
             // Update current state
             self.current_tier = new_tier;
+            self.tier_entry_time_ns = now_ns;
         }
 
         transition_result
@@ -508,7 +544,7 @@ impl TierInfo {
             false // Already locked
         } else {
             self.migration_lock = Some(MigrationLock {
-                acquired_at: Instant::now(),
+                acquired_at_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
                 target_tier,
                 operation_id,
             });
@@ -530,7 +566,8 @@ impl TierInfo {
     /// Get current tier residency time
     #[inline]
     pub fn current_tier_residency(&self) -> Duration {
-        Instant::now().duration_since(self.tier_entry_time)
+        let now_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        Duration::from_nanos(now_ns.saturating_sub(self.tier_entry_time_ns))
     }
 
     /// Calculate tier stability score (higher = more stable in current tier)
@@ -543,10 +580,14 @@ impl TierInfo {
     }
 }
 
+impl Default for TierInfo {
+    fn default() -> Self {
+        Self::new(TierLocation::Hot)
+    }
+}
+
 /// Serialization context for persistent storage
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct SerializationContext {
     /// Serialization format to use
     pub format: SerializationFormat,
@@ -597,16 +638,9 @@ impl Default for SerializationContext {
 
 /// Production-quality cache entry wrapping user domain data with cache infrastructure
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
-)]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))
-)]
+#[derive(serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))]
+#[serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))]
 pub struct CacheEntry<K: CacheKey, V: CacheValue> {
     /// User's domain key
     pub key: K,
@@ -615,7 +649,7 @@ pub struct CacheEntry<K: CacheKey, V: CacheValue> {
     /// Cache infrastructure metadata
     pub metadata: CacheEntryMetadata,
     /// Access pattern tracking and analysis
-    pub access_tracker: AccessTracker,
+    pub access_tracker: AccessTracker<K>,
     /// Multi-tier management information
     pub tier_info: TierInfo,
     /// Serialization context for persistence
@@ -649,11 +683,11 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
         // Update metadata - note: coherence integration requires key and controller
         // For now, update basic metadata without coherence integration
         self.metadata.access_count.fetch_add(1, Ordering::Relaxed);
-        self.metadata.last_accessed = Instant::now();
+        self.metadata.last_accessed_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
 
         // Update access tracker with sophisticated analysis
         self.access_tracker
-            .record_access(access_type, latency_ns, hit);
+            .record_access(&self.key, self.tier_info.current_tier.into(), self.metadata.size_bytes, access_type, latency_ns, hit);
 
         // Update promotion score based on access patterns
         self.update_promotion_score();
@@ -716,7 +750,7 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
         if let Some(target_tier) = new_tier {
             // Simple tier transition for promote() public API
             self.tier_info.current_tier = target_tier;
-            self.tier_info.tier_entry_time = Instant::now();
+            self.tier_info.tier_entry_time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
             self.tier_info.transition_count += 1;
         }
 
@@ -734,7 +768,7 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
         if let Some(target_tier) = new_tier {
             // Simple tier transition for promote() public API
             self.tier_info.current_tier = target_tier;
-            self.tier_info.tier_entry_time = Instant::now();
+            self.tier_info.tier_entry_time_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
             self.tier_info.transition_count += 1;
         }
 
@@ -788,20 +822,14 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
 }
 
 /// Serialization envelope for persistent storage with versioning and integrity
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))
-)]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[serde(bound(serialize = "K: serde::Serialize, V: serde::Serialize"))]
+#[serde(bound(deserialize = "K: serde::de::DeserializeOwned, V: serde::de::DeserializeOwned"))]
 pub struct SerializationEnvelope<K, V>
 where
-    K: CacheKey + Clone,
-    V: CacheValue + Clone,
+    K: CacheKey + Clone + Default,
+    V: CacheValue + Clone + Default,
 {
     /// Complete cache entry with all metadata
     pub entry: CacheEntry<K, V>,
@@ -811,17 +839,14 @@ where
     pub compression_used: CompressionAlgorithm,
     /// Data integrity checksum
     pub checksum: u64,
-    /// Timestamp when serialized
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub serialized_at: Instant,
+    /// Timestamp when serialized (nanoseconds since epoch)
+    pub serialized_at_ns: u64,
     /// Tier-specific serialization context
     pub tier_context: TierSerializationContext,
 }
 
 /// Tier-specific serialization context for optimization
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct TierSerializationContext {
     /// Target tier for this serialization
     pub target_tier: TierLocation,
@@ -833,10 +858,21 @@ pub struct TierSerializationContext {
     pub include_access_history: bool,
 }
 
+impl Default for TierSerializationContext {
+    fn default() -> Self {
+        Self {
+            target_tier: TierLocation::Warm,
+            expected_frequency: 1.0,
+            optimization_level: 3,
+            include_access_history: false,
+        }
+    }
+}
+
 impl<K, V> SerializationEnvelope<K, V>
 where
-    K: CacheKey + Clone,
-    V: CacheValue + Clone,
+    K: CacheKey + Clone + Default + bincode::Encode,
+    V: CacheValue + Clone + Default + bincode::Encode,
 {
     /// Create new serialization envelope using coherence write propagation system
     pub fn new_with_coherence(
@@ -891,7 +927,7 @@ where
             schema_version: 1,
             compression_used, // From coherence protocol negotiation
             checksum,         // From coherence system metadata
-            serialized_at: Instant::now(),
+            serialized_at_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
             tier_context,
         })
     }
@@ -925,7 +961,7 @@ where
             schema_version: 1,
             compression_used: compression_algorithm.into(),
             checksum: checksum.into(),
-            serialized_at: Instant::now(),
+            serialized_at_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
             tier_context,
         })
     }
@@ -949,7 +985,7 @@ where
             to_state: MesiState::Shared,   // No transition for validation
             tier: self.entry.tier_info.current_tier.into(),
             version: 0,
-            timestamp_ns: std::time::Instant::now().elapsed().as_nanos() as u64,
+            timestamp_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
             reason: TransitionReason::ProtocolEnforcement,
         };
 
@@ -982,6 +1018,33 @@ where
     }
 }
 
+impl<K, V> Default for SerializationEnvelope<K, V>
+where
+    K: CacheKey + Clone + Default,
+    V: CacheValue + Clone + Default,
+{
+    fn default() -> Self {
+        // Create a default cache entry as the base
+        let default_entry = CacheEntry {
+            key: K::default(),
+            value: V::default(),
+            metadata: CacheEntryMetadata::default(),
+            access_tracker: AccessTracker::new(), // Default max history size
+            tier_info: TierInfo::default(),
+            serialization_context: SerializationContext::default(),
+        };
+
+        Self {
+            entry: default_entry,
+            schema_version: 1,
+            compression_used: CompressionAlgorithm::None,
+            checksum: 0,
+            serialized_at_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64,
+            tier_context: TierSerializationContext::default(),
+        }
+    }
+}
+
 // Implement the existing CacheEntry trait for our concrete CacheEntry struct
 impl<K: CacheKey, V: CacheValue> super::entry_and_stats::CacheEntry<K, V> for CacheEntry<K, V> {
     type Key = K;
@@ -996,7 +1059,8 @@ impl<K: CacheKey, V: CacheValue> super::entry_and_stats::CacheEntry<K, V> for Ca
     }
 
     fn created_at(&self) -> Instant {
-        self.metadata.created_at
+        let system_time = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(self.metadata.created_at_ns);
+        Instant::now() - (std::time::SystemTime::now().duration_since(system_time).unwrap_or_default())
     }
 
     fn access_count(&self) -> u64 {
@@ -1004,7 +1068,8 @@ impl<K: CacheKey, V: CacheValue> super::entry_and_stats::CacheEntry<K, V> for Ca
     }
 
     fn last_access(&self) -> Instant {
-        self.metadata.last_accessed
+        let system_time = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(self.metadata.last_accessed_ns);
+        Instant::now() - (std::time::SystemTime::now().duration_since(system_time).unwrap_or_default())
     }
 
     fn size(&self) -> usize {

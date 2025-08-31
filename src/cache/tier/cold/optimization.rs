@@ -137,7 +137,7 @@ impl StorageOptimizer {
     }
 
     /// Remove expired entries based on access patterns
-    fn remove_expired_entries<
+    pub fn remove_expired_entries<
         K: crate::cache::traits::CacheKey,
         V: crate::cache::traits::CacheValue,
     >(
@@ -147,13 +147,12 @@ impl StorageOptimizer {
         let mut removed_count = 0;
         let _now = Instant::now();
 
-        let index = cache
+        // DashMap provides lock-free concurrent access - no lock() needed
+        let expired_keys: Vec<_> = cache
             .index
-            .lock()
-            .map_err(|_| CacheOperationError::concurrency_error("Failed to acquire index lock"))?;
-        let expired_keys: Vec<_> = index
             .iter()
-            .filter_map(|(key, entry)| {
+            .filter_map(|entry_ref| {
+                let (key, entry) = entry_ref.pair();
                 if entry.last_access.elapsed() > self.config.max_idle_duration {
                     Some(key.clone())
                 } else {
@@ -161,7 +160,6 @@ impl StorageOptimizer {
                 }
             })
             .collect();
-        drop(index);
 
         // Remove expired entries
         for key in expired_keys {
@@ -184,12 +182,12 @@ impl StorageOptimizer {
         let mut removed_count = 0;
         let idle_threshold = self.config.max_idle_duration / 2; // More aggressive threshold
 
-        let index = cache.index.lock().map_err(|_| {
-            CacheOperationError::concurrency_error("Failed to acquire index lock for idle removal")
-        })?;
-        let idle_keys: Vec<_> = index
+        // DashMap provides lock-free concurrent access - no lock() needed
+        let idle_keys: Vec<_> = cache
+            .index
             .iter()
-            .filter_map(|(key, entry)| {
+            .filter_map(|entry_ref| {
+                let (key, entry) = entry_ref.pair();
                 if entry.access_count < 2 && entry.last_access.elapsed() > idle_threshold {
                     Some(key.clone())
                 } else {
@@ -197,7 +195,6 @@ impl StorageOptimizer {
                 }
             })
             .collect();
-        drop(index);
 
         // Remove idle entries
         for key in idle_keys {
@@ -217,11 +214,12 @@ impl StorageOptimizer {
         &self,
         cache: &ColdTierCache<K, V>,
     ) -> Result<f64, CacheOperationError> {
-        let index = cache
+        // DashMap provides lock-free concurrent access - no lock() needed
+        let used_space: u64 = cache
             .index
-            .lock()
-            .map_err(|_| CacheOperationError::concurrency_error("Failed to acquire index lock"))?;
-        let used_space: u64 = index.values().map(|entry| entry.data_size as u64).sum();
+            .iter()
+            .map(|entry_ref| entry_ref.value().data_size as u64)
+            .sum();
         let total_space = cache.write_offset.load(Ordering::Relaxed);
 
         if total_space > 0 {
@@ -239,12 +237,12 @@ impl StorageOptimizer {
         &self,
         cache: &ColdTierCache<K, V>,
     ) -> Result<f64, CacheOperationError> {
-        // Simplified fragmentation calculation
-        let index = cache
+        // Simplified fragmentation calculation using lock-free DashMap access
+        let used_space: u64 = cache
             .index
-            .lock()
-            .map_err(|_| CacheOperationError::concurrency_error("Failed to acquire index lock"))?;
-        let used_space: u64 = index.values().map(|entry| entry.data_size as u64).sum();
+            .iter()
+            .map(|entry_ref| entry_ref.value().data_size as u64)
+            .sum();
         let total_space = cache.write_offset.load(Ordering::Relaxed);
 
         if total_space > 0 {
@@ -313,20 +311,17 @@ pub struct OptimizationStatsSnapshot {
 pub fn analyze_storage_patterns<K: CacheKey, V: CacheValue>(
     cache: &ColdTierCache<K, V>,
 ) -> Result<StorageAnalysis, CacheOperationError> {
-    let index = cache
-        .index
-        .lock()
-        .map_err(|_| CacheOperationError::concurrency_error("Failed to acquire index lock"))?;
-
+    // DashMap provides lock-free concurrent access - no lock() needed
     let mut access_counts = Vec::new();
     let mut sizes = Vec::new();
 
-    for entry in index.values() {
+    for entry_ref in cache.index.iter() {
+        let entry = entry_ref.value();
         access_counts.push(entry.access_count);
         sizes.push(entry.data_size);
     }
 
-    let total_entries = index.len();
+    let total_entries = cache.index.len();
     let total_size: u64 = sizes.iter().map(|&size| size as u64).sum();
 
     Ok(StorageAnalysis {

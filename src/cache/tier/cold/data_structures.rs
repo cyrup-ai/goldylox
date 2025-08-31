@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
 
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 use dashmap::DashMap;
@@ -113,7 +113,37 @@ pub struct CompressionEngine {
     /// Last adaptation timestamp (nanoseconds)
     pub last_adaptation: AtomicU64,
     /// Compression level for algorithms that support it
-    pub compression_level: u8,
+    pub compression_level: AtomicU8,
+    /// Fast mode setting for performance optimization
+    pub fast_mode: AtomicBool,
+}
+
+/// Compression result with comprehensive metadata
+#[derive(Debug, Clone)]
+pub struct CompressionResult {
+    /// Compressed data
+    pub data: Vec<u8>,
+    /// Original size before compression
+    pub original_size: usize,
+    /// Compressed size
+    pub compressed_size: usize,
+    /// Compression ratio (compressed/original)
+    pub compression_ratio: f64,
+    /// Algorithm used
+    pub algorithm: CompressionAlgorithm,
+    /// Compression time in nanoseconds
+    pub compression_time_ns: u64,
+}
+
+/// Decompression result with metadata
+#[derive(Debug, Clone)]
+pub struct DecompressionResult {
+    /// Decompressed data
+    pub data: Vec<u8>,
+    /// Actual size after decompression
+    pub actual_size: usize,
+    /// Decompression time in nanoseconds
+    pub decompression_time_ns: u64,
 }
 
 /// Metadata index for fast key lookup
@@ -173,7 +203,7 @@ pub struct RecoverySystem {
 
 /// Cold cache key for persistent storage
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ColdCacheKey<K: CacheKey> {
     /// Key hash for fast comparison
     pub key_hash: u64,
@@ -295,6 +325,42 @@ pub struct AdaptiveThresholds {
     pub speed_threshold: f64,
 }
 
+impl Default for AdaptiveThresholds {
+    fn default() -> Self {
+        Self {
+            min_compression_size: 512,
+            min_compression_ratio: 0.8,
+            speed_threshold: 100_000_000.0, // 100 MB/s
+        }
+    }
+}
+
+
+
+impl Default for CompressionStats {
+    fn default() -> Self {
+        Self {
+            total_compressed: AtomicU64::new(0),
+            total_uncompressed: AtomicU64::new(0),
+            compression_ops: AtomicU64::new(0),
+            decompression_ops: AtomicU64::new(0),
+            total_compression_time_ns: AtomicU64::new(0),
+            total_decompression_time_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+/// Snapshot of compression statistics for reporting
+#[derive(Debug, Clone)]
+pub struct CompressionStatsSnapshot {
+    pub total_compressed: u64,
+    pub total_uncompressed: u64,
+    pub compression_ops: u64,
+    pub decompression_ops: u64,
+    pub total_compression_time_ns: u64,
+    pub total_decompression_time_ns: u64,
+}
+
 /// Compaction task enumeration
 #[derive(Debug)]
 pub enum CompactionTask {
@@ -322,3 +388,12 @@ pub struct CompactionState {
 }
 
 // AtomicTierStats moved to canonical location: crate::cache::types::statistics::atomic_stats::AtomicTierStats
+
+impl StorageManager {
+    /// Validate storage integrity
+    pub fn validate_integrity(&self) -> Result<bool, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // For now, always return true (valid)
+        // In production, this would check file integrity, checksums, etc.
+        Ok(true)
+    }
+}

@@ -7,6 +7,7 @@
 
 /// Global unified cache manager instance with atomic initialization
 /// This is now generic and must be initialized with specific key/value types
+#[allow(dead_code)]
 static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<Box<dyn std::any::Any + Send + Sync>> =
     std::sync::OnceLock::new();
 

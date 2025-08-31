@@ -2,7 +2,7 @@
 //!
 //! This module contains shared data structures used across all eviction policy implementations.
 
-use std::time::Instant;
+
 
 use crate::cache::coherence::CacheTier;
 pub use crate::cache::traits::AccessType;
@@ -36,6 +36,8 @@ pub enum ConsistencyLevel {
 
 /// Enhanced access event record for pattern analysis
 #[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[serde(bound(serialize = "K: serde::Serialize", deserialize = "K: serde::de::DeserializeOwned"))]
 pub struct AccessEvent<K: CacheKey> {
     /// Unique event identifier
     pub event_id: u64,
@@ -110,12 +112,11 @@ impl<K: CacheKey> AccessEvent<K> {
         self.entry_size = entry_size;
         self
     }
-}
 
-impl<K: CacheKey> AccessEvent<K> {
-    /// Create new access event
-    pub fn new(key: K, access_type: AccessType, tier: CacheTier) -> Self {
+    /// Create basic access event (backward compatibility)  
+    pub fn new_simple(key: K, access_type: AccessType, tier: CacheTier) -> Self {
         Self {
+            event_id: 0, // No event ID for simple version
             key,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -123,29 +124,14 @@ impl<K: CacheKey> AccessEvent<K> {
                 .as_nanos() as u64,
             access_type,
             tier,
+            hit: false, // Default to miss for simple version
+            slot_index: None,
+            latency_ns: 0,
+            entry_size: 0,
         }
     }
 }
 
-impl<K: CacheKey> PrefetchRequest<K> {
-    /// Create new prefetch request
-    pub fn new(key: K, predicted_access: u64, priority: u8, confidence: f32) -> Self {
-        Self {
-            key,
-            predicted_access,
-            priority: priority.min(10),
-            confidence: confidence.clamp(0.0, 1.0),
-            created_at: Instant::now(),
-        }
-    }
-
-    /// Check if request has expired based on age
-    pub fn is_expired(&self, max_age: std::time::Duration) -> bool {
-        self.created_at.elapsed() > max_age
-    }
-
-    /// Get request age in milliseconds
-    pub fn age_ms(&self) -> u64 {
-        self.created_at.elapsed().as_millis() as u64
-    }
-}
+// PrefetchRequest implementation moved to canonical location:
+// crate::cache::tier::hot::prefetch::types::PrefetchRequest
+// The canonical version provides enhanced functionality with metadata and pattern detection

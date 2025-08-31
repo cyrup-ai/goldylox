@@ -22,7 +22,7 @@ pub struct MemoryEfficiencyAnalyzer {
     /// Fragmentation analysis
     fragmentation_analyzer: FragmentationAnalyzer,
     /// Analysis result history
-    analysis_history: AnalysisHistoryBuffer,
+    analysis_history: std::cell::UnsafeCell<AnalysisHistoryBuffer>,
 }
 
 /// Allocation pattern tracking
@@ -101,10 +101,10 @@ impl MemoryEfficiencyAnalyzer {
                 free_block_count: AtomicUsize::new(0),
                 largest_free_block: AtomicUsize::new(0),
             },
-            analysis_history: AnalysisHistoryBuffer {
+            analysis_history: std::cell::UnsafeCell::new(AnalysisHistoryBuffer {
                 results: ArrayVec::new(),
                 write_position: AtomicUsize::new(0),
-            },
+            }),
         })
     }
 
@@ -137,7 +137,7 @@ impl MemoryEfficiencyAnalyzer {
     pub fn analyze_current_efficiency(
         &self,
         allocation_stats: &super::allocation_stats::AllocationStatistics,
-        _pool_manager: &super::memory_pools::MemoryPoolManager,
+        _pool_manager: &super::pool_manager::manager::MemoryPoolManager,
     ) -> super::types::EfficiencyAnalysisResult {
         let stats = allocation_stats.get_statistics();
         let total_allocated = stats.total_allocated;
@@ -321,27 +321,26 @@ impl MemoryEfficiencyAnalyzer {
 
     /// Store analysis result in history
     fn store_analysis_result(&self, result: EfficiencyAnalysisResult) {
-        // Use circular buffer pattern from PerformanceHistory
-        let current_pos = self.analysis_history.write_position.load(Ordering::Acquire);
-        let capacity = self.analysis_history.capacity.load(Ordering::Acquire) as u64;
+        // Use circular buffer pattern with ArrayVec
+        let current_pos = unsafe { (*self.analysis_history.get()).write_position.load(Ordering::Acquire) };
+        let capacity = 32u64; // ArrayVec<EfficiencyAnalysisResult, 32> capacity
         
         // Calculate write index in circular buffer
-        let write_idx = (current_pos % capacity) as usize;
+        let write_idx = (current_pos % capacity as usize) as usize;
         
-        // Store in buffer (unsafe access needed for atomic operations on array)
+        // Store in buffer using UnsafeCell for safe interior mutability
         unsafe {
-            let history_ptr = &self.analysis_history as *const _ as *mut AnalysisHistoryBuffer;
-            let history_mut = &mut *history_ptr;
+            let history_mut = &mut *self.analysis_history.get();
             
-            if history_mut.buffer.len() >= capacity as usize {
-                history_mut.buffer[write_idx] = result;
+            if history_mut.results.len() >= capacity as usize {
+                history_mut.results[write_idx] = result;
             } else {
-                history_mut.buffer.push(result);
+                history_mut.results.push(result);
             }
         }
         
         // Update write position
-        self.analysis_history.write_position.store(current_pos.wrapping_add(1), Ordering::Release);
+        unsafe { (*self.analysis_history.get()).write_position.store(current_pos.wrapping_add(1), Ordering::Release) };
     }
 
     /// Get current time in nanoseconds
@@ -366,8 +365,9 @@ impl MemoryEfficiencyAnalyzer {
         }
         
         // Use existing allocation failure data
-        let total_ops = allocation_stats.allocation_operations();
-        let failures = allocation_stats.allocation_failures();
+        let stats = allocation_stats.get_statistics();
+        let total_ops = stats.allocation_operations;
+        let failures = stats.allocation_failures;
         let failure_rate = if total_ops > 0 {
             failures as f64 / total_ops as f64
         } else {
@@ -379,8 +379,8 @@ impl MemoryEfficiencyAnalyzer {
         }
         
         // Use existing peak allocation tracking for memory efficiency
-        let total_allocated = allocation_stats.total_allocated();
-        let peak_allocation = allocation_stats.peak_allocation();
+        let total_allocated = stats.total_allocated;
+        let peak_allocation = stats.peak_allocation;
         let memory_efficiency = if peak_allocation > 0 {
             total_allocated as f64 / peak_allocation as f64
         } else {

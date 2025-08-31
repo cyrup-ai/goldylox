@@ -2,6 +2,9 @@
 //!
 //! This module implements various algorithms to detect access patterns
 //! in cache usage history for predictive prefetching.
+//!
+//! CANONICAL IMPLEMENTATION: This is the canonical PatternDetector implementation.
+//! The analyzer module provides a compatibility wrapper for backward compatibility.
 
 use std::collections::{HashMap, VecDeque};
 

@@ -22,6 +22,12 @@ impl AtomicTierStats {
             peak_access_latency_ns: self.get_peak_access_latency_ns(),
             ops_per_second: self.get_ops_per_second(),
             performance_score: self.get_performance_score(),
+            timestamp_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64,
+            memory_pressure: self.memory_efficiency(),
+            evictions: self.get_total_operations(),
         }
     }
 

@@ -17,6 +17,7 @@ pub mod statistics;
 
 // Re-export main types
 pub use atomic::timestamp_nanos;
+pub use error_types::HitStatus; // Canonical location  
 pub use results::CacheResult;
 pub use statistics::tier_stats::TierStatistics;
 pub use crate::cache::worker::types::StatUpdate;
@@ -29,7 +30,7 @@ use std::time::Instant;
 // Users should implement CacheKey and CacheValue traits for their specific types
 
 /// Cache tier enumeration for multi-tier cache architecture
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub enum CacheTier {
     /// Hot tier - SIMD-optimized, fastest access, smallest capacity
     Hot,
@@ -103,7 +104,7 @@ impl AccessPath {
     }
 
     /// Get recent access count
-    pub fn recent_access_count(&self, stats: &crate::cache::manager::statistics::types::UnifiedCacheStatistics) -> u32 {
+    pub fn recent_access_count(&self, stats: &crate::telemetry::unified_stats::UnifiedCacheStatistics) -> u32 {
         // Get the ACTUAL total access count from the unified statistics system
         // The total_operations() method tracks all cache accesses (hits and misses)
         stats.total_operations() as u32
@@ -121,12 +122,8 @@ impl AccessPath {
         // Use the ACTUAL sophisticated spatial locality analysis from AccessPatternAnalyzer
         // The analyzer tracks spatial patterns using the is_spatial_pattern() method
         // which analyzes hash ranges and cache line groupings
-        if let Some(pattern) = analyzer.analyze_access_pattern(key) {
-            pattern.temporal_locality // temporal_locality also captures spatial aspects
-        } else {
-            // Default spatial locality for untracked keys
-            0.5
-        }
+        let pattern = analyzer.analyze_access_pattern(key);
+        pattern.temporal_locality as f32 // temporal_locality also captures spatial aspects
     }
 
     /// Calculate average access delay

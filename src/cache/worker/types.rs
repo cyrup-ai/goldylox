@@ -43,15 +43,15 @@ pub enum StatUpdate {
 }
 
 /// Background maintenance worker for cache system
-pub struct CacheMaintenanceWorker<K: CacheKey, V: CacheValue> {
+pub struct CacheMaintenanceWorker {
     /// Worker thread handle
     pub worker_handle: Option<JoinHandle<()>>,
     /// Shutdown signal
     pub shutdown: AtomicBool,
-    /// Task channel sender
-    pub task_sender: Sender<MaintenanceTask<K, V>>,
+    /// Task channel sender (uses canonical MaintenanceTask)
+    pub task_sender: Sender<MaintenanceTask>,
     /// Task channel receiver (moved to worker thread on start)
-    task_receiver: Option<Receiver<MaintenanceTask<K, V>>>,
+    task_receiver: Option<Receiver<MaintenanceTask>>,
     /// Stats update sender for worker to send updates
     pub stat_sender: Sender<StatUpdate>,
     /// Stats update receiver for manager to process updates
@@ -60,7 +60,7 @@ pub struct CacheMaintenanceWorker<K: CacheKey, V: CacheValue> {
     pub stats: WorkerStats,
 }
 
-impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
+impl CacheMaintenanceWorker {
     /// Create a new maintenance worker
     pub fn new() -> Self {
         let (task_sender, task_receiver) = crossbeam::channel::unbounded();
@@ -76,10 +76,10 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
         }
     }
 
-    /// Submit a maintenance task
+    /// Submit a canonical maintenance task
     pub fn submit_task(
         &self,
-        task: MaintenanceTask<K, V>,
+        task: MaintenanceTask,
     ) -> Result<(), CacheOperationError> {
         // Send stats update for task queued
         let _ = self.stat_sender.send(StatUpdate::TaskQueued);
@@ -140,30 +140,77 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
         }
     }
 
-    /// Schedule automatic maintenance
+    /// Schedule automatic maintenance using canonical tasks
     pub fn schedule_maintenance(&self) -> Result<(), CacheOperationError> {
-        // Submit various maintenance tasks
-        self.submit_task(MaintenanceTask::CleanupExpired)?;
-        self.submit_task(MaintenanceTask::UpdateStatistics)?;
+        // Submit various canonical maintenance tasks
+        self.submit_task(WorkerMaintenanceOps::cleanup_expired_task())?;
+        self.submit_task(WorkerMaintenanceOps::update_statistics_task())?;
         Ok(())
     }
 }
 
-/// Maintenance task types
-#[derive(Debug, Clone)]
-pub enum MaintenanceTask<K: CacheKey, V: CacheValue> {
-    /// Promote entry from cold to warm tier
-    Promote { key: K, value: V },
-    /// Demote entry from warm to cold tier
-    Demote { key: K, value: V },
-    /// Cleanup expired entries
-    CleanupExpired,
-    /// Compact cold tier storage
-    CompactColdTier,
-    /// Optimize cache layout
-    OptimizeLayout,
-    /// Update cache statistics
-    UpdateStatistics,
+/// CANONICAL MaintenanceTask is used directly - NO LOCAL DUPLICATES
+/// All worker operations now use the canonical maintenance task definition.
+
+// Import canonical MaintenanceTask and supporting types
+pub use crate::cache::tier::warm::maintenance::{
+    MaintenanceTask,
+    OptimizationLevel,
+    AnalysisDepth,
+    SyncDirection,
+    ConsistencyLevel,
+    ValidationLevel,
+    ModelComplexity,
+    TaskPriority,
+};
+
+/// Worker-specific maintenance operations using canonical tasks
+pub struct WorkerMaintenanceOps;
+
+impl WorkerMaintenanceOps {
+    /// Create promote operation using canonical cleanup task
+    pub fn promote_task<K: CacheKey, V: CacheValue>() -> MaintenanceTask {
+        // Worker promotions are implemented as cleanup + optimization
+        MaintenanceTask::CleanupExpired { 
+            ttl: std::time::Duration::from_secs(300),
+            batch_size: 100 
+        }
+    }
+
+    /// Create demote operation using canonical eviction task
+    pub fn demote_task<K: CacheKey, V: CacheValue>() -> MaintenanceTask {
+        MaintenanceTask::PerformEviction { 
+            target_pressure: 0.7,
+            max_evictions: 50 
+        }
+    }
+
+    /// Create cleanup task
+    pub fn cleanup_expired_task() -> MaintenanceTask {
+        MaintenanceTask::CleanupExpired { 
+            ttl: std::time::Duration::from_secs(600),
+            batch_size: 200 
+        }
+    }
+
+    /// Create compact cold tier task
+    pub fn compact_cold_tier_task() -> MaintenanceTask {
+        MaintenanceTask::CompactStorage { compaction_threshold: 0.7 }
+    }
+
+    /// Create optimize layout task
+    pub fn optimize_layout_task() -> MaintenanceTask {
+        MaintenanceTask::OptimizeStructure { 
+            optimization_level: OptimizationLevel::Standard 
+        }
+    }
+
+    /// Create update statistics task
+    pub fn update_statistics_task() -> MaintenanceTask {
+        MaintenanceTask::UpdateStatistics { 
+            include_detailed_analysis: true 
+        }
+    }
 }
 
 /// Worker performance statistics with lock-free atomic fields

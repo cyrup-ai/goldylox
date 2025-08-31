@@ -106,7 +106,7 @@ pub enum InvalidationReason {
 
 /// Coherence key for cache line identification
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct CoherenceKey<K> {
     /// Primary key hash for fast comparison
     pub key_hash: u64,

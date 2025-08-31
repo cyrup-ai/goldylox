@@ -32,6 +32,9 @@ pub enum RecoveryStrategy {
     ResourceReallocation,
     ConfigurationReset,
     SystemRestart,
+    CircuitBreaker,
+    Graceful,
+    Escalate,
 }
 
 /// Circuit breaker state

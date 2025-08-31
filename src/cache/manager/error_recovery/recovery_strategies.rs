@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use crate::telemetry::cache::manager::error_recovery::types::*;
+use super::types::*;
 use super::strategies::RecoveryStrategies;
 
 /// Error recovery coordinator with strategy management

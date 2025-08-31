@@ -1,10 +1,10 @@
 //! Telemetry types module - consolidated from performance_tracking, measurement, and cache/performance_tracking
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+
+
 use std::time::{Duration, Instant};
 
-use crossbeam_utils::CachePadded;
+
 
 /// Measurement result types
 #[derive(Debug, Clone, Copy, Default)]
@@ -74,17 +74,9 @@ pub struct PerformanceAlert {
     pub metric_value: f64,
 }
 
-/// Performance sample for monitoring
-#[derive(Debug, Clone, Copy)]
-pub struct PerformanceSample {
-    pub timestamp: u64,
-    pub latency_ns: u64,
-    pub throughput: f64,
-    pub memory_usage: usize,
-    pub error_count: u32,
-    pub operation_latency_ns: u64,
-    pub tier_hit: bool,
-}
+// PerformanceSample moved to canonical location: crate::telemetry::data_structures::PerformanceSample
+// Use the enhanced canonical implementation with comprehensive tier metrics plus error tracking and tier hit detection
+pub use crate::telemetry::data_structures::PerformanceSample;
 
 /// Monitor configuration
 #[derive(Debug, Clone)]
@@ -108,76 +100,19 @@ impl Default for MonitorConfig {
     }
 }
 
-/// Alert history buffer
-#[derive(Debug)]
-pub struct AlertHistoryBuffer {
-    pub alerts: VecDeque<PerformanceAlert>,
-    pub max_size: usize,
-}
+// AlertHistoryBuffer moved to canonical location: crate::telemetry::data_structures::AlertHistoryBuffer
 
-impl AlertHistoryBuffer {
-    pub fn new(max_size: usize) -> Self {
-        Self {
-            alerts: VecDeque::with_capacity(max_size),
-            max_size,
-        }
-    }
+// AlertRateLimits moved to canonical location: crate::telemetry::data_structures::AlertRateLimits
+// Use the canonical implementation with enhanced per-type rate limiting and CachePadded optimization
+pub use crate::telemetry::data_structures::AlertRateLimits;
 
-    pub fn push(&mut self, alert: PerformanceAlert) {
-        if self.alerts.len() >= self.max_size {
-            self.alerts.pop_front();
-        }
-        self.alerts.push_back(alert);
-    }
-}
+// ThresholdAdaptationState moved to canonical location: crate::telemetry::data_structures::ThresholdAdaptationState  
+// Use the canonical implementation with enhanced thread-safe atomic fields and rich ML features
+pub use crate::telemetry::data_structures::ThresholdAdaptationState;
 
-/// Alert rate limits
-#[derive(Debug)]
-pub struct AlertRateLimits {
-    pub max_alerts_per_minute: u32,
-    pub current_count: CachePadded<AtomicU32>,
-    pub last_reset: CachePadded<AtomicU64>,
-}
-
-impl AlertRateLimits {
-    pub fn new(max_per_minute: u32) -> Self {
-        Self {
-            max_alerts_per_minute: max_per_minute,
-            current_count: CachePadded::new(AtomicU32::new(0)),
-            last_reset: CachePadded::new(AtomicU64::new(0)),
-        }
-    }
-}
-
-/// Threshold adaptation state
-#[derive(Debug)]
-pub struct ThresholdAdaptationState {
-    pub baseline_values: Vec<f64>,
-    pub adaptation_factor: f64,
-    pub last_adaptation: Instant,
-    pub learning_rate: f64,
-    pub adaptive_enabled: bool,
-}
-
-impl ThresholdAdaptationState {
-    pub fn new() -> Self {
-        Self {
-            baseline_values: Vec::new(),
-            adaptation_factor: 1.0,
-            last_adaptation: Instant::now(),
-            learning_rate: 0.1,
-            adaptive_enabled: true,
-        }
-    }
-}
-
-/// Trend sample for analysis
-#[derive(Debug, Clone, Copy)]
-pub struct TrendSample {
-    pub timestamp: u64,
-    pub value: f64,
-    pub derivative: f64,
-}
+// TrendSample moved to canonical location: crate::telemetry::data_structures::TrendSample
+// Use the canonical implementation with comprehensive performance metrics including hit rate, latency, memory, throughput, trend direction, and strength
+pub use crate::telemetry::data_structures::TrendSample;
 
 /// Performance trends analysis
 #[derive(Debug, Clone)]

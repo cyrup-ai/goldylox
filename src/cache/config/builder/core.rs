@@ -9,6 +9,7 @@ use crate::cache::config::types::{
     AlertThresholdsConfig, AnalyzerConfig, CacheConfig, ColdTierConfig,
     HashFunction, HotTierConfig, MemoryConfig, MonitoringConfig, WorkerConfig,
 };
+use crate::cache::tier::warm::config::{FrequencyConfig, BatchSizeConfig, ConcurrencyConfig, BackoffConfig};
 use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
 use crate::cache::tier::warm::config::{
     WarmTierConfig, SkipMapConfig, PressureConfig, EvictionConfig as WarmEvictionConfig,
@@ -34,7 +35,11 @@ impl CacheConfigBuilder {
                     eviction_policy: EvictionPolicyType::Lru,
                     cache_line_size: 64,
                     prefetch_distance: 2,
-                    _padding: [0; 5],
+                    enable_simd: cfg!(target_arch = "x86_64"),
+                    enable_prefetch: true,
+                    lru_threshold_secs: 300,
+                    memory_limit_mb: 64,
+                    _padding: [0; 1],
                 },
                 warm_tier: WarmTierConfig {
                     enabled: true,
@@ -43,12 +48,62 @@ impl CacheConfigBuilder {
                     default_ttl_sec: 300, // Convert from nanoseconds
                     promotion_threshold: 3,
                     demotion_age_threshold_ns: 600_000_000_000,
-                    skip_map: SkipMapConfig::default(),
-                    pressure_thresholds: PressureConfig::default(),
+                    skip_map: SkipMapConfig {
+                        max_level: 16,
+                        skip_probability_x1000: 500,
+                        node_pool_size: 1024,
+                    },
+                    pressure_thresholds: PressureConfig {
+                        low_threshold: 0.5,
+                        medium_threshold: 0.7,
+                        high_threshold: 0.85,
+                        critical_threshold: 0.95,
+                        alert_cooldown_ms: 30_000,
+                        leak_detection_sensitivity: 0.8,
+                    },
                     eviction_config: WarmEvictionConfig::default_const(),
-                    tracking_config: TrackingConfig::default(),
-                    background_config: BackgroundConfig::default(),
-                    performance_config: PerformanceConfig::default(),
+                    tracking_config: TrackingConfig {
+                        history_window_size: 1000,
+                        pattern_analysis_interval_sec: 30,
+                        frequency_estimation: FrequencyConfig {
+                            decay_factor: 0.9,
+                            min_frequency_hz: 0.001,
+                            max_frequency_hz: 1000.0,
+                            sample_window_size: 32,
+                        },
+                        pattern_sensitivity: 0.7,
+                        enable_prefetching: true,
+                    },
+                    background_config: BackgroundConfig {
+                        enable_background_tasks: true,
+                        task_interval_ms: 100,
+                        max_tasks_per_cycle: 10,
+                        thread_pool_size: 2,
+                        task_queue_capacity: 1000,
+                    },
+                    performance_config: PerformanceConfig {
+                        enable_simd: true,
+                        cache_line_alignment: 64,
+                        skiplist_probability: 0.5,
+                        enable_prefetch_hints: true,
+                        batch_sizes: BatchSizeConfig {
+                            cleanup_batch: 100,
+                            eviction_batch: 50,
+                            stats_batch: 25,
+                            analysis_batch: 200,
+                        },
+                        concurrency_limits: ConcurrencyConfig {
+                            max_readers: 1000,
+                            max_writers: 10,
+                            rw_balance_ratio: 0.8,
+                            backoff_config: BackoffConfig {
+                                initial_delay_ns: 1000,
+                                max_delay_ns: 1_000_000,
+                                multiplier: 2.0,
+                                jitter_factor: 0.1,
+                            },
+                        },
+                    },
                 },
                 cold_tier: ColdTierConfig {
                     enabled: false,

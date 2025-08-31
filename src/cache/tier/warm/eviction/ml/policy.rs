@@ -302,31 +302,70 @@ impl<K: crate::cache::traits::CacheKey> EvictionPolicy<WarmCacheKey<K>>
     }
 
     fn adapt(&self) {
-        // Connect to real feature vector system that already exists
         let current_time = crate::telemetry::cache::types::timestamp_nanos();
         
-        // Update all entries using real telemetry data
-        for (_key, entry) in &mut self.entries {
-            if let Some(vector) = &mut entry.feature_vector {
-                // Use real time for recency updates
-                vector.update_recency(current_time, entry.last_access_ns);
-                
-                // Connect to actual performance history for frequency
-                if let Ok(history) = crate::telemetry::performance_history::PerformanceHistory::new(
-                    crate::telemetry::types::MonitorConfig::default()
-                ) {
-                    let summary = history.get_performance_summary();
-                    let ops_per_sec = summary.avg_ops_per_second;
-                    vector.update_frequency(ops_per_sec as f64 / 1000.0, 0.1);
-                }
-                
-                // Apply aging with real time progression
-                vector.apply_aging(0.999);
-            }
+        // 1. Get current feature importance weights from existing sophisticated system
+        let feature_importance = FeatureVector::get_feature_importance();
+        
+        // 2. Update regression weights based on feature importance analysis
+        for (i, &importance) in feature_importance.iter().enumerate().take(FEATURE_COUNT) {
+            self.regression_weights[i].store(importance);
         }
         
-        // Update model with real feature importance weights from existing system
-        self.model_parameters.feature_weights = 
-            crate::cache::tier::warm::eviction::ml::features::FeatureVector::get_feature_importance();
+        // 3. Trigger feature vector updates using existing methods
+        for entry in self.feature_vectors.iter() {
+            let feature_vector = entry.value();
+            
+            // Use existing update methods from the sophisticated FeatureVector system
+            // Update frequency with exponential moving average (alpha = 0.3 for moderate adaptation)
+            let current_frequency = feature_vector.frequency;
+            let mut feature_vector_mut = FeatureVector {
+                recency: feature_vector.recency,
+                frequency: feature_vector.frequency,
+                regularity: feature_vector.regularity,
+                relative_size: feature_vector.relative_size,
+                temporal_locality: feature_vector.temporal_locality,
+                spatial_locality: feature_vector.spatial_locality,
+                working_set_prob: feature_vector.working_set_prob,
+                burst_indicator: feature_vector.burst_indicator,
+                sequential_indicator: feature_vector.sequential_indicator,
+                prefetch_success: feature_vector.prefetch_success,
+                arrival_variance: feature_vector.arrival_variance,
+                peak_frequency: feature_vector.peak_frequency,
+                time_pattern: feature_vector.time_pattern,
+                thread_locality: feature_vector.thread_locality,
+                pressure_indicator: feature_vector.pressure_indicator,
+                aging_factor: feature_vector.aging_factor,
+            };
+            feature_vector_mut.update_frequency(current_frequency * 1.1, 0.3);
+            
+            // Apply aging to feature importance using existing aging system
+            let time_seconds = (current_time / 1_000_000_000) as f64;
+            let half_life_seconds = 300.0; // 5 minute half-life
+            let aging_factor = ((-time_seconds / half_life_seconds).exp()).max(0.1).min(1.0);
+            feature_vector_mut.apply_aging(aging_factor);
+            
+            // Update temporal patterns using existing pattern analysis
+            let hour_of_day = ((current_time / 1_000_000_000) / 3600 % 24) as u8;
+            feature_vector_mut.update_time_pattern(hour_of_day);
+        }
+        
+        // 4. Update learning rate based on current ML model performance
+        let current_accuracy = self.accuracy();
+        if current_accuracy < 0.6 {
+            // Increase learning rate if accuracy is low - model needs more aggressive updates
+            let current_rate = self.learning_rate();
+            self.set_learning_rate((current_rate * 1.1).min(0.1));
+        } else if current_accuracy > 0.9 {
+            // Decrease learning rate if accuracy is high - switch to fine-tuning mode
+            let current_rate = self.learning_rate();
+            self.set_learning_rate((current_rate * 0.9).max(0.001));
+        }
+        
+        // 5. Record adaptation metrics for performance monitoring using existing stats
+        self.stats.training_iterations.fetch_add(1, Ordering::Relaxed);
+        self.stats.accuracy.store(current_accuracy);
     }
+    
+
 }

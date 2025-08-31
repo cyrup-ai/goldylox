@@ -28,17 +28,17 @@ rayon = "1.11"
 tokio = { version = "1", features = ["sync", "time", "rt"], optional = true }
 
 # Serialization for cold tier and configuration
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 serde_json = "1.0"
-bincode = { version = "2", optional = true, features = ["derive", "alloc", "std"] }
+bincode = { version = "2", features = ["derive", "alloc", "std"] }
 
 # Compression for cold tier
-lz4_flex = { version = "0.11", optional = true }
+lz4_flex = "0.11"
 zstd = "0.13"
 flate2 = { version = "1", features = ["zlib-ng"], default-features = false }
 snap = "1"
-brotli = { version = "8", optional = true }
+brotli = "8"
 crc32fast = "1"
 
 # Memory management and metrics
@@ -62,14 +62,8 @@ futures-lite = "2.6.1"
 nix = { version = "0.30.1", features = ["sched"] }
 
 [features]
-default = ["hot-tier", "warm-tier", "cold-tier", "serde", "compression"]
-hot-tier = []
-warm-tier = []
-cold-tier = ["bincode", "lz4_flex"]
+default = []
 async = ["tokio"]
-compression = ["lz4_flex", "brotli"]
-bincode = ["dep:bincode"]
-serde = ["dep:serde"]
 
 # Platform-specific dependencies for memory detection
 [target.'cfg(target_os = "macos")'.dependencies]

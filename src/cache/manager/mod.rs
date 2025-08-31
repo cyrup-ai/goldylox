@@ -15,12 +15,12 @@ pub mod strategy;
 // Import directly from specific modules:
 // - Use crate::cache::types::AccessPath
 // - Use crate::cache::types::PlacementDecision  
-// - Use crate::cache::manager::core::types::UnifiedCacheManager
+// - Use crate::cache::coordinator::unified_manager::UnifiedCacheManager::<K, V>::new()
 // - etc.
 
 pub use background::{
     BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
-    MaintenanceStats, MaintenanceTask, MaintenanceTaskType, WorkerStatus,
+    MaintenanceStats, MaintenanceTask, CanonicalMaintenanceTask, WorkerStatus,
 };
 pub use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 pub use error_recovery::{
@@ -32,12 +32,12 @@ pub use performance::{
     PerformanceSnapshot,
 };
 pub use policy::{
-    AccessType, CachePolicyEngine, PatternType, PrefetchPredictor, ReplacementAlgorithm,
+    AccessType, CachePolicyEngine, PrefetchPredictor, ReplacementAlgorithm,
     ReplacementPolicies, WritePolicy, WritePolicyManager,
 };
-pub use statistics::types::{
-    CachePerformanceMetrics, StatisticsConfig, UnifiedCacheStatistics,
-};
+// REMOVED: Redirecting to canonical location
+// Import UnifiedCacheStatistics from canonical location:
+// - Use crate::telemetry::unified_stats::{UnifiedCacheStatistics, CachePerformanceMetrics, StatisticsConfig};
 pub use strategy::{
     CacheStrategy, CacheStrategySelector, StrategyMetrics, StrategySwitcher, StrategyThresholds,
 };

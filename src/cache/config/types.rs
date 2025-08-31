@@ -44,7 +44,7 @@ pub enum HashFunction {
 // EvictionPolicy moved to canonical location: crate::cache::tier::warm::eviction::types::EvictionPolicyType
 // Use the comprehensive "best of best" implementation for all eviction policy needs
 
-/// Hot tier configuration (cache-aligned, 64 bytes)
+/// Hot tier configuration (cache-aligned, 64 bytes) - Unified canonical version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(align(64))]
 pub struct HotTierConfig {
@@ -54,8 +54,16 @@ pub struct HotTierConfig {
     pub eviction_policy: EvictionPolicyType,
     pub cache_line_size: u8,
     pub prefetch_distance: u8,
+    /// Enable SIMD optimizations (from tier-specific version)
+    pub enable_simd: bool,
+    /// Enable prefetching (from tier-specific version)  
+    pub enable_prefetch: bool,
+    /// LRU eviction threshold in seconds (from tier-specific version)
+    pub lru_threshold_secs: u32,
+    /// Memory limit in megabytes (from tier-specific version)
+    pub memory_limit_mb: u32,
     #[serde(skip)]
-    pub _padding: [u8; 5],
+    pub _padding: [u8; 1],
 }
 
 // Removed re-export to eliminate type identity conflicts  
@@ -276,7 +284,11 @@ impl Default for HotTierConfig {
             eviction_policy: EvictionPolicyType::Lru,
             cache_line_size: 64,
             prefetch_distance: 2,
-            _padding: [0; 5],
+            enable_simd: cfg!(target_arch = "x86_64"),
+            enable_prefetch: true,
+            lru_threshold_secs: 300, // 5 minutes
+            memory_limit_mb: 64,     // 64MB
+            _padding: [0; 1],
         }
     }
 }
@@ -506,7 +518,11 @@ impl CacheConfig {
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 64,
                 prefetch_distance: 8,
-                _padding: [0; 5],
+                enable_simd: true,
+                enable_prefetch: true,
+                lru_threshold_secs: 180, // 3 minutes for high performance
+                memory_limit_mb: 128,    // 128MB for high performance
+                _padding: [0; 1],
             },
             warm_tier: WarmTierConfig::default(),
             cold_tier: ColdTierConfig::default(),
@@ -528,7 +544,11 @@ impl CacheConfig {
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 32,
                 prefetch_distance: 2,
-                _padding: [0; 5],
+                enable_simd: false,       // Disabled for low memory
+                enable_prefetch: false,   // Disabled for low memory
+                lru_threshold_secs: 600,  // 10 minutes for low memory
+                memory_limit_mb: 16,      // 16MB for low memory
+                _padding: [0; 1],
             },
             warm_tier: WarmTierConfig::default(),
             cold_tier: ColdTierConfig::default(),

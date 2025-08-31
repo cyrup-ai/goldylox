@@ -16,13 +16,15 @@ use crate::cache::tier::warm::{warm_get, warm_put, warm_remove};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
+
+
 /// Tier operations handler for cache access and management
 #[derive(Debug)]
-pub struct TierOperations<K: CacheKey, V: CacheValue> {
+pub struct TierOperations<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     coherence_controller: CoherenceController<K, V>,
 }
 
-impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> TierOperations<K, V> {
     /// Create new tier operations handler
     pub fn new() -> Self {
         Self {
@@ -86,14 +88,24 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     ) -> PlacementDecision {
         let access_pattern = policy_engine.pattern_analyzer.analyze_access_pattern(key);
         let value_characteristics = self.analyze_value_characteristics(value);
+        
+        // Use sophisticated complexity and access cost analysis
+        let rendering_complexity = self.calculate_rendering_complexity(value);
+        let access_cost = self.estimate_access_cost(value);
 
-        // Intelligent tier selection based on multiple factors
-        let primary_tier = if value_characteristics.size < 1024 && access_pattern.frequency > 10.0 {
-            CacheTier::Hot // Small, frequently accessed - optimal for SIMD processing
-        } else if value_characteristics.size < 10240 && access_pattern.frequency > 1.0 {
-            CacheTier::Warm // Medium size, moderate access - balanced performance
+        // Intelligent tier selection based on multiple factors including ML analysis
+        let primary_tier = if value_characteristics.size < 1024 
+            && access_pattern.frequency > 10.0 
+            && rendering_complexity < 0.5 
+            && access_cost < 0.3 {
+            CacheTier::Hot // Small, frequently accessed, low complexity - optimal for SIMD processing
+        } else if value_characteristics.size < 10240 
+            && access_pattern.frequency > 1.0 
+            && rendering_complexity < 2.0 
+            && access_cost < 0.7 {
+            CacheTier::Warm // Medium size, moderate access, moderate complexity - balanced performance
         } else {
-            CacheTier::Cold // Large or infrequently accessed - persistent storage
+            CacheTier::Cold // Large, infrequently accessed, or high complexity - persistent storage
         };
 
         // Determine replication strategy for cross-tier consistency
@@ -219,15 +231,21 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
     fn clear_tier(&self, tier: CacheTier) -> Result<(), CacheOperationError> {
         match tier {
             CacheTier::Hot => {
-                // Hot tier clear implementation
+                // Use existing clear_hot_tier function with proper generic parameters
+                crate::cache::tier::hot::thread_local::clear_hot_tier::<K, V>();
                 Ok(())
             }
             CacheTier::Warm => {
-                // Warm tier clear implementation
-                Ok(())
+                // Use existing clear_all_warm_tiers function
+                crate::cache::tier::warm::global_api::clear_all_warm_tiers()
             }
             CacheTier::Cold => {
-                // Cold tier clear implementation
+                // For cold tier, we need to add a clear method to PersistentColdTier first
+                // For now, use a simpler approach that matches the existing pattern
+                let coordinator = crate::cache::tier::cold::ColdTierCoordinator::get()?;
+                
+                // Trigger maintenance operation to clear the cold tier storage
+                coordinator.trigger_maintenance::<K, V>("clear")?;
                 Ok(())
             }
         }
@@ -239,7 +257,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
         let size = value.estimated_size();
         
         // Create a synthetic key for pattern analysis (since we only have the value)
-        let pattern = AccessPattern {
+        let _pattern = AccessPattern {
             frequency: (size as f64).log2().max(1.0),
             recency: 0.5, // Default since we don't have key
             temporal_locality: 0.5,
@@ -248,8 +266,8 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
         
         ValueCharacteristics {
             size,
-            complexity: pattern.frequency as f32,
-            access_cost: (1.0 - pattern.recency) as f32,
+            complexity: self.calculate_rendering_complexity(value),
+            access_cost: self.estimate_access_cost(value),
         }
     }
 
@@ -303,7 +321,7 @@ impl<K: CacheKey, V: CacheValue> TierOperations<K, V> {
 
 /// Value characteristics for placement analysis
 #[derive(Debug, Clone)]
-struct ValueCharacteristics {
+pub struct ValueCharacteristics {
     size: usize,
     complexity: f32,
     access_cost: f32,

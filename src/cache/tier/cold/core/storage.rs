@@ -10,10 +10,9 @@ use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-#[cfg(feature = "bincode")]
 
 
-impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()>>
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()> + bincode::Encode>
     PersistentColdTier<K, V>
 {
     /// Read data from storage using metadata

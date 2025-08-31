@@ -15,7 +15,6 @@ use super::types_and_enums::{
 };
 
 /// Advanced cache key trait with intelligent caching features
-#[cfg(feature = "serde")]
 pub trait CacheKey:
     Clone
     + Send
@@ -66,73 +65,10 @@ pub trait CacheKey:
     fn fast_hash(&self, context: &Self::HashContext) -> u64;
 }
 
-#[cfg(not(feature = "serde"))]
-pub trait CacheKey: Clone + Send + Sync + Debug + Hash + Eq + Ord + 'static {
-    /// Hash context type for specialized hashing
-    type HashContext: super::supporting_types::HashContext;
-    /// Priority type for eviction decisions
-    type Priority: super::supporting_types::Priority;
-    /// Size estimator type for memory accounting
-    type SizeEstimator: super::supporting_types::SizeEstimator;
-
-    /// Size estimation for memory accounting
-    fn estimated_size(&self) -> usize;
-
-    /// Cache affinity hint for initial tier placement
-    fn tier_affinity(&self) -> TierAffinity {
-        TierAffinity::Auto
-    }
-
-    /// Simple cache hash for eviction and placement decisions
-    fn cache_hash(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hasher;
-
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Get hash context for advanced hashing
-    fn hash_context(&self) -> Self::HashContext;
-
-    /// Get priority for eviction decisions
-    fn priority(&self) -> Self::Priority;
-
-    /// Get size estimator for memory accounting
-    fn size_estimator(&self) -> Self::SizeEstimator;
-
-    /// Compute fast hash with context
-    fn fast_hash(&self, context: &Self::HashContext) -> u64;
-}
-
 /// Advanced cache value trait with intelligent caching features
-#[cfg(feature = "serde")]
 pub trait CacheValue:
     Clone + Send + Sync + Debug + serde::Serialize + serde::de::DeserializeOwned + 'static
 {
-    /// Metadata type for intelligent caching decisions
-    type Metadata: ValueMetadata;
-
-    /// Size estimation for memory accounting
-    fn estimated_size(&self) -> usize;
-
-    /// Check if value is expensive to recreate (affects eviction priority)
-    fn is_expensive(&self) -> bool {
-        true
-    }
-
-    /// Compression hint for cold tier storage
-    fn compression_hint(&self) -> CompressionHint {
-        CompressionHint::Auto
-    }
-
-    /// Get metadata for intelligent caching decisions
-    fn metadata(&self) -> Self::Metadata;
-}
-
-#[cfg(not(feature = "serde"))]
-pub trait CacheValue: Clone + Send + Sync + Debug + 'static {
     /// Metadata type for intelligent caching decisions
     type Metadata: ValueMetadata;
 

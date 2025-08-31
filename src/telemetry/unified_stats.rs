@@ -4,10 +4,12 @@
 //! atomic performance tracking across hot, warm, and cold cache tiers.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
 use crate::cache::coherence::CacheTier;
+use crate::cache::types::statistics::tier_stats::TierStatistics;
 use super::data_structures::{OpsPerSecondState, TierHitRateState};
 
 /// Unified cache statistics across all tiers with atomic coordination
@@ -57,6 +59,9 @@ pub struct UnifiedStats {
     pub tier_hit_rates: [f32; 3], // Hot, Warm, Cold
 }
 
+/// Global singleton instance for unified cache statistics
+static GLOBAL_UNIFIED_STATS: OnceLock<UnifiedCacheStatistics> = OnceLock::new();
+
 impl UnifiedCacheStatistics {
     /// Create new unified statistics with atomic initialization
     pub fn new() -> Self {
@@ -75,6 +80,12 @@ impl UnifiedCacheStatistics {
             ops_per_second_state: OpsPerSecondState::new(),
             tier_hit_rates: TierHitRateState::new(),
         }
+    }
+
+    /// Get or create the global unified statistics instance
+    pub fn get_global_instance() -> Result<&'static UnifiedCacheStatistics, &'static str> {
+        GLOBAL_UNIFIED_STATS.get_or_init(|| UnifiedCacheStatistics::new());
+        Ok(GLOBAL_UNIFIED_STATS.get().unwrap())
     }
 
     /// Record cache hit for specific tier with atomic update
@@ -146,6 +157,123 @@ impl UnifiedCacheStatistics {
     /// Record data demotion between tiers
     pub fn record_demotion(&self) {
         self.demotions_performed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get total operations count
+    pub fn total_operations(&self) -> u64 {
+        self.total_operations.load(Ordering::Relaxed)
+    }
+
+    /// Get total operations count (alias for backward compatibility)
+    pub fn get_total_operations(&self) -> u64 {
+        self.total_operations()
+    }
+
+    /// Get overall hit rate
+    pub fn get_overall_hit_rate(&self) -> f64 {
+        self.overall_hit_rate.load()
+    }
+
+    /// Get hot tier hits
+    pub fn get_hot_hits(&self) -> u64 {
+        self.hot_hits.load(Ordering::Relaxed)
+    }
+
+    /// Get warm tier hits  
+    pub fn get_warm_hits(&self) -> u64 {
+        self.warm_hits.load(Ordering::Relaxed)
+    }
+
+    /// Get cold tier hits
+    pub fn get_cold_hits(&self) -> u64 {
+        self.cold_hits.load(Ordering::Relaxed)
+    }
+
+    /// Get total misses
+    pub fn get_total_misses(&self) -> u64 {
+        self.total_misses.load(Ordering::Relaxed)
+    }
+
+    /// Get average access latency
+    pub fn get_avg_access_latency_ns(&self) -> u64 {
+        self.avg_access_latency_ns.load(Ordering::Relaxed)
+    }
+
+    /// Get promotions performed
+    pub fn get_promotions_performed(&self) -> u64 {
+        self.promotions_performed.load(Ordering::Relaxed)
+    }
+
+    /// Get demotions performed
+    pub fn get_demotions_performed(&self) -> u64 {
+        self.demotions_performed.load(Ordering::Relaxed)
+    }
+
+    /// Get total memory usage
+    pub fn get_total_memory_usage(&self) -> u64 {
+        self.total_memory_usage.load(Ordering::Relaxed)
+    }
+
+    /// Get peak memory usage
+    pub fn get_peak_memory_usage(&self) -> u64 {
+        self.peak_memory_usage.load(Ordering::Relaxed)
+    }
+
+    /// Update access latency (public method that delegates to private implementation)
+    pub fn update_access_latency(&self, latency_ns: u64) {
+        self.update_average_latency(latency_ns);
+    }
+
+    /// Record a hot tier hit
+    pub fn record_hot_hit(&self, access_time_ns: u64) {
+        self.hot_hits.fetch_add(1, Ordering::Relaxed);
+        self.total_operations.fetch_add(1, Ordering::Relaxed);
+        self.update_latency(access_time_ns);
+        self.update_hit_rate();
+    }
+
+    /// Record a warm tier hit
+    pub fn record_warm_hit(&self, access_time_ns: u64) {
+        self.warm_hits.fetch_add(1, Ordering::Relaxed);
+        self.total_operations.fetch_add(1, Ordering::Relaxed);
+        self.update_latency(access_time_ns);
+        self.update_hit_rate();
+    }
+
+    /// Record a cold tier hit  
+    pub fn record_cold_hit(&self, access_time_ns: u64) {
+        self.cold_hits.fetch_add(1, Ordering::Relaxed);
+        self.total_operations.fetch_add(1, Ordering::Relaxed);
+        self.update_latency(access_time_ns);
+        self.update_hit_rate();
+    }
+
+    /// Update latency using exponential moving average
+    fn update_latency(&self, new_latency_ns: u64) {
+        let current_avg = self.avg_access_latency_ns.load(Ordering::Relaxed);
+        if current_avg == 0 {
+            self.avg_access_latency_ns.store(new_latency_ns, Ordering::Relaxed);
+        } else {
+            // Exponential moving average with alpha = 0.1
+            let new_avg = (current_avg * 9 + new_latency_ns) / 10;
+            self.avg_access_latency_ns.store(new_avg, Ordering::Relaxed);
+        }
+    }
+
+    /// Update overall hit rate
+    fn update_hit_rate(&self) {
+        let total_ops = self.total_operations.load(Ordering::Relaxed);
+        let total_hits = self.hot_hits.load(Ordering::Relaxed) 
+            + self.warm_hits.load(Ordering::Relaxed)
+            + self.cold_hits.load(Ordering::Relaxed);
+        
+        let hit_rate = if total_ops > 0 {
+            total_hits as f64 / total_ops as f64
+        } else {
+            0.0
+        };
+        
+        self.overall_hit_rate.store(hit_rate);
     }
 
     /// Compute comprehensive unified statistics
@@ -233,5 +361,111 @@ impl UnifiedCacheStatistics {
 
         let hit_rate = total_hits as f64 / total_ops as f64;
         self.overall_hit_rate.store(hit_rate);
+    }
+
+    /// Get performance metrics for monitoring and analysis
+    pub fn get_performance_metrics(&self) -> CachePerformanceMetrics {
+        use crate::cache::types::statistics::tier_stats::TierStatistics;
+        
+        let hot_hits = self.hot_hits.load(Ordering::Relaxed);
+        let warm_hits = self.warm_hits.load(Ordering::Relaxed);
+        let cold_hits = self.cold_hits.load(Ordering::Relaxed);
+        let total_ops = self.total_operations();
+        
+        let hot_misses = if total_ops > hot_hits { total_ops - hot_hits } else { 0 };
+        let warm_misses = if total_ops > warm_hits { total_ops - warm_hits } else { 0 };
+        let cold_misses = if total_ops > cold_hits { total_ops - cold_hits } else { 0 };
+        
+        CachePerformanceMetrics {
+            total_operations: total_ops,
+            overall_hit_rate: self.overall_hit_rate.load(),
+            avg_access_latency_ns: self.get_avg_access_latency_ns(),
+            total_memory_usage_bytes: self.get_total_memory_usage(),
+            promotions_performed: self.promotions_performed.load(Ordering::Relaxed),
+            demotions_performed: self.demotions_performed.load(Ordering::Relaxed),
+            hot_tier: TierStatistics {
+                hits: hot_hits,
+                misses: hot_misses,
+                entry_count: 0, // Would need actual entry count from tier
+                memory_usage: 0, // Would need actual memory usage from tier
+                peak_memory: 0,
+                total_size_bytes: 0,
+                hit_rate: if total_ops > 0 { hot_hits as f64 / total_ops as f64 } else { 0.0 },
+                avg_access_time_ns: self.get_avg_access_latency_ns(),
+                ops_per_second: 0.0,
+                error_count: 0,
+                error_rate: 0.0,
+            },
+            warm_tier: TierStatistics {
+                hits: warm_hits,
+                misses: warm_misses,
+                entry_count: 0,
+                memory_usage: 0,
+                peak_memory: 0,
+                total_size_bytes: 0,
+                hit_rate: if total_ops > 0 { warm_hits as f64 / total_ops as f64 } else { 0.0 },
+                avg_access_time_ns: self.get_avg_access_latency_ns(),
+                ops_per_second: 0.0,
+                error_count: 0,
+                error_rate: 0.0,
+            },
+            cold_tier: TierStatistics {
+                hits: cold_hits,
+                misses: cold_misses,
+                entry_count: 0,
+                memory_usage: 0,
+                peak_memory: 0,
+                total_size_bytes: 0,
+                hit_rate: if total_ops > 0 { cold_hits as f64 / total_ops as f64 } else { 0.0 },
+                avg_access_time_ns: self.get_avg_access_latency_ns(),
+                ops_per_second: 0.0,
+                error_count: 0,
+                error_rate: 0.0,
+            },
+        }
+    }
+}
+
+/// Overall cache performance metrics - integrated from manager/statistics/types.rs
+#[derive(Debug, Clone)]
+pub struct CachePerformanceMetrics {
+    /// Overall hit rate across all tiers
+    pub overall_hit_rate: f64,
+    /// Total operations processed
+    pub total_operations: u64,
+    /// Average access latency in nanoseconds
+    pub avg_access_latency_ns: u64,
+    /// Total memory usage across all tiers
+    pub total_memory_usage_bytes: u64,
+    /// Promotion/demotion activity
+    pub promotions_performed: u64,
+    pub demotions_performed: u64,
+    /// Per-tier breakdown
+    pub hot_tier: TierStatistics,
+    pub warm_tier: TierStatistics,
+    pub cold_tier: TierStatistics,
+}
+
+/// Statistics collection configuration - integrated from manager/statistics/types.rs
+#[derive(Debug, Clone)]
+pub struct StatisticsConfig {
+    /// Enable detailed per-tier statistics
+    pub enable_detailed_stats: bool,
+    /// Statistics collection interval in nanoseconds
+    pub collection_interval_ns: u64,
+    /// Maximum statistics history to retain
+    pub max_history_entries: usize,
+    /// Enable performance trend analysis
+    pub enable_trend_analysis: bool,
+}
+
+impl Default for StatisticsConfig {
+    fn default() -> Self {
+        Self {
+            enable_detailed_stats: true,
+            collection_interval_ns: 1_000_000_000, // 1 second
+            max_history_entries: 1000,
+            enable_trend_analysis: true,
+        }
     }
 }

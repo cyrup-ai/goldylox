@@ -101,7 +101,7 @@ impl Default for SyncConfig {
 
 impl SyncCoordinator {
     /// Create new sync coordinator
-    pub fn new<K: CacheKey, V: CacheValue>(
+    pub fn new<K: CacheKey + bincode::Encode, V: CacheValue + bincode::Decode<()> + bincode::Encode + serde::de::DeserializeOwned>(
         cache: ColdTierCache<K, V>,
         config: SyncConfig,
     ) -> Result<Self, CacheOperationError> {
@@ -212,7 +212,7 @@ pub struct SyncStatsSnapshot {
 }
 
 /// Background sync worker
-struct SyncWorker<K: CacheKey, V: CacheValue> {
+struct SyncWorker<K: CacheKey + bincode::Encode, V: CacheValue + bincode::Decode<()> + bincode::Encode + serde::de::DeserializeOwned> {
     cache: ColdTierCache<K, V>,
     config: SyncConfig,
     task_receiver: Receiver<SyncTask>,
@@ -222,7 +222,7 @@ struct SyncWorker<K: CacheKey, V: CacheValue> {
     _phantom: PhantomData<V>,
 }
 
-impl<K: CacheKey, V: CacheValue> SyncWorker<K, V> {
+impl<K: CacheKey + bincode::Encode, V: CacheValue + bincode::Decode<()> + bincode::Encode + serde::de::DeserializeOwned> SyncWorker<K, V> {
     fn new(
         cache: ColdTierCache<K, V>,
         config: SyncConfig,

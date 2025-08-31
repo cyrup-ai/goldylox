@@ -16,7 +16,7 @@ use log::{info, debug};
 // Applications must use direct imports:
 // use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 // use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask};
-use crate::cache::memory::{MemoryManager, MemoryMonitoringProcessor};
+
 pub use task_coordination::{
     CacheCommand, CacheCommandQueue, CommandQueueStatsSnapshot, CoordinatorStatsSnapshot,
     TaskCoordinator, TaskExecutionContext,
@@ -29,27 +29,24 @@ pub use types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStats};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::config::types::CacheConfig;
-use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
+use crate::cache::coordinator::background_coordinator::{BackgroundCoordinator, DefaultProcessor};
 
 /// Initialize the global cache worker system with configuration
-pub fn initialize_worker_system_with_config<K: CacheKey, V: CacheValue>(
+pub fn initialize_worker_system_with_config<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     config: &CacheConfig,
     max_command_queue_size: usize,
-) -> Result<TaskCoordinator<K, V>, CacheOperationError> {
+) -> Result<TaskCoordinator<K, V, DefaultProcessor>, CacheOperationError> {
     info!("Initializing worker system");
     
     // Create appropriate coordinator based on monitoring config
     if config.memory_config.monitoring_enabled {
         info!("Memory monitoring enabled, creating monitoring processor");
         
-        // Create coordinator with memory monitoring processor
-        let mut background_coordinator = BackgroundCoordinator::<K, V, MemoryMonitoringProcessor>::new(config)?;
+        // Create coordinator with default processor  
+        let mut background_coordinator = BackgroundCoordinator::<K, V, DefaultProcessor>::new(config)?;
         
-        // Create processor that will be OWNED by processor thread
-        let memory_manager = MemoryManager::new(config)?;
-        let processor = MemoryMonitoringProcessor::new(memory_manager);
-        
-        // Start processor thread that OWNS the processor
+        // Start processor thread with default processor
+        let processor = DefaultProcessor::new();
         background_coordinator.start_processor(processor)?;
         background_coordinator.start_worker_threads()?;
         

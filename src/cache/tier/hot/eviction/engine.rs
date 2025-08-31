@@ -5,28 +5,36 @@
 
 use crate::cache::tier::hot::memory_pool::SlotMetadata;
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
+use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::types::CacheTier;
+use std::marker::PhantomData;
 use super::types::{
     AccessEvent, AccessType, EvictionCandidate, HotTierEvictionConfig, EvictionMetrics, EvictionPolicy,
     EvictionStats, FeatureWeights,
 };
 use crate::cache::tier::warm::config::EvictionConfig;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Adaptive eviction engine with machine learning
 #[derive(Debug)]
-pub struct EvictionEngine {
+pub struct EvictionEngine<K: CacheKey + Default, V: CacheValue> {
     /// Current eviction policy
     pub policy: EvictionPolicy,
     /// Access pattern history for learning
-    pub access_history: Vec<AccessEvent>,
+    pub access_history: Vec<AccessEvent<K>>,
     /// Feature weights for ML-based eviction
     pub feature_weights: FeatureWeights,
     /// Performance metrics for adaptive tuning
     pub performance_metrics: EvictionMetrics,
     /// Configuration
     pub config: HotTierEvictionConfig,
+    /// Phantom data for V type parameter
+    _phantom: PhantomData<V>,
 }
 
-impl EvictionEngine {
+impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Create new eviction engine
     pub fn new(config: EvictionConfig) -> Self {
         let hot_config = config.for_hot_tier();
@@ -36,6 +44,7 @@ impl EvictionEngine {
             feature_weights: FeatureWeights::default(),
             performance_metrics: EvictionMetrics::default(),
             config: hot_config,
+            _phantom: PhantomData,
         }
     }
 
@@ -45,7 +54,7 @@ impl EvictionEngine {
         metadata: &[SlotMetadata; 256],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
-    ) -> Option<EvictionCandidate> {
+    ) -> Option<EvictionCandidate<K, V>> {
         match self.policy {
             EvictionPolicy::Lru => self.find_lru_candidate(metadata, lru_tracker),
             EvictionPolicy::Lfu => self.find_lfu_candidate(metadata),
@@ -57,13 +66,18 @@ impl EvictionEngine {
     }
 
     /// Record cache access for learning
-    pub fn record_access(&mut self, slot_idx: usize, hit: bool, timestamp_ns: u64) {
+    pub fn record_access(&mut self, key: K, slot_idx: usize, hit: bool, timestamp_ns: u64) {
         if self.config.learning_enabled {
             let event = AccessEvent {
+                event_id: EVENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+                key,
                 timestamp: timestamp_ns,
-                slot_index: slot_idx,
                 access_type: AccessType::Read,
+                tier: CacheTier::Hot,
                 hit,
+                slot_index: Some(slot_idx),
+                latency_ns: 0, // Will be updated by caller if needed
+                entry_size: 0, // Default size - will be updated by caller if needed
             };
 
             self.access_history.push(event);

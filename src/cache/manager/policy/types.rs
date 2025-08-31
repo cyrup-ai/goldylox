@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_queue::ArrayQueue;
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
-use dashmap::DashMap;
+
 
 pub use crate::cache::traits::AccessType;
 
@@ -41,46 +41,16 @@ pub struct ReplacementPolicies<K: crate::cache::traits::CacheKey> {
     pub ml_policy: crate::cache::tier::warm::eviction::MachineLearningEvictionPolicy<K>,
 }
 
-/// Cache write policy manager with intelligent dirty tracking
-#[derive(Debug)]
-pub struct WritePolicyManager<K: crate::cache::traits::CacheKey> {
-    /// Write policies per cache tier
-    pub tier_policies: CachePadded<[AtomicCell<WritePolicy>; 3]>, // Hot, Warm, Cold
-    /// Dirty bit tracking for write-back entries
-    pub dirty_tracker: DashMap<K, DirtyEntry>,
-    /// Write coalescing buffer for batched operations
-    pub write_coalescing_buffer: LockFreeQueue<CoalescedWrite<K>>,
-    /// Write scheduling based on access patterns
-    pub write_scheduler: WriteScheduler<K>,
-    /// Write throughput metrics per tier
-    pub throughput_metrics: CachePadded<[ThroughputMetrics; 3]>,
-    /// Adaptive policy configuration
-    pub adaptive_config: AdaptivePolicyConfig,
-    /// Background write coordinator
-    pub background_writer: BackgroundWriteCoordinator,
-}
+// WritePolicyManager moved to canonical location: crate::cache::eviction::write_policies::WritePolicyManager
+// Use the enhanced canonical implementation with comprehensive async write-behind processing,
+// complete batching configuration, flush coordination, detailed statistics tracking,
+// and production-ready error handling with channels and background processing
+pub use crate::cache::eviction::write_policies::WritePolicyManager;
 
-/// Machine learning-based prefetch predictor with polynomial regression
-#[derive(Debug)]
-pub struct PrefetchPredictor {
-    /// Lock-free circular buffer for access sequence history
-    pub access_sequence_buffer: LockFreeCircularBuffer<AccessSequence>,
-    /// Polynomial regression coefficients (updated via atomic swaps)
-    pub regression_coefficients: CachePadded<[AtomicCell<f32>; 8]>,
-    /// Prediction confidence scores per pattern type
-    pub confidence_scores: CachePadded<[AtomicU32; 4]>, // Sequential, Temporal, Spatial, Random
-    /// SIMD-optimized prediction computation buffers
-    pub prediction_buffer: [f32; 16], // AVX2-aligned for parallel computation
-    pub feature_buffer: [f32; 16], // Feature extraction buffer
-    /// Prefetch success rate tracking
-    pub success_tracker: PrefetchSuccessTracker,
-    /// Adaptive learning rate for online training
-    pub learning_rate: AtomicCell<f32>,
-    /// Pattern correlation matrix for complex predictions
-    pub correlation_matrix: CachePadded<[[AtomicU32; 4]; 4]>,
-    /// Prefetch queue for predicted access targets
-    pub prefetch_queue: LockFreeQueue<PrefetchTarget>,
-}
+// PrefetchPredictor moved to canonical location: crate::cache::tier::hot::prefetch::core::PrefetchPredictor
+// Use the enhanced canonical implementation with comprehensive pattern detection workflow,
+// performance-optimized ML regression, atomic operations, and SIMD optimizations
+pub use crate::cache::tier::hot::prefetch::core::PrefetchPredictor;
 
 /// Replacement algorithm types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,14 +118,9 @@ pub struct WriteScheduler<K: crate::cache::traits::CacheKey> {
     pub _phantom: std::marker::PhantomData<K>,
 }
 
-/// Throughput metrics per tier
-#[derive(Debug)]
-pub struct ThroughputMetrics {
-    pub writes_per_second: AtomicU32,
-    pub bytes_per_second: AtomicU64,
-    pub avg_write_latency: AtomicU64,
-    pub write_queue_depth: AtomicU32,
-}
+// ThroughputMetrics moved to canonical location: crate::cache::tier::warm::metrics::ThroughputMetrics
+// Use the canonical implementation which includes all write metrics plus advanced features like peak tracking and efficiency ratios
+pub use crate::cache::tier::warm::metrics::ThroughputMetrics;
 
 /// Adaptive policy configuration
 #[derive(Debug)]
@@ -175,41 +140,9 @@ pub struct BackgroundWriteCoordinator {
     pub coordinator_status: AtomicCell<CoordinatorStatus>,
 }
 
-/// Access sequence for pattern analysis
-#[derive(Debug, Clone)]
-pub struct AccessSequence {
-    pub sequence_id: u64,
-    pub keys: Vec<u64>,       // Key hashes
-    pub timestamps: Vec<u64>, // Nanosecond timestamps
-    pub pattern_type: PatternType,
-}
-
-/// Pattern type classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PatternType {
-    Sequential,
-    Random,
-    Temporal,
-    Spatial,
-}
-
-/// Prefetch success tracking
-#[derive(Debug)]
-pub struct PrefetchSuccessTracker {
-    pub predictions_made: AtomicU64,
-    pub predictions_hit: AtomicU64,
-    pub false_positives: AtomicU64,
-    pub avg_prediction_accuracy: AtomicCell<f32>,
-}
-
-/// Prefetch target
-#[derive(Debug, Clone)]
-pub struct PrefetchTarget {
-    pub key_hash: u64,
-    pub confidence: f32,
-    pub predicted_access_time: Instant,
-    pub priority: u8,
-}
+// Pattern analysis types moved to canonical location: crate::cache::tier::hot::prefetch::types
+// Use the canonical types from the hot tier prefetch module
+pub use crate::cache::tier::hot::prefetch::types::{AccessSequence, DetectedPattern, PrefetchRequest};
 
 /// Coordinator status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

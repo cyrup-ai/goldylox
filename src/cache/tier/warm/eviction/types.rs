@@ -201,12 +201,12 @@ impl Default for MlStats {
 pub use crate::cache::types::eviction::candidate::EvictionCandidate;
 
 /// Warm tier specific constructor alias
-pub fn create_warm_tier_candidate<K: crate::cache::traits::CacheKey>(
+pub fn create_warm_tier_candidate<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
     key: K, 
     score: f64, 
-    reason: crate::cache::traits::types_and_enums::EvictionReason
-) -> EvictionCandidate<K, ()> {
-    use crate::cache::types::eviction::candidate::SelectionReason;
+    _reason: crate::cache::traits::types_and_enums::EvictionReason
+) -> EvictionCandidate<K, V> {
+    use crate::cache::traits::types_and_enums::SelectionReason;
     EvictionCandidate::simple(key, score, SelectionReason::LeastRecentlyUsed)
 }
 

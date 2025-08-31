@@ -1,14 +1,16 @@
-//! UnifiedCacheStatistics implementation
+//! UnifiedCacheStatistics implementation - MOVED TO CANONICAL LOCATION
 //!
-//! This module provides the core implementation for unified cache statistics
-//! including hit/miss tracking, latency monitoring, and tier coordination.
+//! UnifiedCacheStatistics moved to canonical location: crate::telemetry::unified_stats::UnifiedCacheStatistics
+//! Use the canonical implementation with comprehensive metrics and performance tracking.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+// Re-export canonical types for backward compatibility
+pub use crate::telemetry::unified_stats::{CachePerformanceMetrics, UnifiedCacheStatistics};
 
-use crossbeam_utils::{atomic::AtomicCell, CachePadded};
+// Duplicate impl block removed - all methods available in canonical location:
+// crate::telemetry::unified_stats::UnifiedCacheStatistics
 
-use super::types::{CachePerformanceMetrics, UnifiedCacheStatistics};
-use crate::cache::types::statistics::tier_stats::TierStatistics;
+/*
+REMOVED DUPLICATE IMPL BLOCK - USE CANONICAL VERSION
 
 impl UnifiedCacheStatistics {
     /// Create new unified cache statistics
@@ -276,16 +278,7 @@ impl UnifiedCacheStatistics {
     }
 
     /// Update latency with exponential moving average
-    #[inline]
-    fn update_latency(&self, new_latency_ns: u64) {
-        let current_avg = self.avg_access_latency_ns.load(Ordering::Relaxed);
-        if current_avg == 0 {
-            self.avg_access_latency_ns
-                .store(new_latency_ns, Ordering::Relaxed);
-        } else {
-            // Exponential moving average with alpha = 0.1
-            let new_avg = (current_avg * 9 + new_latency_ns) / 10;
-            self.avg_access_latency_ns.store(new_avg, Ordering::Relaxed);
-        }
-    }
-}
+*/
+
+// All UnifiedCacheStatistics functionality now available through canonical import:
+// use crate::telemetry::unified_stats::UnifiedCacheStatistics;

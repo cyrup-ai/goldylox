@@ -55,7 +55,7 @@ impl WarmTierBuilder {
     }
 
     /// Build warm tier with retry logic
-    pub fn build<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
+    pub fn build<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue + Default>(
         self,
     ) -> Result<LockFreeWarmTier<K, V>, WarmTierInitError> {
         let mut attempts = 0;
@@ -75,7 +75,7 @@ impl WarmTierBuilder {
                         // Non-retryable error, proceed to degradation logic immediately
                         return match self.degradation_mode {
                             DegradationMode::MonitorlessMode => {
-                                LockFreeWarmTier::new_without_monitor(self.config)
+                                LockFreeWarmTier::new(self.config)
                             }
                             DegradationMode::ErrorOnFailure => Err(e),
                         };
@@ -85,7 +85,7 @@ impl WarmTierBuilder {
                     // Exhausted retries, try graceful degradation if enabled
                     return match self.degradation_mode {
                         DegradationMode::MonitorlessMode => {
-                            LockFreeWarmTier::new_without_monitor(self.config)
+                            LockFreeWarmTier::new(self.config)
                         }
                         DegradationMode::ErrorOnFailure => Err(e),
                     };

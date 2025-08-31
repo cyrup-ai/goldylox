@@ -11,17 +11,14 @@ use super::types::StatUpdate;
 use crate::cache::tier::{cold, hot, warm};
 use crate::cache::traits::{CacheKey, CacheValue};
 
-/// Check for entries that need tier transitions with generic types
-/// NOTE: This function is now generic and must be called with explicit type parameters
-/// Example: check_tier_transitions::<MyKey, MyValue>(&stat_sender)
-pub fn check_tier_transitions<K, V>(
+
+
+/// Check for entries that need tier transitions using canonical maintenance system
+pub fn check_tier_transitions<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     stat_sender: &Sender<StatUpdate>,
 )
-where
-    K: CacheKey + Clone + 'static,
-    V: CacheValue + Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
 {
-    let now = Instant::now();
+    let _now = Instant::now();
 
     // Define promotion/demotion thresholds
     const HOT_TO_WARM_IDLE_THRESHOLD: Duration = Duration::from_secs(300); // 5 minutes
@@ -51,7 +48,7 @@ where
     // Check cold tier for promotion to warm tier
     if let Ok(_cold_stats) = cold::get_stats::<K, V>() {
         let frequently_accessed_keys: Vec<K> =
-            cold::get_frequently_accessed_keys(COLD_TO_WARM_ACCESS_THRESHOLD);
+            cold::get_frequently_accessed_keys::<K, V>(COLD_TO_WARM_ACCESS_THRESHOLD);
 
         for key in frequently_accessed_keys {
             if let Ok(Some(value)) = cold::cold_get::<K, V>(&key) {
@@ -66,7 +63,7 @@ where
     }
 
     // Check for demotions - hot to warm
-    let idle_hot_keys: Vec<K> = hot::get_idle_keys::<K>(HOT_TO_WARM_IDLE_THRESHOLD);
+    let idle_hot_keys: Vec<K> = hot::get_idle_keys::<K, V>(HOT_TO_WARM_IDLE_THRESHOLD);
     for key in idle_hot_keys {
         // MOVE value from hot to warm (no clone)
         if let Some(value) = hot::remove_entry::<K, V>(&key) {

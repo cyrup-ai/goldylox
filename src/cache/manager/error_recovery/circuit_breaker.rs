@@ -193,6 +193,11 @@ impl CircuitBreaker {
         }
     }
 
+    /// Reset circuit breaker (alias for reset_all for backward compatibility)
+    pub fn reset(&self) {
+        self.reset_all();
+    }
+
     /// Get circuit breaker configuration
     pub fn get_config(&self) -> &CircuitBreakerConfig {
         &self.breaker_config

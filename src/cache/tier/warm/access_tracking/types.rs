@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_utils::atomic::AtomicCell;
 
 pub use crate::cache::traits::{AccessType, TemporalPattern};
+pub use crate::cache::types::error_types::HitStatus; // Canonical location
 
 // AccessType moved to canonical location: crate::cache::traits::types_and_enums
 
@@ -70,14 +71,9 @@ pub struct PatternState {
     pub confidence: f32,
 }
 
-/// Hit status for access records
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HitStatus {
-    /// Cache hit
-    Hit,
-    /// Cache miss
-    Miss,
-}
+// HitStatus CANONICALIZED: moved to canonical location: 
+// crate::cache::types::error_types::HitStatus
+// Use the enhanced canonical version with Error and Partial support for multi-tier architecture
 
 /// Access record for pattern analysis
 #[derive(Debug, Clone)]

@@ -86,7 +86,7 @@ pub trait AdvancedEvictionPolicy<K: CacheKey, V: CacheValue>: EvictionPolicy<K, 
     fn predict_access(&self, key: &K) -> f64;
 
     /// Update ML model with recent access patterns
-    fn update_model(&mut self, feedback: &[AccessEvent<K, V>]);
+    fn update_model(&mut self, feedback: &[AccessEvent<K>]);
 
     /// Get model confidence score (0.0-1.0)
     fn model_confidence(&self) -> f64;

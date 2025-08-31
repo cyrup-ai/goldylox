@@ -25,19 +25,19 @@ pub fn create_advanced_pressure_monitor(config: &CacheConfig) -> Result<MemoryPr
     // Use memory limit from config or auto-detect
     let memory_limit = config.memory_config.max_memory_usage.unwrap_or_else(|| get_system_memory_with_fallback());
     
-    MemoryPressureMonitor::with_thresholds(
+    Ok(MemoryPressureMonitor::with_thresholds(
         memory_limit, 
         thresholds, 
         config.memory_config.alert_cooldown_ms,
         config.memory_config.max_history_samples,
         config.memory_config.leak_detection_enabled
-    )
+    ))
 }
 
 /// Create advanced pressure monitor with default settings
 pub fn create_default_pressure_monitor() -> Result<MemoryPressureMonitor, CacheOperationError> {
     let memory_limit = 1024 * 1024 * 1024; // 1GB default
-    MemoryPressureMonitor::new(memory_limit)
+    Ok(MemoryPressureMonitor::new(memory_limit))
 }
 
 /// Get system memory with cross-platform support

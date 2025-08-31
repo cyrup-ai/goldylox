@@ -68,6 +68,9 @@ impl PredictionEngine {
                     predicted_access_time: timestamp_ns + self.calculate_prediction_delay(pattern),
                     pattern_type: pattern.pattern_type,
                     priority: self.calculate_priority(pattern, confidence),
+                    timestamp_ns,
+                    access_pattern: Some(pattern.pattern_type),
+                    estimated_size: None, // Unknown at prediction time
                 })
             } else {
                 None
@@ -178,6 +181,9 @@ impl PredictionEngine {
                         pattern_type: pattern.pattern_type,
                         priority: self.calculate_priority(pattern, adjusted_confidence)
                             - (step as u8 * 10),
+                        timestamp_ns: timestamp_ns + delay,
+                        access_pattern: Some(pattern.pattern_type),
+                        estimated_size: None, // Unknown at prediction time
                     });
                 }
             }

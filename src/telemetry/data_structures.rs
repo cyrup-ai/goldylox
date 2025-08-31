@@ -3,36 +3,50 @@
 //! This module contains common data structures used across the performance
 //! tracking system for better organization and reusability.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::atomic::AtomicCell;
+use crossbeam_utils::CachePadded;
 
 use super::types::PerformanceAlert;
 
-/// Sophisticated performance sample with comprehensive metrics
-/// This is the feature-rich version following the sophistication principle
-#[derive(Debug, Clone)]
+/// Enhanced performance sample combining comprehensive metrics with error tracking - CANONICAL VERSION
+/// This is the feature-rich version following the sophistication principle, enhanced with error tracking and tier hit detection
+#[derive(Debug, Clone, Copy)]
 pub struct PerformanceSample {
-    /// Timestamp in nanoseconds since epoch
+    /// Timestamp in nanoseconds since epoch (enhanced precision from data_structures version)
     pub timestamp_ns: u64,
-    /// Hit rate scaled by 1000 for precision
+    /// Hit rate scaled by 1000 for precision (from data_structures version)
     pub hit_rate_x1000: u32,
-    /// Average access time in nanoseconds
+    /// Average access time in nanoseconds (from data_structures version)
     pub avg_access_time_ns: u32,
-    /// Memory usage in bytes
+    /// Memory usage in bytes (enhanced from data_structures version)
     pub memory_usage: u64,
-    /// Operations per second scaled by 100 for precision
+    /// Operations per second scaled by 100 for precision (from data_structures version)
     pub ops_per_second_x100: u32,
-    /// Hot tier utilization scaled by 100
+    /// Hot tier utilization scaled by 100 (from data_structures version)
     pub hot_utilization_x100: u16,
-    /// Warm tier utilization scaled by 100
+    /// Warm tier utilization scaled by 100 (from data_structures version)
     pub warm_utilization_x100: u16,
-    /// Cold tier utilization scaled by 100
+    /// Cold tier utilization scaled by 100 (from data_structures version)
     pub cold_utilization_x100: u16,
-    /// Padding for cache line alignment
-    pub _padding: [u8; 6],
+    
+    // Enhanced fields from types.rs version for error tracking and tier hit detection
+    /// Latency measurement in nanoseconds (from types version)
+    pub latency_ns: u64,
+    /// Throughput as floating point (from types version)
+    pub throughput: f64,
+    /// Error count tracking (from types version)
+    pub error_count: u32,
+    /// Operation-specific latency in nanoseconds (from types version)
+    pub operation_latency_ns: u64,
+    /// Tier hit detection flag (from types version)
+    pub tier_hit: bool,
+    
+    /// Padding for cache line alignment (reduced due to additional fields)
+    pub _padding: [u8; 3],
 }
 
 impl Default for PerformanceSample {
@@ -46,7 +60,13 @@ impl Default for PerformanceSample {
             hot_utilization_x100: 0,
             warm_utilization_x100: 0,
             cold_utilization_x100: 0,
-            _padding: [0; 6],
+            // Enhanced fields from types.rs version
+            latency_ns: 0,
+            throughput: 0.0,
+            error_count: 0,
+            operation_latency_ns: 0,
+            tier_hit: false,
+            _padding: [0; 3],
         }
     }
 }
@@ -117,36 +137,64 @@ impl TrendHistoryBuffer {
     }
 }
 
-/// Alert rate limiting configuration
+/// Alert rate limiting with per-type granular controls (CANONICAL VERSION)
+/// Enhanced with cache-padded optimization for maximum performance
 #[derive(Debug)]
 pub struct AlertRateLimits {
-    /// Maximum alerts per minute by type
-    pub max_alerts_per_minute: [AtomicU32; 5], // Per AlertType
-    /// Current alert counts in window
-    pub current_counts: [AtomicU32; 5],
-    /// Rate limit window start time
-    pub window_start: AtomicU64, // Nanoseconds since epoch
+    /// Maximum alerts per minute by type (cache-padded for performance)
+    pub max_alerts_per_minute: CachePadded<[AtomicU32; 5]>, // Per AlertType
+    /// Current alert counts in window (cache-padded for performance)
+    pub current_counts: CachePadded<[AtomicU32; 5]>,
+    /// Rate limit window start time (cache-padded for performance)
+    pub window_start: CachePadded<AtomicU64>, // Nanoseconds since epoch
 }
 
 impl AlertRateLimits {
+    /// Create with default per-type rate limits
     pub fn new() -> Self {
         Self {
-            max_alerts_per_minute: [
+            max_alerts_per_minute: CachePadded::new([
                 AtomicU32::new(10), // HighLatency
                 AtomicU32::new(10), // LowHitRate
                 AtomicU32::new(5),  // MemoryPressure
                 AtomicU32::new(5),  // HighErrorRate
                 AtomicU32::new(3),  // SystemOverload
-            ],
-            current_counts: [
+            ]),
+            current_counts: CachePadded::new([
                 AtomicU32::new(0),
                 AtomicU32::new(0),
                 AtomicU32::new(0),
                 AtomicU32::new(0),
                 AtomicU32::new(0),
-            ],
-            window_start: AtomicU64::new(0),
+            ]),
+            window_start: CachePadded::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Create with custom rate limits for all types
+    pub fn with_limits(limits: [u32; 5]) -> Self {
+        Self {
+            max_alerts_per_minute: CachePadded::new([
+                AtomicU32::new(limits[0]), // HighLatency
+                AtomicU32::new(limits[1]), // LowHitRate
+                AtomicU32::new(limits[2]), // MemoryPressure
+                AtomicU32::new(limits[3]), // HighErrorRate
+                AtomicU32::new(limits[4]), // SystemOverload
+            ]),
+            current_counts: CachePadded::new([
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+            ]),
+            window_start: CachePadded::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Create with single rate limit applied to all types (backward compatibility)
+    pub fn with_single_limit(max_per_minute: u32) -> Self {
+        Self::with_limits([max_per_minute; 5])
     }
 }
 
@@ -169,38 +217,117 @@ impl AlertHistoryBuffer {
             utilization: AtomicUsize::new(0),
         }
     }
+
+    /// Push alert to buffer with capacity management (enhanced from telemetry/types.rs)
+    pub fn push(&mut self, alert: PerformanceAlert) {
+        if self.alerts.is_full() {
+            // ArrayVec is full, remove oldest (first) alert
+            self.alerts.remove(0);
+        }
+        // Add new alert to the end
+        let _ = self.alerts.try_push(alert);
+        
+        // Update utilization atomically
+        self.utilization.store(self.alerts.len(), Ordering::Relaxed);
+    }
+
+    /// Get current buffer size
+    pub fn len(&self) -> usize {
+        self.alerts.len()
+    }
+
+    /// Check if buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.alerts.is_empty()
+    }
+
+    /// Get buffer capacity
+    pub fn capacity(&self) -> usize {
+        self.alerts.capacity()
+    }
 }
 
-/// Threshold adaptation state for dynamic adjustment
+/// Enhanced threshold adaptation state combining atomic thread safety with rich ML features
 #[derive(Debug)]
 pub struct ThresholdAdaptationState {
-    /// Adaptation learning rate (rate * 10000)
+    /// Adaptation learning rate (rate * 10000 for precision)
     pub learning_rate: AtomicU32,
-    /// Adaptation direction per threshold
-    pub adaptation_directions: [AtomicU32; 5], // Per AlertType, direction * 1000
-    /// Last adaptation timestamps
-    pub last_adaptations: [AtomicU64; 5], // Nanoseconds since epoch
+    /// Adaptation directions per alert type (direction * 1000)
+    pub adaptation_directions: [AtomicU32; 5], // Per AlertType
+    /// Last adaptation timestamps (nanoseconds since epoch)
+    pub last_adaptations: [AtomicU64; 5],
+    /// Baseline values per alert type (scaled by 1000 for atomic storage)
+    pub baseline_values: [AtomicU32; 5], // Baseline values * 1000
+    /// Adaptation factor for sensitivity tuning (factor * 1000)
+    pub adaptation_factor: AtomicU32,
+    /// Enable/disable adaptive behavior
+    pub adaptive_enabled: AtomicBool,
 }
 
 impl ThresholdAdaptationState {
     pub fn new() -> Self {
         Self {
             learning_rate: AtomicU32::new(1000), // 0.1 learning rate * 10000
-            adaptation_directions: [
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-            ],
-            last_adaptations: [
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-            ],
+            adaptation_directions: [const { AtomicU32::new(0) }; 5],
+            last_adaptations: [const { AtomicU64::new(0) }; 5],
+            baseline_values: [const { AtomicU32::new(0) }; 5], // No baseline initially
+            adaptation_factor: AtomicU32::new(1000), // 1.0 * 1000
+            adaptive_enabled: AtomicBool::new(true),
         }
+    }
+
+    /// Set baseline value for specific alert type (thread-safe)
+    #[inline]
+    pub fn set_baseline(&self, alert_type_idx: usize, baseline: f64) {
+        if alert_type_idx < 5 {
+            self.baseline_values[alert_type_idx].store((baseline * 1000.0) as u32, Ordering::Relaxed);
+        }
+    }
+
+    /// Get baseline value for specific alert type
+    #[inline]
+    pub fn get_baseline(&self, alert_type_idx: usize) -> f64 {
+        if alert_type_idx < 5 {
+            self.baseline_values[alert_type_idx].load(Ordering::Relaxed) as f64 / 1000.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Update adaptation factor
+    #[inline]
+    pub fn set_adaptation_factor(&self, factor: f64) {
+        self.adaptation_factor.store((factor * 1000.0) as u32, Ordering::Relaxed);
+    }
+
+    /// Get current adaptation factor
+    #[inline]
+    pub fn get_adaptation_factor(&self) -> f64 {
+        self.adaptation_factor.load(Ordering::Relaxed) as f64 / 1000.0
+    }
+
+    /// Get current learning rate
+    #[inline]
+    pub fn get_learning_rate(&self) -> f64 {
+        self.learning_rate.load(Ordering::Relaxed) as f64 / 10000.0
+    }
+
+    /// Set learning rate (thread-safe)
+    #[inline]
+    pub fn set_learning_rate(&self, rate: f64) {
+        self.learning_rate.store((rate * 10000.0) as u32, Ordering::Relaxed);
+    }
+
+    /// Enable/disable adaptive behavior
+    #[inline]
+    pub fn set_adaptive_enabled(&self, enabled: bool) {
+        self.adaptive_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Check if adaptive behavior is enabled
+    #[inline]
+    pub fn is_adaptive_enabled(&self) -> bool {
+        self.adaptive_enabled.load(Ordering::Relaxed)
     }
 }
 

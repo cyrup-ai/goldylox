@@ -6,7 +6,7 @@
 use std::marker::PhantomData;
 use std::time::Instant;
 
-use crate::cache::traits::types_and_enums::SelectionReason;
+pub use crate::cache::traits::types_and_enums::SelectionReason;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::timestamp_nanos;
 
@@ -232,6 +232,12 @@ impl CandidateMetadata {
             last_access_ns,
             access_count,
             age_ns,
+            slot_index: None, // Optional field
+            access_pattern: None, // Will be determined later
+            creation_time_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64,
         }
     }
 

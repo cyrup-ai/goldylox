@@ -8,6 +8,7 @@ pub mod hardware;
 pub mod pattern_detection;
 pub mod prediction;
 pub mod queue_manager;
+pub mod statistics;
 pub mod types;
 
 // Re-export main types for convenience
@@ -17,7 +18,8 @@ pub use hardware::{AccessPatternHint, HardwarePrefetchStats, HardwarePrefetcher,
 pub use pattern_detection::PatternDetector;
 pub use prediction::{PatternDistribution, PredictionEngine, PredictionEngineStats};
 pub use queue_manager::{ConfidenceDistribution, QueueManager, QueueStats};
+pub use statistics::PredictionStats;
 pub use types::{
-    AccessPattern, AccessSequence, DetectedPattern, PredictionConfidence, PredictionStats,
+    AccessPattern, AccessSequence, DetectedPattern, PredictionConfidence,
     PrefetchConfig, PrefetchRequest, PrefetchStats,
 };

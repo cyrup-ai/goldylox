@@ -84,7 +84,7 @@ impl TemporalPatternClassifier {
         } else if coefficient_variation < 0.3 {
             TemporalPattern::Sequential
         } else if self.is_burst_pattern(intervals) {
-            TemporalPattern::Burst
+            TemporalPattern::Bursty
         } else {
             TemporalPattern::Random
         }
@@ -121,10 +121,9 @@ impl TemporalPatternClassifier {
         match pattern {
             TemporalPattern::Periodic => self.calculate_periodic_confidence(intervals),
             TemporalPattern::Sequential => self.calculate_sequential_confidence(intervals),
-            TemporalPattern::Burst => self.calculate_burst_confidence(intervals),
+            TemporalPattern::Bursty => self.calculate_burst_confidence(intervals),
             TemporalPattern::Random => 0.1, // Low confidence for random
             TemporalPattern::Steady => 0.8, // High confidence for steady patterns
-            TemporalPattern::Bursty => self.calculate_burst_confidence(intervals),
             TemporalPattern::BurstyHigh => self.calculate_burst_confidence(intervals),
             TemporalPattern::Declining => 0.6, // Medium confidence for declining patterns
             TemporalPattern::WriteHeavy => 0.7, // Medium-high confidence for write patterns

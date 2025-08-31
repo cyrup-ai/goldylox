@@ -16,9 +16,9 @@ pub mod write_policies;
 // Re-export the feature-rich CachePolicyEngine
 pub use engine::CachePolicyEngine;
 pub use types::{
-    AccessSequence, AccessType, AdaptivePolicyConfig, AlgorithmMetrics, BackgroundWriteCoordinator,
+    AccessType, AdaptivePolicyConfig, AlgorithmMetrics, BackgroundWriteCoordinator,
     CoalescedWrite, CoordinatorStatus, DirtyEntry, LockFreeCircularBuffer, LockFreeQueue,
-    PatternType, PrefetchPredictor, PrefetchSuccessTracker, PrefetchTarget, ReplacementAlgorithm,
+    PrefetchPredictor, ReplacementAlgorithm,
     ReplacementPolicies, TemporalAccess, ThroughputMetrics, WritePolicy, WritePolicyManager,
     WriteScheduler,
 };

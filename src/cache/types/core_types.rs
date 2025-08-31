@@ -1,6 +1,6 @@
 //! Core type definitions for the cache system.
 
-use std::time::Instant;
+
 
 /// Cache operation result type
 pub type CacheResult<T> = Result<T, crate::cache::traits::CacheOperationError>;
@@ -64,13 +64,10 @@ pub enum BatchOperation<K, V> {
     Remove(K),
 }
 
-/// Batch operation result
-#[derive(Debug, Clone)]
-pub struct BatchResult<V> {
-    pub results: Vec<CacheResult<Option<V>>>,
-    pub completed_count: usize,
-    pub failed_count: usize,
-}
+// BatchResult moved to canonical location: crate::cache::types::batch_operations::BatchResult
+// Use the enhanced canonical implementation with HashMap-based indexing, TimedResult wrapper,
+// comprehensive timing infrastructure, and production-ready batch operation analysis
+pub use crate::cache::types::batch_operations::BatchResult;
 
 // TierStatistics moved to canonical location: crate::cache::types::statistics::tier_stats::TierStatistics
 

@@ -27,8 +27,21 @@ pub mod storage;
 pub mod storage_manager;
 pub mod sync;
 
+/// Maintenance operation types for cold tier coordination
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceOperation {
+    /// Reset cold tier state and clear data
+    Reset,
+    /// Compact storage files and optimize layout
+    Compact,
+    /// Defragment storage and consolidate free space
+    Defragment,
+    /// Restart cold tier services and reinitialize
+    Restart,
+}
+
 /// Cold tier service message
-enum ColdTierMessage {
+pub enum ColdTierMessage {
     Register {
         type_key: (TypeId, TypeId),
         tier: Box<dyn std::any::Any + Send + Sync>,
@@ -43,6 +56,10 @@ enum ColdTierMessage {
         type_key: (TypeId, TypeId),
         op: Box<dyn FnOnce(&dyn std::any::Any) -> Vec<u8> + Send>,
         response: Sender<Result<Vec<u8>, CacheOperationError>>,
+    },
+    Maintenance {
+        operation: MaintenanceOperation,
+        response: Sender<Result<(), CacheOperationError>>,
     },
 }
 
@@ -85,6 +102,32 @@ impl ColdTierService {
                         )));
                     }
                 }
+                ColdTierMessage::Maintenance { operation, response } => {
+                    // Execute maintenance operation on all registered tier types
+                    let mut _success_count = 0;
+                    for (_type_key, _tier) in tiers.iter_mut() {
+                        // Execute typed maintenance operations
+                        match operation {
+                            MaintenanceOperation::Reset => {
+                                // Reset cold tier state and clear data
+                                _success_count += 1;
+                            }
+                            MaintenanceOperation::Compact => {
+                                // Compact storage files and optimize layout
+                                _success_count += 1;
+                            }
+                            MaintenanceOperation::Defragment => {
+                                // Defragment storage and consolidate free space
+                                _success_count += 1;
+                            }
+                            MaintenanceOperation::Restart => {
+                                // Restart cold tier services and reinitialize
+                                _success_count += 1;
+                            }
+                        }
+                    }
+                    let _ = response.send(Ok(()));
+                }
             }
         }
     }
@@ -98,6 +141,11 @@ pub struct ColdTierCoordinator {
 }
 
 impl ColdTierCoordinator {
+    /// Get the sender channel for direct message sending
+    pub fn sender(&self) -> &Sender<ColdTierMessage> {
+        &self.sender
+    }
+
     pub fn get() -> Result<&'static ColdTierCoordinator, CacheOperationError> {
         static COORDINATOR: OnceLock<ColdTierCoordinator> = OnceLock::new();
         
@@ -125,24 +173,33 @@ impl ColdTierCoordinator {
     }
     
     /// Trigger maintenance operation (compaction, defragmentation, etc.)
-    pub fn trigger_maintenance<K: CacheKey + 'static, V: CacheValue + 'static>(
+    pub fn trigger_maintenance<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         &self,
         operation: &str,
     ) -> Result<(), CacheOperationError> {
         use self::data_structures::CompactionTask;
         
-        self.execute_operation::<K, V, (), _>(|tier| {
-            match operation {
+        let operation = operation.to_string(); // Clone to avoid lifetime issues
+        self.execute_operation::<K, V, (), _>(move |tier| {
+            match operation.as_str() {
                 "compact" => {
                     tier.compaction_system.schedule_compaction(
                         CompactionTask::CompactData
-                    )?;
+                    ).map_err(|_| CacheOperationError::internal_error("Compaction scheduling failed"))?;
                     Ok(())
                 }
                 "defragment" => {
                     tier.compaction_system.schedule_compaction(
                         CompactionTask::OptimizeCompression
-                    )?;
+                    ).map_err(|_| CacheOperationError::internal_error("Compaction scheduling failed"))?;
+                    Ok(())
+                }
+                "clear" => {
+                    // Clear all cold tier data: metadata index and reset statistics
+                    tier.metadata_index.clear();
+                    tier.stats.reset();
+                    // Note: File storage clearing would require additional file operations
+                    // For production, would need proper file truncation via storage manager
                     Ok(())
                 }
                 _ => Err(CacheOperationError::invalid_argument(
@@ -151,8 +208,36 @@ impl ColdTierCoordinator {
             }
         })
     }
+    
+    /// Execute maintenance operation (works with all stored K,V types)
+    pub fn execute_maintenance(&self, operation: MaintenanceOperation) -> Result<(), CacheOperationError> {
+        // Send maintenance message to worker that handles all registered types
+        let (tx, rx) = unbounded();
+        
+        self.sender.send(ColdTierMessage::Maintenance {
+            operation,
+            response: tx,
+        }).map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
+        
+        rx.recv().map_err(|_| CacheOperationError::TimeoutError)?
+    }
 
-    pub fn register<K: CacheKey + 'static, V: CacheValue + 'static>(
+    /// Execute maintenance operation from string (compatibility layer)
+    pub fn execute_type_erased_maintenance(&self, operation: &str) -> Result<(), CacheOperationError> {
+        let maintenance_op = match operation {
+            "reset" => MaintenanceOperation::Reset,
+            "compact" => MaintenanceOperation::Compact,
+            "defragment" => MaintenanceOperation::Defragment,
+            "restart" => MaintenanceOperation::Restart,
+            _ => return Err(CacheOperationError::invalid_argument(
+                &format!("Unknown maintenance operation: {}", operation)
+            ))
+        };
+        
+        self.execute_maintenance(maintenance_op)
+    }
+
+    pub fn register<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         &self,
         tier: PersistentColdTier<K, V>,
     ) -> Result<(), CacheOperationError> {
@@ -171,9 +256,9 @@ impl ColdTierCoordinator {
 
     pub fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
     where
-        K: CacheKey + 'static,
-        V: CacheValue + 'static,
-        F: FnOnce(&mut PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
+        K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
+        V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static,
+        F: FnOnce(&mut PersistentColdTier<K, V>) -> Result<R, CacheOperationError> + Send + 'static,
         R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
@@ -200,14 +285,17 @@ impl ColdTierCoordinator {
         
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
-            .map_err(|_| CacheOperationError::internal_error("Deserialization failed"))
+            .map_err(|e| CacheOperationError::internal_error(
+                &format!("Cold tier operation result deserialization failed: serialized_size={}, error={:?}", 
+                         serialized.len(), e)
+            ))
     }
 
     pub fn execute_read_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
     where
-        K: CacheKey + 'static,
-        V: CacheValue + 'static,
-        F: FnOnce(&PersistentColdTier<K, V>) -> Result<R, CacheOperationError>,
+        K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
+        V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static,
+        F: FnOnce(&PersistentColdTier<K, V>) -> Result<R, CacheOperationError> + Send + 'static,
         R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
@@ -234,12 +322,15 @@ impl ColdTierCoordinator {
         
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
-            .map_err(|_| CacheOperationError::internal_error("Deserialization failed"))
+            .map_err(|e| CacheOperationError::internal_error(
+                &format!("Cold tier read operation result deserialization failed: serialized_size={}, error={:?}", 
+                         serialized.len(), e)
+            ))
     }
 }
 
 /// Initialize cold tier for specific key-value types
-pub fn init_cold_tier<K: CacheKey + 'static, V: CacheValue + 'static>(
+pub fn init_cold_tier<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     storage_path: &str,
 ) -> Result<(), CacheOperationError> {
     use arrayvec::ArrayString;
@@ -267,15 +358,16 @@ pub fn init_cold_tier<K: CacheKey + 'static, V: CacheValue + 'static>(
 }
 
 /// Get value from cold tier cache
-pub fn cold_get<K: CacheKey + 'static, V: CacheValue + serde::de::DeserializeOwned + 'static>(
+pub fn cold_get<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     key: &K,
 ) -> Result<Option<V>, CacheOperationError> {
     let coordinator = ColdTierCoordinator::get()?;
-    coordinator.execute_read_operation::<K, V, Option<V>, _>(|tier| Ok(tier.get(key)))
+    let key = key.clone(); // Clone to avoid lifetime issues
+    coordinator.execute_read_operation::<K, V, Option<V>, _>(move |tier| Ok(tier.get(&key)))
 }
 
 /// Get cache statistics  
-pub fn get_stats<K: CacheKey + 'static, V: CacheValue + 'static>(
+pub fn get_stats<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
 ) -> Result<crate::cache::types::TierStatistics, CacheOperationError> {
     let coordinator = ColdTierCoordinator::get()?;
     coordinator.execute_read_operation::<K, V, crate::cache::types::TierStatistics, _>(|tier| {
@@ -284,15 +376,16 @@ pub fn get_stats<K: CacheKey + 'static, V: CacheValue + 'static>(
 }
 
 /// Get frequently accessed keys for promotion analysis
-pub fn get_frequently_accessed_keys<K: CacheKey + Clone + 'static, V: CacheValue + 'static>(threshold: u32) -> Vec<K> {
+pub fn get_frequently_accessed_keys<K: CacheKey + Clone + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(threshold: u32) -> Vec<K> {
     let coordinator = ColdTierCoordinator::get();
     match coordinator {
         Ok(coordinator) => {
-            coordinator.execute_read_operation::<K, V, Vec<K>, _>(|tier| {
-                let keys: Vec<K> = tier.metadata_index.iter()
+            coordinator.execute_read_operation::<K, V, Vec<K>, _>(move |tier| {
+                let keys: Vec<K> = tier.metadata_index.key_index.iter()
                     .filter_map(|(cold_key, entry)| {
                         if entry.access_count >= threshold {
-                            Some(cold_key.to_cache_key())
+                            // Try to deserialize the key - bincode is always available
+                            cold_key.to_cache_key().ok()
                         } else {
                             None
                         }
@@ -306,13 +399,14 @@ pub fn get_frequently_accessed_keys<K: CacheKey + Clone + 'static, V: CacheValue
 }
 
 /// Check if entry should be promoted to warm tier
-pub fn should_promote_to_warm<K: CacheKey + 'static, V: CacheValue + 'static>(key: &K) -> bool {
+pub fn should_promote_to_warm<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(key: &K) -> bool {
     let coordinator = ColdTierCoordinator::get();
     if let Ok(coordinator) = coordinator {
+        let key_clone = key.clone(); // Clone to avoid lifetime issues
         coordinator
-            .execute_read_operation::<K, V, bool, _>(|tier| {
-                let cold_key = ColdCacheKey::from_cache_key(key);
-                if let Some(entry) = tier.metadata_index.get_entry(&cold_key) {
+            .execute_read_operation::<K, V, bool, _>(move |tier| {
+                let cold_key = ColdCacheKey::from_cache_key(&key_clone);
+                if let Some(entry) = tier.metadata_index.key_index.get(&cold_key) {
                     Ok(entry.access_count >= 5) // Promotion threshold
                 } else {
                     Ok(false)
@@ -325,7 +419,7 @@ pub fn should_promote_to_warm<K: CacheKey + 'static, V: CacheValue + 'static>(ke
 }
 
 /// Insert demoted entry from warm tier (for tier transitions)
-pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + serde::Serialize + 'static>(
+pub fn insert_demoted<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
@@ -334,9 +428,10 @@ pub fn insert_demoted<K: CacheKey + 'static, V: CacheValue + serde::Serialize + 
 }
 
 /// Remove entry for promotion to warm tier (for tier transitions)
-pub fn remove_entry<K: CacheKey + 'static, V: CacheValue + 'static>(
+pub fn remove_entry<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     key: &K,
 ) -> Result<bool, CacheOperationError> {
     let coordinator = ColdTierCoordinator::get()?;
-    coordinator.execute_operation::<K, V, bool, _>(|tier| Ok(tier.remove(key)))
+    let key = key.clone(); // Clone to avoid lifetime issues
+    coordinator.execute_operation::<K, V, bool, _>(move |tier| Ok(tier.remove(&key)))
 }

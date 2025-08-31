@@ -93,16 +93,8 @@ impl From<PatternDetectionError> for HotTierError {
     }
 }
 
-/// Prediction statistics
-#[derive(Debug, Default)]
-pub struct PredictionStats {
-    pub total_predictions: u64,
-    pub correct_predictions: u64,
-    pub false_predictions: u64,
-    pub prefetch_hits: u64,
-    pub prefetch_misses: u64,
-    pub pattern_detections: u64,
-}
+// PredictionStats moved to canonical location: 
+// crate::cache::tier::hot::prefetch::statistics::PredictionStats
 
 /// Prefetch configuration
 #[derive(Debug, Clone)]
@@ -130,7 +122,8 @@ impl Default for PrefetchConfig {
     }
 }
 
-/// Prefetch statistics for external reporting
+/// Comprehensive prefetch statistics for external reporting (CANONICAL - Best of Best)
+/// Combines comprehensive hot tier features with policy engine performance metrics
 #[derive(Debug, Clone)]
 pub struct PrefetchStats {
     pub enabled: bool,
@@ -140,6 +133,10 @@ pub struct PrefetchStats {
     pub patterns_detected: usize,
     pub queue_size: usize,
     pub avg_confidence: f64,
+    // Enhanced fields from policy engine version for performance tracking
+    pub average_latency_ns: u64,
+    pub successful_count: u64,
+    pub failed_count: u64,
 }
 
 impl PrefetchStats {
@@ -169,6 +166,11 @@ impl PrefetchStats {
         // Sum patterns detected and queue size
         self.patterns_detected += other.patterns_detected;
         self.queue_size += other.queue_size;
+
+        // Enhanced fields from policy engine: average latency and sum counts
+        self.average_latency_ns = (self.average_latency_ns + other.average_latency_ns) / 2;
+        self.successful_count += other.successful_count;
+        self.failed_count += other.failed_count;
     }
 }
 
@@ -182,6 +184,10 @@ impl Default for PrefetchStats {
             patterns_detected: 0,
             queue_size: 0,
             avg_confidence: 0.0,
+            // Enhanced fields from policy engine version
+            average_latency_ns: 0,
+            successful_count: 0,
+            failed_count: 0,
         }
     }
 }

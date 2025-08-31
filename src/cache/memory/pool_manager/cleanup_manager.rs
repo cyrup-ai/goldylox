@@ -5,7 +5,7 @@
 //! AllocationStatistics, and other production-ready systems.
 
 use super::individual_pool::MemoryPool;
-use crate::cache::manager::background::types::MaintenanceTaskType;
+
 use crate::cache::tier::hot::memory_pool::statistics::MemoryPoolStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crossbeam_channel::{bounded, Sender};
@@ -75,8 +75,8 @@ pub enum EfficiencyRequest {
 
 /// Maintenance task request
 pub enum MaintenanceRequest {
-    SubmitTask(MaintenanceTaskType, u32, Sender<Result<(), CacheOperationError>>),
-    SubmitUrgentTask(MaintenanceTaskType, Sender<Result<(), CacheOperationError>>),
+    SubmitTask(crate::cache::tier::warm::maintenance::MaintenanceTask, u32, Sender<Result<(), CacheOperationError>>),
+    SubmitUrgentTask(crate::cache::tier::warm::maintenance::MaintenanceTask, Sender<Result<(), CacheOperationError>>),
     IsHealthy(Sender<bool>),
     GetStats(Sender<(u64, u64)>),
 }
@@ -124,13 +124,15 @@ impl PoolCleanupManager {
                 
                 self.maintenance_sender
                     .send(MaintenanceRequest::SubmitUrgentTask(
-                        MaintenanceTaskType::MemoryDefragmentation,
+                        crate::cache::tier::warm::maintenance::MaintenanceTask::DefragmentMemory {
+                            target_fragmentation: 0.15, // Target 15% fragmentation for urgent cleanup
+                        },
                         response_tx,
                     ))
                     .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                 
                 match response_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         // Update existing allocation statistics
                         use crate::cache::memory::allocation_manager::global_stats;
                         let current_fragmentation = global_stats::ALLOCATION_STATS.fragmentation_level.load(std::sync::atomic::Ordering::Relaxed) as f32;
@@ -143,7 +145,9 @@ impl PoolCleanupManager {
                         let (response_tx, response_rx) = bounded(1);
                         self.maintenance_sender
                             .send(MaintenanceRequest::SubmitTask(
-                                MaintenanceTaskType::OptimizeMemory,
+                                crate::cache::tier::warm::maintenance::MaintenanceTask::OptimizeStructure {
+                                    optimization_level: crate::cache::tier::warm::maintenance::OptimizationLevel::Basic,
+                                },
                                 100,
                                 response_tx,
                             ))
@@ -159,7 +163,9 @@ impl PoolCleanupManager {
                 let (response_tx, response_rx) = bounded(1);
                 self.maintenance_sender
                     .send(MaintenanceRequest::SubmitTask(
-                        MaintenanceTaskType::OptimizeMemory,
+                        crate::cache::tier::warm::maintenance::MaintenanceTask::OptimizeStructure {
+                            optimization_level: crate::cache::tier::warm::maintenance::OptimizationLevel::Standard,
+                        },
                         200,
                         response_tx,
                     ))
@@ -187,13 +193,15 @@ impl PoolCleanupManager {
                 
                 self.maintenance_sender
                     .send(MaintenanceRequest::SubmitUrgentTask(
-                        MaintenanceTaskType::MemoryDefragmentation,
+                        crate::cache::tier::warm::maintenance::MaintenanceTask::DefragmentMemory {
+                            target_fragmentation: 0.10, // Target 10% fragmentation for pool-specific cleanup
+                        },
                         response_tx,
                     ))
                     .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
                 
                 match response_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         cleanup_performed = true;
                         // Update statistics using existing allocation stats integration
                         self.record_cleanup_attempt()?;
@@ -203,7 +211,9 @@ impl PoolCleanupManager {
                         let (response_tx, response_rx) = bounded(1);
                         self.maintenance_sender
                             .send(MaintenanceRequest::SubmitTask(
-                                MaintenanceTaskType::OptimizeMemory,
+                                crate::cache::tier::warm::maintenance::MaintenanceTask::OptimizeStructure {
+                                    optimization_level: crate::cache::tier::warm::maintenance::OptimizationLevel::Aggressive,
+                                },
                                 50,
                                 response_tx,
                             ))
@@ -282,7 +292,7 @@ impl PoolCleanupManager {
         
         self.maintenance_sender
             .send(MaintenanceRequest::GetStats(response_tx))
-            .map_err(|_| CacheOperationError::InternalError("Maintenance service unavailable".to_string()))?;
+            .map_err(|_| CacheOperationError::internal_error("Maintenance service unavailable"))?;
         
         // We don't need the result, just triggering the increment
         let _ = response_rx.recv_timeout(Duration::from_millis(10));
@@ -338,7 +348,7 @@ pub fn emergency_cleanup() -> Result<usize, CacheOperationError> {
     })?;
     
     response_rx.recv_timeout(Duration::from_millis(500))
-        .map_err(|_| CacheOperationError::timeout_error())?
+        .map_err(|_| CacheOperationError::timing_error("Operation timed out"))?
 }
 
 /// Trigger defragmentation - called by maintenance worker
@@ -351,5 +361,5 @@ pub fn trigger_defragmentation() -> Result<usize, CacheOperationError> {
     })?;
     
     response_rx.recv_timeout(Duration::from_millis(500))
-        .map_err(|_| CacheOperationError::timeout_error())?
+        .map_err(|_| CacheOperationError::timing_error("Operation timed out"))?
 }

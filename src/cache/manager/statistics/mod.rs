@@ -5,9 +5,9 @@
 
 pub mod performance_metrics;
 pub mod tier_stats;
-pub mod types;
+// REMOVED: pub mod types; (canonicalized to telemetry::unified_stats)
 pub mod unified_stats;
 
 // REMOVED: Backwards compatibility re-exports that hide canonical API paths
 // Users must now import from canonical module path:
-// - Use manager::statistics::types::{CachePerformanceMetrics, StatisticsConfig, TierStatistics, UnifiedCacheStatistics}
+// - Use telemetry::unified_stats::{CachePerformanceMetrics, StatisticsConfig, UnifiedCacheStatistics}

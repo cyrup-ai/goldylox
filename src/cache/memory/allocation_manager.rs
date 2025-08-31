@@ -4,7 +4,7 @@
 //! statistics tracking and optimal pool selection for high-performance allocation.
 
 use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
+use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use log;
 
@@ -23,7 +23,7 @@ use crossbeam_channel::{bounded, Receiver};
 
 /// Global allocation statistics module - no Arc needed
 pub mod global_stats {
-    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
     use crossbeam_utils::CachePadded;
     
     pub struct GlobalAllocationStats {
@@ -87,13 +87,13 @@ pub mod global_stats {
 
 /// Advanced memory manager with atomic allocation tracking
 #[derive(Debug)]
-pub struct AllocationManager<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue> {
+pub struct AllocationManager<K: CacheKey + Default, V: CacheValue> {
     /// Memory pool manager for efficient allocation
-    pool_manager: MemoryPoolManager,
+    pool_manager: Arc<MemoryPoolManager>,
     /// Cleanup manager owned directly
     cleanup_manager: PoolCleanupManager,
     /// Error recovery system for sophisticated retry mechanisms
-    error_recovery: ErrorRecoverySystem,
+    error_recovery: ErrorRecoverySystem<K, V>,
     /// Memory pressure monitor for pressure-aware retries
     pressure_monitor: MemoryPressureMonitor,
     /// Phantom data for generic parameters
@@ -107,7 +107,7 @@ pub struct EfficiencyWorker {
 }
 
 impl EfficiencyWorker {
-    pub fn run(mut self) {
+    pub fn run(self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
                 EfficiencyRequest::GetFragmentation(response) => {
@@ -137,26 +137,27 @@ impl EfficiencyWorker {
 }
 
 /// Maintenance scheduler worker
-pub struct MaintenanceWorker<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue> {
+pub struct MaintenanceWorker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     receiver: Receiver<MaintenanceRequest>,
     scheduler: MaintenanceScheduler<K, V>,
 }
 
-impl<K: CacheKey, V: CacheValue> MaintenanceWorker<K, V>
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> MaintenanceWorker<K, V>
 where
     K: Clone + 'static,
-    V: Clone + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    V: Clone + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static,
 {
-    pub fn run(mut self) {
+    pub fn run(self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
                 MaintenanceRequest::SubmitTask(task_type, priority, response) => {
                     let result = self.scheduler.submit_task(task_type, priority as u16)
-                        .map_err(|_| crate::cache::traits::types_and_enums::CacheOperationError::MaintenanceError);
+                        .map_err(|_| crate::cache::traits::types_and_enums::CacheOperationError::OperationFailed);
                     let _ = response.send(result);
                 }
                 MaintenanceRequest::SubmitUrgentTask(task_type, response) => {
-                    let result = self.scheduler.submit_urgent_task(task_type);
+                    let result = self.scheduler.submit_urgent_task(task_type)
+                        .map_err(|_| crate::cache::traits::types_and_enums::CacheOperationError::OperationFailed);
                     let _ = response.send(result);
                 }
                 MaintenanceRequest::IsHealthy(response) => {
@@ -177,7 +178,7 @@ where
 /// Pool cleanup worker that owns pools
 pub struct PoolCleanupWorker {
     receiver: Receiver<PoolCleanupRequest>,
-    pool_manager: MemoryPoolManager,
+    pool_manager: Arc<MemoryPoolManager>,
 }
 
 impl PoolCleanupWorker {
@@ -208,7 +209,7 @@ impl PoolCleanupWorker {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> AllocationManager<K, V> {
     /// Create new allocation manager with configuration
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
         // Create channels for background services
@@ -262,7 +263,7 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
         );
         
         // Create pool manager
-        let pool_manager = MemoryPoolManager::new(config)?;
+        let pool_manager = Arc::new(MemoryPoolManager::new(config)?);
         
         // Create pool cleanup channel
         let (pool_cleanup_sender, pool_cleanup_receiver) = bounded::<PoolCleanupRequest>(256);
@@ -272,8 +273,8 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
         PoolCoordinator::initialize(pool_cleanup_sender)
             .map_err(|e| CacheOperationError::initialization_failed(format!("Pool coordinator: {:?}", e)))?;
 
-        // Clone pool_manager for worker ownership
-        let worker_pool_manager = pool_manager.clone();
+        // Clone Arc reference for worker ownership
+        let worker_pool_manager = Arc::clone(&pool_manager);
 
         // Spawn pool cleanup worker
         std::thread::Builder::new()
@@ -291,7 +292,7 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
             pool_manager,
             cleanup_manager,
             error_recovery: ErrorRecoverySystem::new(),
-            pressure_monitor: MemoryPressureMonitor::new(config)?,
+            pressure_monitor: MemoryPressureMonitor::new(config.memory_config.max_memory_usage.unwrap_or(1024 * 1024 * 1024)),
             _phantom: std::marker::PhantomData,
         })
     }
@@ -328,6 +329,11 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
                 // Update average allocation size
                 self.update_avg_allocation_size(size);
 
+                // Trigger cleanup if memory pressure is high
+                if let Err(e) = self.cleanup_manager.try_sophisticated_cleanup(&self.pool_manager.small_pool()) {
+                    log::warn!("Cleanup check failed: {:?}", e);
+                }
+
                 Ok(ptr)
             }
             Err(_) => {
@@ -356,13 +362,20 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
             .fetch_sub(1, Ordering::Relaxed);
 
         // Return memory to appropriate pool
-        if size < 1024 {
+        let result = if size < 1024 {
             self.pool_manager.small_pool().deallocate(ptr, size)
         } else if size < 65536 {
             self.pool_manager.medium_pool().deallocate(ptr, size)
         } else {
             self.pool_manager.large_pool().deallocate(ptr, size)
+        };
+
+        // Trigger cleanup maintenance after deallocation
+        if !self.cleanup_manager.is_cleanup_available() {
+            log::warn!("Cleanup maintenance not available");
         }
+
+        result
     }
 
     /// Get current memory statistics
@@ -396,7 +409,7 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
 
     /// Get pool manager reference
     pub fn pool_manager(&self) -> &MemoryPoolManager {
-        &self.pool_manager
+        &*self.pool_manager
     }
 
     /// Update peak allocation atomically
@@ -483,7 +496,7 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
         size: usize,
     ) -> Result<NonNull<u8>, CacheOperationError> {
         // Connect to existing MemoryPressureMonitor for pressure-aware retries
-        if self.pressure_monitor.current_pressure() > 0.95 {
+        if self.pressure_monitor.get_pressure() > 0.95 {
             return Err(CacheOperationError::resource_exhausted(
                 "Memory pressure too high for retry",
             ));
@@ -500,7 +513,7 @@ impl<K: CacheKey, V: CacheValue> AllocationManager<K, V> {
         while retry_count < max_retries {
             // Connect to existing CircuitBreaker - use tier 0 for memory allocation
             if !self.error_recovery.is_tier_available(0) {
-                return Err(CacheOperationError::circuit_breaker_open(
+                return Err(CacheOperationError::resource_exhausted(
                     "Memory allocation circuit open",
                 ));
             }

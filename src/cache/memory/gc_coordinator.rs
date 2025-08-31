@@ -4,6 +4,7 @@
 //! emergency and normal GC cycles with performance metrics tracking.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
@@ -13,7 +14,8 @@ use crate::cache::config::CacheConfig;
 use super::types::{GCTask, GCTaskType};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crossbeam_channel::Sender;
-use crate::cache::manager::background::types::{MaintenanceTask, MaintenanceTaskType};
+use crate::cache::manager::background::types::MaintenanceTask;
+use crate::cache::tier::warm::maintenance::MaintenanceTask as CanonicalMaintenanceTask;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
@@ -191,11 +193,14 @@ impl GCCoordinator {
         }
 
         // Use the production LockFreeQueue for proper synchronization
-        if self.lock_free_queue.push(_task) {
-            self.task_queue.queue_size.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        } else {
-            Err(CacheOperationError::resource_exhausted("GC task queue full"))
+        match self.lock_free_queue.push(_task) {
+            Ok(()) => {
+                self.task_queue.queue_size.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(_returned_task) => {
+                Err(CacheOperationError::resource_exhausted("GC task queue full"))
+            }
         }
     }
 
@@ -226,7 +231,10 @@ impl GCCoordinator {
             GCTaskType::Emergency => {
                 if let Some(ref sender) = self.maintenance_sender {
                     let task = MaintenanceTask {
-                        task_type: MaintenanceTaskType::GarbageCollect,
+                        task: CanonicalMaintenanceTask::CleanupExpired {
+                            ttl: Duration::from_secs(300), // 5 minutes TTL for garbage collection
+                            batch_size: 1000,
+                        },
                         priority: 0, // Highest priority
                         created_at: std::time::Instant::now(),
                         timeout_ns: 5_000_000_000, // 5 seconds
@@ -240,7 +248,10 @@ impl GCCoordinator {
             GCTaskType::Normal => {
                 if let Some(ref sender) = self.maintenance_sender {
                     let task = MaintenanceTask {
-                        task_type: MaintenanceTaskType::GarbageCollect,
+                        task: CanonicalMaintenanceTask::CleanupExpired {
+                            ttl: Duration::from_secs(1800), // 30 minutes TTL for normal collection
+                            batch_size: 2000,
+                        },
                         priority: 100,
                         created_at: std::time::Instant::now(),
                         timeout_ns: 30_000_000_000, // 30 seconds
@@ -254,7 +265,9 @@ impl GCCoordinator {
             GCTaskType::Maintenance => {
                 if let Some(ref sender) = self.maintenance_sender {
                     let task = MaintenanceTask {
-                        task_type: MaintenanceTaskType::MemoryDefragmentation,
+                        task: CanonicalMaintenanceTask::DefragmentMemory {
+                            target_fragmentation: 0.1, // Target 10% fragmentation
+                        },
                         priority: 200,
                         created_at: std::time::Instant::now(),
                         timeout_ns: 60_000_000_000, // 60 seconds

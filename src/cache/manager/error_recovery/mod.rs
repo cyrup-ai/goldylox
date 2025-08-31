@@ -4,6 +4,7 @@
 //! and circuit breaker patterns for cache fault tolerance.
 
 pub mod circuit_breaker;
+pub mod coordinator;
 pub mod core;
 pub mod detection;
 pub mod statistics;
@@ -12,6 +13,11 @@ pub mod types;
 
 // Re-export main types for convenience
 pub use core::{ErrorRecoverySystem, PerformanceSummary, SystemHealthReport};
+pub use coordinator::{
+    execute_configuration_reset, execute_system_restart, get_error_statistics,
+    get_system_health, init_error_recovery_system, reset_circuit_breaker,
+    shutdown_error_recovery_system,
+};
 
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerHealth};
 pub use detection::ErrorDetector;

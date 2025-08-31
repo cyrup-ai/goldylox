@@ -3,7 +3,7 @@
 //! This module implements worker state tracking and health monitoring
 //! for background maintenance workers.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -19,7 +19,7 @@ impl BackgroundWorkerState {
             total_processing_time: AtomicU64::new(0),
             status: AtomicCell::new(WorkerStatus::Idle),
             last_heartbeat: AtomicCell::new(Instant::now()),
-            current_task: AtomicCell::new(None),
+            current_task_discriminant: AtomicU8::new(0),
             error_count: AtomicU32::new(0),
             steal_attempts: AtomicU64::new(0),
             successful_steals: AtomicU64::new(0),
@@ -55,7 +55,7 @@ impl BackgroundWorkerState {
 
     /// Shutdown workers
     #[inline(always)]
-    pub fn shutdown_workers<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(&self, scheduler: &crate::cache::manager::MaintenanceScheduler<K, V>) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
+    pub fn shutdown_workers<K: crate::cache::traits::CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: crate::cache::traits::CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(&self, scheduler: &crate::cache::manager::MaintenanceScheduler<K, V>) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Update local status to shutdown
         self.status.store(WorkerStatus::Shutdown);
         

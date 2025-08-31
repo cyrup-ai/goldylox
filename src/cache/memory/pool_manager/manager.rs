@@ -11,7 +11,7 @@ use crate::cache::config::CacheConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Memory pool manager for efficient allocation patterns
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemoryPoolManager {
     /// Small object pool (< 1KB)
     small_pool: MemoryPool,
@@ -86,7 +86,11 @@ impl MemoryPoolManager {
                 0 => &self.small_pool,
                 1 => &self.medium_pool,
                 2 => &self.large_pool,
-                _ => unreachable!(),
+                _ => {
+                    // Log error and skip invalid pool index instead of panicking
+                    log::error!("Invalid pool index {} in update_utilization_stats", i);
+                    continue;
+                }
             };
 
             let utilization = pool.get_utilization_percentage();
@@ -101,5 +105,58 @@ impl MemoryPoolManager {
             self.pool_stats.efficiency_scores[i]
                 .store(efficiency, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+
+    // BEST OF BOTH WORLDS: Direct allocation methods from memory_pools.rs
+    
+    /// Allocate from small object pool
+    pub fn allocate_small(&self, size: usize) -> Result<std::ptr::NonNull<u8>, CacheOperationError> {
+        self.small_pool.allocate(size)
+    }
+
+    /// Allocate from medium object pool
+    pub fn allocate_medium(&self, size: usize) -> Result<std::ptr::NonNull<u8>, CacheOperationError> {
+        self.medium_pool.allocate(size)
+    }
+
+    /// Allocate from large object pool
+    pub fn allocate_large(&self, size: usize) -> Result<std::ptr::NonNull<u8>, CacheOperationError> {
+        self.large_pool.allocate(size)
+    }
+
+    /// Deallocate to small object pool
+    pub fn deallocate_small(
+        &self,
+        ptr: std::ptr::NonNull<u8>,
+        size: usize,
+    ) -> Result<(), CacheOperationError> {
+        self.small_pool.deallocate(ptr, size)
+    }
+
+    /// Deallocate to medium object pool
+    pub fn deallocate_medium(
+        &self,
+        ptr: std::ptr::NonNull<u8>,
+        size: usize,
+    ) -> Result<(), CacheOperationError> {
+        self.medium_pool.deallocate(ptr, size)
+    }
+
+    /// Deallocate to large object pool
+    pub fn deallocate_large(
+        &self,
+        ptr: std::ptr::NonNull<u8>,
+        size: usize,
+    ) -> Result<(), CacheOperationError> {
+        self.large_pool.deallocate(ptr, size)
+    }
+
+    /// Get pool utilization statistics (enhanced version)
+    pub fn get_pool_utilizations(&self) -> [f32; 3] {
+        [
+            self.small_pool.get_utilization_percentage() as f32 / 100.0,
+            self.medium_pool.get_utilization_percentage() as f32 / 100.0,
+            self.large_pool.get_utilization_percentage() as f32 / 100.0,
+        ]
     }
 }

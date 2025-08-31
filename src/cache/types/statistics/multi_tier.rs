@@ -362,7 +362,7 @@ impl MultiTierStatistics {
         let total_memory =
             self.hot_tier.memory_usage + self.warm_tier.memory_usage + self.cold_tier.memory_usage;
 
-        let weighted_hit_rate = if total_entries > 0 {
+        let _weighted_hit_rate = if total_entries > 0 {
             (self.hot_tier.hit_rate * self.hot_tier.entry_count as f64
                 + self.warm_tier.hit_rate * self.warm_tier.entry_count as f64
                 + self.cold_tier.hit_rate * self.cold_tier.entry_count as f64)
@@ -384,7 +384,7 @@ impl MultiTierStatistics {
             + self.warm_tier.ops_per_second
             + self.cold_tier.ops_per_second;
 
-        let weighted_error_rate = if total_entries > 0 {
+        let _weighted_error_rate = if total_entries > 0 {
             (self.hot_tier.error_rate * self.hot_tier.entry_count as f64
                 + self.warm_tier.error_rate * self.warm_tier.entry_count as f64
                 + self.cold_tier.error_rate * self.cold_tier.entry_count as f64)

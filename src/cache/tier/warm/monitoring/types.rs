@@ -109,12 +109,8 @@ impl MemoryMonitoringStats {
     }
 }
 
-/// Historical memory usage tracking (defined in usage_history module)
-#[derive(Debug)]
-pub struct MemoryUsageHistoryStub {
-    /// This is a stub - actual implementation is in usage_history module
-    _marker: std::marker::PhantomData<()>,
-}
+/// Historical memory usage tracking using sophisticated implementation
+pub type MemoryUsageHistoryStub = crate::cache::tier::warm::monitoring::usage_history::MemoryUsageHistory;
 
 /// Performance monitoring task for background analysis
 #[derive(Debug)]

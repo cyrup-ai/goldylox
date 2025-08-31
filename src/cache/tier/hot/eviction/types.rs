@@ -28,9 +28,9 @@ pub fn create_hot_tier_candidate<K: crate::cache::traits::CacheKey, V: crate::ca
     slot_index: usize, 
     key: K, 
     score: f64, 
-    reason: crate::cache::traits::types_and_enums::EvictionReason
+    _reason: crate::cache::traits::types_and_enums::EvictionReason
 ) -> EvictionCandidate<K, V> {
-    use crate::cache::types::eviction::candidate::SelectionReason;
+    use crate::cache::traits::types_and_enums::SelectionReason;
     EvictionCandidate::from_slot_index(slot_index, key, score, SelectionReason::LeastRecentlyUsed)
 }
 

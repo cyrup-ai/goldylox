@@ -13,7 +13,7 @@ use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
-impl<K: CacheKey, V: CacheValue> PersistentColdTier<K, V> {
+impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> PersistentColdTier<K, V> {
     /// Create new persistent cold tier cache
     pub fn new(config: ColdTierConfig) -> io::Result<Self> {
         let storage_path = Path::new(config.storage_path.as_str());

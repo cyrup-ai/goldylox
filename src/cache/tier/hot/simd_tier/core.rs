@@ -10,7 +10,7 @@ use crate::cache::tier::hot::eviction::EvictionEngine;
 use crate::cache::tier::hot::memory_pool::MemoryPool;
 use crate::cache::tier::hot::prefetch::PrefetchPredictor;
 use crate::cache::tier::hot::synchronization::{CoordinationState, SimdHashState, SimdLruTracker};
-use crate::cache::tier::hot::types::HotTierConfig;
+use crate::cache::config::types::HotTierConfig;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
@@ -22,7 +22,7 @@ pub struct SimdHotTier<K: CacheKey + Default, V: CacheValue> {
     /// LRU tracking with SIMD acceleration
     pub(super) lru_tracker: SimdLruTracker,
     /// Eviction engine with machine learning
-    pub(super) eviction_engine: EvictionEngine,
+    pub(super) eviction_engine: EvictionEngine<K, V>,
     /// Prefetch predictor for access patterns
     pub(super) prefetch_predictor: PrefetchPredictor<K>,
     /// SIMD hash state for key hashing
@@ -68,7 +68,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         Self {
             memory_pool: MemoryPool::new(&config),
             lru_tracker: SimdLruTracker::new(),
-            eviction_engine: EvictionEngine::new(eviction_config),
+            eviction_engine: EvictionEngine::<K, V>::new(eviction_config),
             prefetch_predictor: PrefetchPredictor::<K>::new(prefetch_config),
             hash_state: SimdHashState::new(),
             stats: AtomicTierStats::new(),

@@ -7,17 +7,17 @@
 use crate::cache::tier::cold::compression_engine::CompressedData;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
-use crate::cache::types::results::CacheOperationError;
+use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::types::statistics::tier_stats::TierStatistics;
 use super::types::timestamp_nanos;
 use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::manager::error_recovery::types::ErrorType;
 
-#[cfg(feature = "bincode")]
+use bincode;
 
 
-impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()> + bincode::Encode>
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Decode<()> + bincode::Encode>
     PersistentColdTier<K, V>
 {
     /// Get value from persistent storage
@@ -28,12 +28,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         // Check bloom filter first (fast negative lookup)
         if !self.metadata_index.bloom_filter.might_contain(&cold_key) {
             let elapsed_ns = timer.elapsed_ns();
-            self.stats
-                .miss_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.stats
-                .last_access_ns
-                .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+            self.stats.record_miss(elapsed_ns);
             return None;
         }
 
@@ -58,15 +53,10 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                                 .map(|(v, _)| v) {
                                 Ok(cache_value) => {
                                     // Update access metadata
-                                    self.update_access_metadata(&cold_key, &index_entry);
+                                    self.update_access_metadata(&cold_key, &mut index_entry.clone());
 
                                     let elapsed_ns = timer.elapsed_ns();
-                                    self.stats
-                                        .hit_count
-                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    self.stats
-                                        .last_access_ns
-                                        .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                                    self.stats.record_hit(elapsed_ns);
 
                                     Some(cache_value)
                                 }
@@ -74,12 +64,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                                     // Track deserialization error
                                     self.error_stats.record_error(ErrorType::CorruptedData);
                                     let elapsed_ns = timer.elapsed_ns();
-                                    self.stats
-                                        .miss_count
-                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    self.stats
-                                        .last_access_ns
-                                        .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                                    self.stats.record_miss(elapsed_ns);
                                     None
                                 }
                             }
@@ -88,12 +73,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                             // Track decompression error
                             self.error_stats.record_error(ErrorType::CorruptedData);
                             let elapsed_ns = timer.elapsed_ns();
-                            self.stats
-                                .miss_count
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            self.stats
-                                .last_access_ns
-                                .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                            self.stats.record_miss(elapsed_ns);
                             None
                         }
                     }
@@ -102,23 +82,13 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                     // Track IO error
                     self.error_stats.record_error(ErrorType::DiskIOError);
                     let elapsed_ns = timer.elapsed_ns();
-                    self.stats
-                        .miss_count
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.stats
-                        .last_access_ns
-                        .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                    self.stats.record_miss(elapsed_ns);
                     None
                 }
             }
         } else {
             let elapsed_ns = timer.elapsed_ns();
-            self.stats
-                .miss_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.stats
-                .last_access_ns
-                .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+            self.stats.record_miss(elapsed_ns);
             None
         }
     }
@@ -126,7 +96,10 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
     /// Put value in persistent storage
     pub fn put(&mut self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
-        let cold_key = ColdCacheKey::from_cache_key(&key);
+        
+        // Use serialized approach for round-trip key recovery capability - bincode always available
+        let cold_key = ColdCacheKey::from_cache_key_serialized(&key)
+            .map_err(|_| CacheOperationError::SerializationError("Failed to serialize key".to_string()))?;
 
         // Serialize value using CacheValue trait
         let serialized_data = match bincode::encode_to_vec(&value, bincode::config::standard()) {
@@ -135,12 +108,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                 // Track serialization error
                 self.error_stats.record_error(ErrorType::CorruptedData);
                 let elapsed_ns = timer.elapsed_ns();
-                self.stats
-                    .miss_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.stats
-                    .last_access_ns
-                    .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                self.stats.record_miss(elapsed_ns);
                 return Err(CacheOperationError::serialization_failed(
                     "Failed to serialize cache value",
                 ));
@@ -163,12 +131,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                 // Track compression error
                 self.error_stats.record_error(ErrorType::CorruptedData);
                 let elapsed_ns = timer.elapsed_ns();
-                self.stats
-                    .miss_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.stats
-                    .last_access_ns
-                    .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                self.stats.record_miss(elapsed_ns);
                 return Err(CacheOperationError::serialization_failed(
                     "Compression failed",
                 ));
@@ -182,12 +145,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
                 // Track storage write error
                 self.error_stats.record_error(ErrorType::DiskIOError);
                 let elapsed_ns = timer.elapsed_ns();
-                self.stats
-                    .miss_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.stats
-                    .last_access_ns
-                    .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+                self.stats.record_miss(elapsed_ns);
                 return Err(CacheOperationError::io_failed("Failed to write to storage"));
             }
         };
@@ -213,23 +171,13 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
         self.sync_state.schedule_sync();
 
         // Update statistics
-        self.stats
-            .entry_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.stats.storage_size.fetch_add(
-            compressed_data.data.len() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.stats.update_entry_count(1);
+        self.stats.update_memory_usage(compressed_data.data.len() as i64);
         // Track uncompressed size
         self.stats.update_uncompressed_size(uncompressed_size as i64);
 
         let elapsed_ns = timer.elapsed_ns();
-        self.stats
-            .hit_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.stats
-            .last_access_ns
-            .store(elapsed_ns, std::sync::atomic::Ordering::Relaxed);
+        self.stats.record_hit(elapsed_ns);
 
         Ok(())
     }
@@ -246,13 +194,8 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
             self.stats.update_uncompressed_size(-(index_entry.uncompressed_size as i64));
 
             // Update statistics
-            self.stats
-                .entry_count
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            self.stats.storage_size.fetch_sub(
-                index_entry.compressed_size as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            self.stats.update_entry_count(-1);
+            self.stats.update_memory_usage(-(index_entry.compressed_size as i64));
 
             true
         } else {
@@ -262,52 +205,7 @@ impl<K: CacheKey, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned
 
     /// Get cache statistics
     pub fn stats(&self) -> TierStatistics {
-        let entry_count = self
-            .stats
-            .entry_count
-            .load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let memory_usage = self
-            .stats
-            .storage_size
-            .load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let hit_count = self
-            .stats
-            .hit_count
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let miss_count = self
-            .stats
-            .miss_count
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let total_requests = hit_count + miss_count;
-
-        // Calculate ops_per_second based on recent activity
-        let ops_per_second = if total_requests > 0 {
-            // Use a 60-second time window to estimate current throughput
-            let time_window_s = 60.0;
-            let recent_ops = std::cmp::min(total_requests, 100); // Cap at recent 100 ops
-            recent_ops as f64 / time_window_s
-        } else {
-            0.0
-        };
-
-        // Calculate error_rate based on actual tracked errors
-        let error_rate = if total_requests > 0 {
-            let total_errors = self.error_stats.get_total_error_count();
-            total_errors as f64 / total_requests as f64
-        } else {
-            0.0
-        };
-
-        TierStatistics::new(
-            hit_count,      // hits: u64 - REAL hit count from atomic
-            miss_count,     // misses: u64 - REAL miss count from atomic  
-            entry_count,    // entry_count: usize - REAL entry count
-            memory_usage,   // memory_usage: usize - REAL memory usage
-            0,              // peak_memory: u64 - not tracked in cold tier
-            self.stats.total_uncompressed_bytes(), // total_size_bytes: u64 - REAL tracked uncompressed total
-            self.stats.last_access_ns.load(std::sync::atomic::Ordering::Relaxed), // avg_access_time_ns: u64 - REAL data
-            ops_per_second, // ops_per_second: f64 - CALCULATED from real data
-            self.error_stats.get_total_error_count(), // error_count: u64 - REAL error count
-        )
+        // Use canonical snapshot method from AtomicTierStats
+        self.stats.snapshot()
     }
 }

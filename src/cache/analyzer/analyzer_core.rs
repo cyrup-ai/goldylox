@@ -7,12 +7,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
+use std::collections::VecDeque;
+use std::time::Duration;
+
 use super::access_record::AccessRecord;
-use super::pattern_detection::PatternDetector;
 use super::types::{AccessPattern, AccessPatternType, AnalyzerError, AnalyzerStatistics};
 use crate::cache::config::types::AnalyzerConfig;
 use crate::cache::traits::core::CacheKey;
 use crate::cache::traits::types_and_enums::CacheOperationError;
+
+// HIGHLANDER CANONICALIZATION: Use canonical PatternDetector directly
+use crate::cache::tier::hot::prefetch::pattern_detection::PatternDetector;
+use crate::cache::tier::hot::prefetch::types::{AccessSequence, PrefetchConfig, AccessPattern as PrefetchAccessPattern};
 
 /// Access pattern analyzer with lock-free concurrent tracking
 #[derive(Debug)]
@@ -37,11 +43,22 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         // Validate configuration
         Self::validate_config(&config)?;
 
+        // HIGHLANDER: Convert AnalyzerConfig to PrefetchConfig for canonical detector
+        let prefetch_config = PrefetchConfig {
+            enabled: true,
+            history_size: config.max_tracked_keys.min(1000),
+            max_prefetch_distance: 5, // Reasonable default
+            min_confidence_threshold: 0.7,
+            pattern_detection_window: Duration::from_nanos(config.time_bucket_duration_ns * 10),
+            max_patterns: config.max_tracked_keys.min(100),
+            prefetch_queue_size: 50, // Reasonable default
+        };
+
         Ok(Self {
             access_history: DashMap::with_capacity(config.max_tracked_keys),
             global_clock: AtomicU64::new(1),
             cleanup_counter: AtomicU64::new(0),
-            pattern_detector: PatternDetector::new(&config),
+            pattern_detector: PatternDetector::new(prefetch_config),
             config,
             pattern_window: DashMap::new(),
         })
@@ -140,9 +157,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
 
         let frequency = self.calculate_frequency(&record, now_ns);
         let recency = self.calculate_recency(&record, now_ns);
-        let pattern_type =
-            self.pattern_detector
-                .detect_pattern_type(key, now_ns, &self.pattern_window);
+        let pattern_type = self.detect_pattern_type_canonical(key, now_ns);
 
         AccessPattern {
             frequency,
@@ -150,6 +165,157 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
             temporal_locality: self.calculate_temporal_locality(&record, now_ns),
             pattern_type,
         }
+    }
+
+    /// HIGHLANDER: Direct pattern detection using canonical implementation
+    fn detect_pattern_type_canonical(&self, key: &K, now_ns: u64) -> AccessPatternType {
+        let key_hash = key.cache_hash();
+
+        // Get nearby key access history from DashMap for pattern analysis
+        let nearby_accesses = self.get_nearby_key_accesses(key_hash, now_ns);
+
+        if nearby_accesses.len() < 3 {
+            return AccessPatternType::Random; // Not enough data
+        }
+
+        // Convert DashMap format to canonical detector's expected format
+        let mut access_history = VecDeque::new();
+        for (timestamp, _pattern_type) in &nearby_accesses {
+            access_history.push_back(AccessSequence {
+                key: key.clone(),
+                timestamp: *timestamp,
+                context_hash: key_hash,
+            });
+        }
+
+        // Use canonical detector for sophisticated analysis
+        match self.pattern_detector.detect_patterns(&access_history) {
+            Ok(patterns) => {
+                // Find highest confidence pattern and map to AccessPatternType
+                if let Some(best_pattern) = patterns.iter().max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal)) {
+                    match best_pattern.pattern_type {
+                        PrefetchAccessPattern::Sequential => AccessPatternType::Sequential,
+                        PrefetchAccessPattern::Temporal => AccessPatternType::Temporal,
+                        PrefetchAccessPattern::Spatial => AccessPatternType::Spatial,
+                        PrefetchAccessPattern::Periodic => AccessPatternType::Temporal, // Map periodic to temporal
+                        PrefetchAccessPattern::Contextual => AccessPatternType::Spatial, // Map contextual to spatial
+                        PrefetchAccessPattern::Random => AccessPatternType::Random,
+                    }
+                } else {
+                    AccessPatternType::Random
+                }
+            },
+            Err(_) => {
+                // Fallback to simple analysis if canonical detector fails
+                self.fallback_pattern_analysis(&nearby_accesses, key_hash, now_ns)
+            }
+        }
+    }
+
+    /// Get nearby key access patterns for analysis (using pattern_window)
+    fn get_nearby_key_accesses(&self, key_hash: u64, now_ns: u64) -> Vec<(u64, AccessPatternType)> {
+        let window_key = key_hash >> 20; // Group by high-order bits
+
+        if let Some(entry) = self.pattern_window.get(&window_key) {
+            // Filter recent accesses within analysis window
+            let cutoff_time = now_ns.saturating_sub(self.config.time_bucket_duration_ns * 10);
+            entry
+                .value()
+                .iter()
+                .filter(|(timestamp, _)| *timestamp >= cutoff_time)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Fallback pattern analysis using simple algorithms
+    fn fallback_pattern_analysis(&self, accesses: &[(u64, AccessPatternType)], base_hash: u64, now_ns: u64) -> AccessPatternType {
+        if self.is_sequential_pattern_fallback(accesses) {
+            AccessPatternType::Sequential
+        } else if self.is_temporal_pattern_fallback(accesses, now_ns) {
+            AccessPatternType::Temporal
+        } else if self.is_spatial_pattern_fallback(accesses, base_hash) {
+            AccessPatternType::Spatial
+        } else {
+            AccessPatternType::Random
+        }
+    }
+
+    /// Fallback sequential pattern detection
+    fn is_sequential_pattern_fallback(&self, accesses: &[(u64, AccessPatternType)]) -> bool {
+        if accesses.len() < 3 {
+            return false;
+        }
+
+        // Look for monotonically increasing hash values
+        let mut increasing_count = 0;
+        for window in accesses.windows(2) {
+            if window[1].0 > window[0].0 {
+                increasing_count += 1;
+            }
+        }
+
+        // Consider sequential if >70% of accesses are in increasing order
+        let sequential_ratio = increasing_count as f64 / (accesses.len() - 1) as f64;
+        sequential_ratio > 0.7
+    }
+
+    /// Fallback temporal pattern detection
+    fn is_temporal_pattern_fallback(&self, accesses: &[(u64, AccessPatternType)], _now_ns: u64) -> bool {
+        if accesses.len() < 4 {
+            return false;
+        }
+
+        // Calculate intervals between accesses
+        let mut intervals = Vec::new();
+        for window in accesses.windows(2) {
+            let interval = window[1].0.saturating_sub(window[0].0);
+            if interval > 0 {
+                intervals.push(interval);
+            }
+        }
+
+        if intervals.len() < 3 {
+            return false;
+        }
+
+        // Calculate coefficient of variation for intervals
+        let mean_interval: f64 =
+            intervals.iter().map(|&x| x as f64).sum::<f64>() / intervals.len() as f64;
+        if mean_interval == 0.0 {
+            return false;
+        }
+
+        let variance: f64 = intervals
+            .iter()
+            .map(|&x| (x as f64 - mean_interval).powi(2))
+            .sum::<f64>()
+            / intervals.len() as f64;
+        let std_dev = variance.sqrt();
+        let cv = std_dev / mean_interval;
+
+        // Regular temporal pattern has low coefficient of variation
+        cv < 0.3
+    }
+
+    /// Fallback spatial pattern detection
+    fn is_spatial_pattern_fallback(&self, accesses: &[(u64, AccessPatternType)], base_hash: u64) -> bool {
+        if accesses.len() < 3 {
+            return false;
+        }
+
+        // Calculate how many accesses are within spatial locality range
+        let locality_threshold = 0x1000000; // Hash distance threshold
+        let nearby_count = accesses
+            .iter()
+            .filter(|(hash, _)| hash.abs_diff(base_hash) < locality_threshold)
+            .count();
+
+        // Consider spatial if >60% of accesses are nearby
+        let spatial_ratio = nearby_count as f64 / accesses.len() as f64;
+        spatial_ratio > 0.6
     }
 
     /// Calculate access frequency with exponential decay
@@ -276,5 +442,128 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
                 / self.config.cleanup_interval,
             memory_usage_bytes: self.estimate_memory_usage(),
         }
+    }
+
+    // HIGHLANDER: Methods moved from utilities.rs with canonical pattern detection
+
+    /// Update pattern analysis window with new access (CANONICAL IMPLEMENTATION)
+    fn update_pattern_window(
+        &self,
+        key: &K,
+        now_ns: u64,
+    ) -> Result<(), CacheOperationError> {
+        let key_hash = self.hash_key(key);
+        let window_key = key_hash >> 20; // Group by high-order bits
+
+        // HIGHLANDER: Use canonical pattern detection
+        let pattern_type = self.detect_pattern_type_canonical(key, now_ns);
+
+        // Add to pattern window
+        match self.pattern_window.entry(window_key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                let accesses = entry.get_mut();
+                accesses.push((key_hash, pattern_type));
+
+                // Keep window bounded
+                if accesses.len() > self.config.pattern_analysis_window {
+                    accesses.remove(0);
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(vec![(key_hash, pattern_type)]);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Hash cache key for pattern analysis
+    #[inline(always)]
+    fn hash_key(&self, key: &K) -> u64 {
+        // Use generic CacheKey hash method
+        key.cache_hash()
+    }
+
+    /// Calculate time bucket index for sliding window
+    #[inline(always)]
+    fn time_bucket_index(&self, timestamp_ns: u64) -> usize {
+        ((timestamp_ns / self.config.time_bucket_duration_ns)
+            % self.config.time_bucket_count as u64) as usize
+    }
+
+    /// Get current timestamp in nanoseconds
+    #[inline(always)]
+    fn current_timestamp_ns(&self) -> Result<u64, CacheOperationError> {
+        use std::sync::OnceLock;
+        static START_TIME: OnceLock<std::time::Instant> = OnceLock::new();
+
+        let start = START_TIME.get_or_init(|| std::time::Instant::now());
+        let elapsed = std::time::Instant::now().duration_since(*start);
+        Ok(elapsed.as_nanos() as u64)
+    }
+
+    /// Maybe perform periodic cleanup
+    fn maybe_cleanup(&self) -> Result<(), CacheOperationError> {
+        let cleanup_counter = self.cleanup_counter.fetch_add(1, Ordering::Relaxed);
+
+        // Cleanup every N operations
+        if cleanup_counter % self.config.cleanup_interval == 0 {
+            self.perform_cleanup()?;
+        }
+
+        Ok(())
+    }
+
+    /// Perform cleanup of expired entries
+    fn perform_cleanup(&self) -> Result<(), CacheOperationError> {
+        let now_ns = self.current_timestamp_ns()?;
+        let cutoff_time = now_ns.saturating_sub(self.config.cleanup_age_threshold_ns);
+
+        // Remove entries older than threshold
+        self.access_history
+            .retain(|_key, record| record.last_access_ns() > cutoff_time);
+
+        // Clean pattern window
+        self.pattern_window.retain(|_window_key, accesses| {
+            accesses.retain(|(timestamp, _)| *timestamp > cutoff_time);
+            !accesses.is_empty()
+        });
+
+        Ok(())
+    }
+
+    /// Evict oldest entry when at capacity (LRU eviction)
+    fn evict_oldest_entry(&self) -> Result<(), CacheOperationError> {
+        let mut oldest_key: Option<K> = None;
+        let mut oldest_time = u64::MAX;
+
+        // Find oldest entry (this is O(n) but only done at capacity)
+        for entry in self.access_history.iter() {
+            let last_access = entry.value().last_access_ns();
+            if last_access < oldest_time {
+                oldest_time = last_access;
+                oldest_key = Some(entry.key().clone());
+            }
+        }
+
+        // Remove oldest entry
+        if let Some(key) = oldest_key {
+            self.access_history.remove(&key);
+        }
+
+        Ok(())
+    }
+
+    /// Estimate current memory usage
+    fn estimate_memory_usage(&self) -> u64 {
+        let base_size = std::mem::size_of::<Self>() as u64;
+        let map_overhead = self.access_history.len() as u64 * 64; // Estimate per-entry overhead
+        let record_size = self
+            .access_history
+            .iter()
+            .map(|entry| entry.value().memory_usage() as u64)
+            .sum::<u64>();
+
+        base_size + map_overhead + record_size
     }
 }

@@ -264,6 +264,139 @@ impl ThroughputMetrics {
             efficiency_ratio: AtomicCell::new(1.0),
         }
     }
+
+    /// Update operations per second (from batch ops version)
+    #[inline]
+    pub fn update_ops_per_second(&self, ops_per_second: f64) {
+        self.ops_per_second.store(ops_per_second);
+        
+        // Update peak if this is higher
+        let current_peak = self.peak_ops_per_second.load();
+        if ops_per_second > current_peak {
+            self.peak_ops_per_second.store(ops_per_second);
+        }
+    }
+
+    /// Update sustained operations per second with exponential moving average
+    #[inline]
+    pub fn update_sustained_ops_per_second(&self, ops_per_second: f64) {
+        let current_sustained = self.sustained_ops_per_second.load();
+        let alpha = 0.1; // Smoothing factor
+        let new_sustained = if current_sustained == 0.0 {
+            ops_per_second
+        } else {
+            alpha * ops_per_second + (1.0 - alpha) * current_sustained
+        };
+        self.sustained_ops_per_second.store(new_sustained);
+    }
+
+    /// Update efficiency ratio
+    #[inline]
+    pub fn update_efficiency_ratio(&self, success_rate: f64, avg_latency_ms: f64) {
+        let efficiency = success_rate * (1.0 / (avg_latency_ms + 1.0));
+        self.efficiency_ratio.store(efficiency);
+    }
+
+    /// Calculate throughput from batch metrics (enhanced from SIMD version)
+    pub fn calculate_from_batch_metrics(
+        total_operations: usize,
+        successful_operations: usize,
+        duration_ns: u64,
+        avg_latency_ns: u64,
+    ) -> Self {
+        let ops_per_second = if duration_ns > 0 {
+            (total_operations as f64) / (duration_ns as f64 / 1_000_000_000.0)
+        } else {
+            0.0
+        };
+
+        let successful_ops_per_second = if duration_ns > 0 {
+            (successful_operations as f64) / (duration_ns as f64 / 1_000_000_000.0)
+        } else {
+            0.0
+        };
+
+        let success_rate = if total_operations > 0 {
+            successful_operations as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+
+        let _avg_latency_ms = avg_latency_ns as f64 / 1_000_000.0;
+        let efficiency_score = success_rate * (1.0 / (avg_latency_ns as f64 + 1.0));
+
+        Self {
+            ops_per_second: AtomicCell::new(ops_per_second),
+            bytes_per_second: AtomicCell::new(0.0), // Not available from batch metrics
+            peak_ops_per_second: AtomicCell::new(ops_per_second),
+            sustained_ops_per_second: AtomicCell::new(successful_ops_per_second),
+            efficiency_ratio: AtomicCell::new(efficiency_score),
+        }
+    }
+
+    /// Get current operations per second
+    #[inline]
+    pub fn operations_per_second(&self) -> f64 {
+        self.ops_per_second.load()
+    }
+
+    /// Get successful operations per second (alias for sustained)
+    #[inline]
+    pub fn successful_operations_per_second(&self) -> f64 {
+        self.sustained_ops_per_second.load()
+    }
+
+    /// Get average latency in milliseconds (estimated from efficiency)
+    #[inline]
+    pub fn average_latency_ms(&self) -> f64 {
+        let efficiency = self.efficiency_ratio.load();
+        if efficiency > 0.0 {
+            1.0 / efficiency - 1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Get estimated 95th percentile latency
+    #[inline]
+    pub fn p95_latency_estimate_ms(&self) -> f64 {
+        self.average_latency_ms() * 1.5 // Conservative estimate
+    }
+
+    /// Get efficiency score
+    #[inline]
+    pub fn efficiency_score(&self) -> f64 {
+        self.efficiency_ratio.load()
+    }
+
+    /// Update write-specific metrics (from policy version)
+    #[inline]
+    pub fn update_write_metrics(&self, writes_per_second: u32, bytes_per_second: u64, avg_write_latency: u64) {
+        self.ops_per_second.store(writes_per_second as f64);
+        self.bytes_per_second.store(bytes_per_second as f64);
+        // Convert write latency to efficiency approximation
+        let latency_ms = avg_write_latency as f64 / 1_000_000.0;
+        let efficiency = 1.0 / (latency_ms + 1.0);
+        self.efficiency_ratio.store(efficiency);
+    }
+
+    /// Get writes per second (alias for ops_per_second)
+    #[inline]
+    pub fn writes_per_second(&self) -> u32 {
+        self.ops_per_second.load() as u32
+    }
+
+    /// Get avg write latency (estimated from efficiency)
+    #[inline]
+    pub fn avg_write_latency(&self) -> u64 {
+        (self.average_latency_ms() * 1_000_000.0) as u64
+    }
+
+    /// Get write queue depth (not tracked, return 0)
+    #[inline]
+    pub fn write_queue_depth(&self) -> u32 {
+        0 // Not tracked in canonical version
+    }
 }
 
 impl ResourceMetrics {

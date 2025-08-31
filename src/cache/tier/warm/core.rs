@@ -19,19 +19,20 @@ use super::data_structures::MaintenanceTask;
 use super::config::WarmTierConfig;
 use super::error::WarmTierInitError;
 use super::eviction::ConcurrentEvictionPolicy;
+
 use super::memory_monitor_enum::MemoryMonitorImpl;
 use super::memory_monitor_trait::MemoryMonitor;
 use crate::cache::traits::supporting_types::ValueMetadata;
 use crate::cache::traits::types_and_enums::{CompressionHint, TierLocation, VolatilityLevel};
 use crate::cache::traits::AccessType;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::types::results::CacheOperationError;
+use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 /// Lock-free warm tier cache with concurrent access optimization
 #[derive(Debug)]
-pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue> {
+pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue + Default> {
     /// Primary storage using lock-free skiplist for O(log n) concurrent access
     pub(super) storage: SkipMap<WarmCacheKey<K>, WarmCacheEntry<V>>,
     /// Access tracking for advanced eviction policies
@@ -52,9 +53,8 @@ pub struct LockFreeWarmTier<K: CacheKey, V: CacheValue> {
 }
 
 /// Warm cache key with efficient ordering for skiplist
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound = "K: serde::de::DeserializeOwned"))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(bound = "K: serde::de::DeserializeOwned")]
 pub struct WarmCacheKey<K: CacheKey> {
     /// Primary hash for fast comparison
     pub primary_hash: u64,
@@ -106,16 +106,16 @@ impl<K: CacheKey> CacheKey for WarmCacheKey<K> {
 }
 
 /// Warm cache entry with concurrent-safe metadata
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound = "V: serde::de::DeserializeOwned"))]
-pub struct WarmCacheEntry<V: CacheValue> {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[serde(bound = "V: serde::de::DeserializeOwned")]
+pub struct WarmCacheEntry<V: CacheValue + Default> {
     /// Cached value (direct storage - SkipMap handles concurrent access)
     pub value: V,
     /// Entry metadata with atomic fields
     pub metadata: WarmEntryMetadata,
     /// Creation timestamp
-    #[cfg_attr(feature = "serde", serde(skip))]
+    #[serde(skip)]
     pub created_at: Instant,
     /// Entry generation for consistency
     pub generation: u64,
@@ -176,6 +176,129 @@ impl Clone for WarmEntryMetadata {
     }
 }
 
+impl Default for WarmEntryMetadata {
+    fn default() -> Self {
+        Self {
+            last_access_ns: CachePadded::new(AtomicU64::new(0)),
+            access_count: CachePadded::new(AtomicU64::new(0)),
+            size_bytes: CachePadded::new(AtomicU32::new(0)),
+            frequency_estimate: CachePadded::new(AtomicCell::new(0.0)),
+            priority_level: CachePadded::new(AtomicU16::new(0)),
+            flags: CachePadded::new(AtomicU16::new(0)),
+        }
+    }
+}
+
+impl serde::Serialize for WarmEntryMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("WarmEntryMetadata", 6)?;
+        state.serialize_field("last_access_ns", &self.last_access_ns.load(std::sync::atomic::Ordering::Relaxed))?;
+        state.serialize_field("access_count", &self.access_count.load(std::sync::atomic::Ordering::Relaxed))?;
+        state.serialize_field("size_bytes", &self.size_bytes.load(std::sync::atomic::Ordering::Relaxed))?;
+        state.serialize_field("frequency_estimate", &self.frequency_estimate.load())?;
+        state.serialize_field("priority_level", &self.priority_level.load(std::sync::atomic::Ordering::Relaxed))?;
+        state.serialize_field("flags", &self.flags.load(std::sync::atomic::Ordering::Relaxed))?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WarmEntryMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field { LastAccessNs, AccessCount, SizeBytes, FrequencyEstimate, PriorityLevel, Flags }
+
+        struct WarmEntryMetadataVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for WarmEntryMetadataVisitor {
+            type Value = WarmEntryMetadata;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct WarmEntryMetadata")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<WarmEntryMetadata, V::Error>
+            where
+                V: serde::de::MapAccess<'de>,
+            {
+                let mut last_access_ns = None;
+                let mut access_count = None;
+                let mut size_bytes = None;
+                let mut frequency_estimate = None;
+                let mut priority_level = None;
+                let mut flags = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::LastAccessNs => {
+                            if last_access_ns.is_some() {
+                                return Err(serde::de::Error::duplicate_field("last_access_ns"));
+                            }
+                            last_access_ns = Some(map.next_value()?);
+                        }
+                        Field::AccessCount => {
+                            if access_count.is_some() {
+                                return Err(serde::de::Error::duplicate_field("access_count"));
+                            }
+                            access_count = Some(map.next_value()?);
+                        }
+                        Field::SizeBytes => {
+                            if size_bytes.is_some() {
+                                return Err(serde::de::Error::duplicate_field("size_bytes"));
+                            }
+                            size_bytes = Some(map.next_value()?);
+                        }
+                        Field::FrequencyEstimate => {
+                            if frequency_estimate.is_some() {
+                                return Err(serde::de::Error::duplicate_field("frequency_estimate"));
+                            }
+                            frequency_estimate = Some(map.next_value()?);
+                        }
+                        Field::PriorityLevel => {
+                            if priority_level.is_some() {
+                                return Err(serde::de::Error::duplicate_field("priority_level"));
+                            }
+                            priority_level = Some(map.next_value()?);
+                        }
+                        Field::Flags => {
+                            if flags.is_some() {
+                                return Err(serde::de::Error::duplicate_field("flags"));
+                            }
+                            flags = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let last_access_ns = last_access_ns.ok_or_else(|| serde::de::Error::missing_field("last_access_ns"))?;
+                let access_count = access_count.ok_or_else(|| serde::de::Error::missing_field("access_count"))?;
+                let size_bytes = size_bytes.ok_or_else(|| serde::de::Error::missing_field("size_bytes"))?;
+                let frequency_estimate = frequency_estimate.ok_or_else(|| serde::de::Error::missing_field("frequency_estimate"))?;
+                let priority_level = priority_level.ok_or_else(|| serde::de::Error::missing_field("priority_level"))?;
+                let flags = flags.ok_or_else(|| serde::de::Error::missing_field("flags"))?;
+
+                Ok(WarmEntryMetadata {
+                    last_access_ns: CachePadded::new(AtomicU64::new(last_access_ns)),
+                    access_count: CachePadded::new(AtomicU64::new(access_count)),
+                    size_bytes: CachePadded::new(AtomicU32::new(size_bytes)),
+                    frequency_estimate: CachePadded::new(AtomicCell::new(frequency_estimate)),
+                    priority_level: CachePadded::new(AtomicU16::new(priority_level)),
+                    flags: CachePadded::new(AtomicU16::new(flags)),
+                })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["last_access_ns", "access_count", "size_bytes", "frequency_estimate", "priority_level", "flags"];
+        deserializer.deserialize_struct("WarmEntryMetadata", FIELDS, WarmEntryMetadataVisitor)
+    }
+}
+
 /// ValueMetadata trait implementation for WarmEntryMetadata using zero-allocation atomic operations
 impl ValueMetadata for WarmEntryMetadata {
     #[inline(always)]
@@ -232,7 +355,7 @@ impl ValueMetadata for WarmEntryMetadata {
 }
 
 /// Canonical CacheValue trait implementation for WarmCacheEntry<V> with zero-allocation operations
-impl<V: CacheValue> CacheValue for WarmCacheEntry<V> {
+impl<V: CacheValue + Default> CacheValue for WarmCacheEntry<V> {
     type Metadata = WarmEntryMetadata;
 
     #[inline(always)]
@@ -274,8 +397,19 @@ impl<V: CacheValue> CacheValue for WarmCacheEntry<V> {
     }
 }
 
+impl<V: CacheValue + Default> Default for WarmCacheEntry<V> {
+    fn default() -> Self {
+        Self {
+            value: V::default(),
+            metadata: WarmEntryMetadata::default(),
+            created_at: std::time::Instant::now(),
+            generation: 0,
+        }
+    }
+}
+
 /// CacheEntry integration for warm tier structures
-impl<V: CacheValue> WarmCacheEntry<V> {
+impl<V: CacheValue + Default> WarmCacheEntry<V> {
     /// Convert to canonical CacheEntry wrapper
     pub fn to_canonical_entry<K: CacheKey>(
         &self,
@@ -312,7 +446,7 @@ impl<K: CacheKey> WarmCacheKey<K> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
+impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
     /// Create new warm tier with fallible initialization
     pub fn new(config: WarmTierConfig) -> Result<Self, WarmTierInitError> {
         let (maintenance_tx, maintenance_rx) = crossbeam_channel::unbounded();
@@ -442,15 +576,17 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
             self.trigger_background_eviction();
         }
 
+        // Get entry size before moving value
+        let entry_size = value.estimated_size() as i64;
+        
         // Create new entry
+        let metadata = WarmEntryMetadata::new(&value);
         let entry = WarmCacheEntry {
             value,
-            metadata: WarmEntryMetadata::new(&value),
+            metadata,
             created_at: Instant::now(),
             generation,
         };
-
-        let entry_size = value.estimated_size() as i64;
 
         // Check if there was a previous entry before insertion
         let had_previous = self.storage.contains_key(&warm_key);
@@ -562,7 +698,7 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
 // - Use WarmCacheKey::from_cache_key() instead of from_generic_key()
 // - Use .original_key field access instead of to_generic_key()
 
-impl<V: CacheValue> WarmCacheEntry<V> {
+impl<V: CacheValue + Default> WarmCacheEntry<V> {
     /// Create new warm cache entry
     pub fn new(value: V, generation: u64) -> Self {
         Self {
@@ -596,7 +732,7 @@ impl<V: CacheValue> WarmCacheEntry<V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
+impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
     /// Get number of entries in cache
     pub fn size(&self) -> usize {
         self.storage.len()
@@ -774,8 +910,8 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
                     analysis_depth: _,
                     prediction_horizon_sec: _,
                 } => {
-                    // Pattern analysis would go here
-                    // Access tracking is already running continuously
+                    // Trigger actual pattern analysis on access tracker
+                    self.access_tracker.process_analysis_tasks();
                 }
                 MaintenanceTask::SyncTiers {
                     sync_direction: _,
@@ -856,15 +992,37 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
 
         alerts
     }
+
+    /// Get ML policy metrics for model adaptation and analysis
+    pub fn get_ml_policies(&self) -> Vec<super::eviction::types::PolicyPerformanceMetrics> {
+        // Return ML policy performance metrics instead of the policy itself
+        // This follows the messaging pattern where workers own data and clients get information
+        vec![self.eviction_policy.performance_metrics()]
+    }
+
+    /// Update ML models using the sophisticated existing ML system
+    pub fn update_ml_models(&self) -> Result<usize, CacheOperationError> {
+        // Call the adapt() method on the ML eviction policy
+        // This uses the existing sophisticated ML system with:
+        // - 16-feature FeatureVector system
+        // - Linear regression with gradient optimization  
+        // - Temporal pattern analysis
+        // - Learning rate adaptation based on performance
+        // - Feature importance analysis
+        self.eviction_policy.ml_policy().adapt();
+        
+        // Return the number of ML policies updated
+        Ok(1)
+    }
 }
 
 /// Zero-copy value reference wrapper for SkipMap entries
 /// This maintains the entry's lifetime while providing deref access to the value
-struct ValueRef<'a, K: CacheKey, V: CacheValue> {
+struct ValueRef<'a, K: CacheKey, V: CacheValue + Default> {
     _entry: crossbeam_skiplist::map::Entry<'a, WarmCacheKey<K>, WarmCacheEntry<V>>,
 }
 
-impl<'a, K: CacheKey, V: CacheValue> std::ops::Deref for ValueRef<'a, K, V> {
+impl<'a, K: CacheKey, V: CacheValue + Default> std::ops::Deref for ValueRef<'a, K, V> {
     type Target = V;
     fn deref(&self) -> &Self::Target {
         &self._entry.value().value

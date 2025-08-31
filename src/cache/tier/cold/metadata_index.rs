@@ -14,7 +14,7 @@ use super::data_structures::{BloomFilter, ColdCacheKey, IndexEntry, MetadataInde
 use crate::cache::traits::CacheKey;
 
 impl<K: CacheKey> ColdCacheKey<K> {
-    /// Create cold cache key from original cache key
+    /// Create cold cache key from original cache key (with hash-based serialization for non-bincode keys)
     pub fn from_cache_key(key: &K) -> Self {
         let mut hasher = AHasher::default();
         key.hash(&mut hasher);
@@ -32,7 +32,35 @@ impl<K: CacheKey> ColdCacheKey<K> {
             _phantom: std::marker::PhantomData,
         }
     }
+}
 
+impl<K: CacheKey + bincode::Encode + bincode::Decode<()>> ColdCacheKey<K> {
+    /// Create cold cache key from original cache key (with full serialization for bincode keys)
+    pub fn from_cache_key_serialized(key: &K) -> Result<Self, String> {
+        let mut hasher = AHasher::default();
+        key.hash(&mut hasher);
+        let key_hash = hasher.finish();
+
+        // Serialize the actual key using bincode for full round-trip capability
+        let serialized_key = bincode::encode_to_vec(key, bincode::config::standard())
+            .map_err(|e| format!("Bincode serialization failed: {}", e))?;
+
+        Ok(Self {
+            key_hash,
+            serialized_key,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// Convert cold cache key back to original cache key (requires bincode serialization)
+    pub fn to_cache_key(&self) -> Result<K, String> {
+        let (key, _len): (K, usize) = bincode::decode_from_slice(&self.serialized_key, bincode::config::standard())
+            .map_err(|e| format!("Bincode deserialization failed: {}", e))?;
+        Ok(key)
+    }
+}
+
+impl<K: CacheKey> ColdCacheKey<K> {
     /// Get the hash value for fast comparison
     pub fn hash_value(&self) -> u64 {
         self.key_hash

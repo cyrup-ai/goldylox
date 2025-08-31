@@ -7,17 +7,18 @@ use crate::cache::tier::hot::memory_pool::SlotMetadata;
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
-use crate::cache::traits::EvictionReason;
+use crate::cache::traits::types_and_enums::SelectionReason;
+use crate::cache::traits::{CacheKey, CacheValue};
 
-impl EvictionEngine {
+impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find ML-based eviction candidate using learned patterns
     pub fn find_ml_candidate(
         &mut self,
         metadata: &[SlotMetadata; 256],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
-    ) -> Option<EvictionCandidate> {
-        let mut best_candidate: Option<EvictionCandidate> = None;
+    ) -> Option<EvictionCandidate<K, V>> {
+        let mut best_candidate: Option<EvictionCandidate<K, V>> = None;
         let mut lowest_utility = f64::INFINITY;
 
         for (slot_idx, meta) in metadata.iter().enumerate() {
@@ -27,11 +28,12 @@ impl EvictionEngine {
 
                 if utility_score < lowest_utility {
                     lowest_utility = utility_score;
-                    best_candidate = Some(EvictionCandidate {
-                        slot_index: slot_idx,
-                        score: utility_score,
-                        reason: EvictionReason::LowUtility,
-                    });
+                    best_candidate = Some(EvictionCandidate::from_slot_index(
+                        slot_idx,
+                        K::default(), // Placeholder key - actual key will be provided by caller
+                        utility_score,
+                        SelectionReason::LowPriority,
+                    ));
                 }
             }
         }
@@ -73,7 +75,7 @@ impl EvictionEngine {
             .iter()
             .rev()
             .take(100)
-            .filter(|event| event.slot_index == slot_idx)
+            .filter(|event| event.slot_index == Some(slot_idx))
             .count();
 
         recent_accesses as f64 / 100.0

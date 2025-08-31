@@ -9,10 +9,12 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Static CPU frequency cache for RDTSC conversion
+#[allow(dead_code)]
 static CPU_FREQ_GHZ: OnceLock<f64> = OnceLock::new();
 
 /// Calibrate CPU frequency by measuring RDTSC cycles over known time
 #[inline(never)]
+#[allow(dead_code)]
 fn calibrate_cpu_frequency() -> f64 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -48,6 +50,7 @@ fn calibrate_cpu_frequency() -> f64 {
 
 /// Get CPU frequency in GHz (cached after first call)
 #[inline(always)]
+#[allow(dead_code)]
 fn get_cpu_freq_ghz() -> f64 {
     *CPU_FREQ_GHZ.get_or_init(calibrate_cpu_frequency)
 }

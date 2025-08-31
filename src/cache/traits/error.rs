@@ -51,7 +51,6 @@ pub trait CacheError: std::error::Error + Send + Sync + Debug + 'static {
         }
 
         match self.recovery_hint() {
-            RecoveryHint::RetryImmediate => 0,
             RecoveryHint::RetryBackoff => match self.category() {
                 ErrorCategory::Resource => 1000, // 1 second for resource exhaustion
                 ErrorCategory::Io => 500,        // 500ms for I/O issues

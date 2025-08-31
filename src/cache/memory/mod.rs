@@ -14,7 +14,6 @@ pub mod allocation_manager;
 pub mod allocation_stats;
 pub mod efficiency_analyzer;
 pub mod gc_coordinator;
-pub mod memory_pools;
 pub mod pool_manager;
 pub mod pressure_monitor;
 pub mod types;
@@ -24,7 +23,8 @@ pub use allocation_manager::*;
 pub use allocation_stats::AllocationStatistics;
 pub use efficiency_analyzer::MemoryEfficiencyAnalyzer;
 pub use gc_coordinator::GCCoordinator;
-pub use memory_pools::{MemoryPool, MemoryPoolManager};
+pub use pool_manager::manager::MemoryPoolManager;
+pub use pool_manager::individual_pool::MemoryPool;
 pub use pool_manager::*;
 pub use pressure_monitor::{
     MemoryPressureMonitor, MemoryAlert, PressureThresholds, MemoryAlertSystem,
@@ -228,9 +228,9 @@ pub enum MemoryMonitoringTask {
 }
 
 impl TaskProcessor for MemoryMonitoringProcessor {
-    fn process_task(&self, task: &BackgroundTask) -> Result<(), CacheOperationError> {
+    fn process_task(&self, _task: &BackgroundTask) -> Result<(), CacheOperationError> {
         // Send task via channel instead of direct access
         self.task_sender.send(MemoryMonitoringTask::MonitorPressure)
-            .map_err(|_| CacheOperationError::Internal("Failed to send monitoring task".into()))
+            .map_err(|_| CacheOperationError::internal_error("Failed to send monitoring task"))
     }
 }

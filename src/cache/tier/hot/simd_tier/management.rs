@@ -5,7 +5,7 @@
 
 use crate::cache::tier::hot::memory_pool::MemoryPool;
 use crate::cache::tier::hot::synchronization::WriteGuard;
-use crate::cache::tier::hot::types::HotTierConfig;
+use crate::cache::config::types::HotTierConfig;
 use super::core::SimdHotTier;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::statistics::tier_stats::TierStatistics;

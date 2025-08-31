@@ -3,7 +3,7 @@
 //! This module provides implementation for cache performance analysis including
 //! efficiency scoring, tier distribution analysis, and health monitoring.
 
-use super::types::CachePerformanceMetrics;
+use crate::telemetry::unified_stats::CachePerformanceMetrics;
 use crate::cache::types::statistics::tier_stats::TierStatistics;
 
 impl CachePerformanceMetrics {

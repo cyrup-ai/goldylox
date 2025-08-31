@@ -8,6 +8,7 @@ use crate::cache::traits::TierStats;
 /// Comprehensive tier statistics snapshot (zero allocation)
 /// Combines best features from all tier statistics implementations
 #[derive(Debug, Clone, Copy)]
+#[derive(bincode::Encode, bincode::Decode)]
 pub struct TierStatistics {
     /// Explicit hit count
     pub hits: u64,

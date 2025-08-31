@@ -9,11 +9,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 
-use super::types::{CacheMaintenanceWorker, MaintenanceTask, StatUpdate};
+use super::types::{CacheMaintenanceWorker, MaintenanceTask, StatUpdate, WorkerMaintenanceOps};
 use crate::cache::traits::types_and_enums::CacheOperationError;
-use crate::cache::traits::{CacheKey, CacheValue};
 
-impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
+impl CacheMaintenanceWorker {
     // Create new maintenance worker - already defined in types.rs
 
     /// Start the maintenance worker
@@ -48,7 +47,7 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
             self.shutdown.store(true, Ordering::Relaxed);
 
             // Send shutdown signal through channel
-            let _ = self.task_sender.send(MaintenanceTask::<K, V>::UpdateStatistics);
+            let _ = self.task_sender.send(WorkerMaintenanceOps::update_statistics_task());
 
             // Wait for worker to finish
             if let Err(_) = handle.join() {
@@ -65,16 +64,16 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
 
     /// Schedule automatic maintenance
     pub fn schedule_maintenance(&self) -> Result<(), CacheOperationError> {
-        self.submit_task(MaintenanceTask::<K, V>::CleanupExpired)?;
-        self.submit_task(MaintenanceTask::<K, V>::OptimizeLayout)?;
-        self.submit_task(MaintenanceTask::<K, V>::UpdateStatistics)?;
+        self.submit_task(WorkerMaintenanceOps::cleanup_expired_task())?;
+        self.submit_task(WorkerMaintenanceOps::optimize_layout_task())?;
+        self.submit_task(WorkerMaintenanceOps::update_statistics_task())?;
         Ok(())
     }
 
     /// Spawn worker thread
     pub fn spawn_worker(
         shutdown_ptr: *const AtomicBool,
-        task_receiver: Receiver<MaintenanceTask<K, V>>,
+        task_receiver: Receiver<MaintenanceTask>,
         stat_sender: Sender<StatUpdate>,
     ) -> JoinHandle<()> {
         thread::spawn(move || {
@@ -103,7 +102,7 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
                     }
                     Err(_) => {
                         // Timeout - perform periodic maintenance
-                        super::task_processor::perform_periodic_maintenance::<K, V>(&stat_sender);
+                        super::task_processor::perform_periodic_maintenance(&stat_sender);
                         
                         // Update uptime periodically
                         let _ = stat_sender.send(StatUpdate::UpdateUptime(
@@ -121,13 +120,13 @@ impl<K: CacheKey, V: CacheValue> CacheMaintenanceWorker<K, V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> Drop for CacheMaintenanceWorker<K, V> {
+impl Drop for CacheMaintenanceWorker {
     fn drop(&mut self) {
         let _ = self.stop();
     }
 }
 
-impl<K: CacheKey, V: CacheValue> Default for CacheMaintenanceWorker<K, V> {
+impl Default for CacheMaintenanceWorker {
     fn default() -> Self {
         Self::new()
     }

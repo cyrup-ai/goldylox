@@ -6,46 +6,13 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use super::core_types::timestamp_nanos;
+
 
 // PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
-/// Memory-aligned cache line (64 bytes)
-#[derive(Debug)]
-#[repr(align(64))]
-pub struct CacheLine<T> {
-    data: T,
-    _padding: [u8; 64],
-}
-
-impl<T> CacheLine<T> {
-    /// Create new cache-aligned data
-    #[inline(always)]
-    pub fn new(data: T) -> Self {
-        Self {
-            data,
-            _padding: [0; 64], // Fixed size padding, alignment handled by repr(align(64))
-        }
-    }
-
-    /// Get reference to data
-    #[inline(always)]
-    pub fn get(&self) -> &T {
-        &self.data
-    }
-
-    /// Get mutable reference to data
-    #[inline(always)]
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.data
-    }
-
-    /// Convert into inner data
-    #[inline(always)]
-    pub fn into_inner(self) -> T {
-        self.data
-    }
-}
+// CacheLine moved to canonical location: crate::cache::types::simd::memory::CacheLine
+// Re-export canonical implementation for backward compatibility
+pub use crate::cache::types::simd::memory::CacheLine;
 
 // SimdHasher moved to canonical location: crate::cache::types::simd::hasher::SimdHasher
 

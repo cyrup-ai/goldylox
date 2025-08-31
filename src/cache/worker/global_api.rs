@@ -1,76 +1,79 @@
 //! Worker API functions for cache maintenance operations
 //!
-//! This module provides generic worker API functions that eliminate the global singleton pattern.
-//! All functions now require explicit type parameters and work with CacheMaintenanceWorker instances.
+//! This module provides worker API functions for maintenance operations.
+//! Functions work directly with tier transition APIs for promotion/demotion.
 
-use super::types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStats};
+use super::types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStatsSnapshot};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-// REMOVED: Broken global singleton pattern
-// - static mut MAINTENANCE_WORKER: Option<CacheMaintenanceWorker> = None;
-// - init_maintenance_worker() function
-// - submit_maintenance_task() function
-// - maintenance_stats() function
-// - schedule_maintenance() function
-//
-// These functions attempted to use a global singleton without generic type parameters,
-// which is fundamentally incompatible with the generic architecture.
-//
-// Users must now create and manage CacheMaintenanceWorker<K, V> instances directly:
-// - let worker = CacheMaintenanceWorker::<MyKey, MyValue>::new();
-// - worker.submit_task(MaintenanceTask::Promote { key, value });
-// - worker.stats();
-// - worker.schedule_maintenance();
-
-/// Create a new maintenance worker for specific key-value types
+/// Create a new maintenance worker
 #[inline]
-pub fn create_worker<K: CacheKey, V: CacheValue>() -> CacheMaintenanceWorker<K, V> {
+pub fn create_worker() -> CacheMaintenanceWorker {
     CacheMaintenanceWorker::new()
 }
 
-/// Promote entry to warm tier asynchronously
-pub fn async_promote<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
+/// Promote entry to hot tier directly using tier API
+pub fn async_promote<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    worker.submit_task(MaintenanceTask::Promote { key, value })
+    // Use hot tier API to put the value directly
+    crate::cache::tier::hot::thread_local::simd_hot_put(key, value)
 }
 
-/// Demote entry to cold tier asynchronously  
-pub fn async_demote<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
-    key: K,
+/// Demote entry to cold tier directly using tier API  
+pub fn async_demote<K: CacheKey + bincode::Encode, V: CacheValue + bincode::Decode<()> + bincode::Encode + serde::de::DeserializeOwned>(
+    key: &K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    worker.submit_task(MaintenanceTask::Demote { key, value })
+    // Use cold tier storage API directly
+    use crate::cache::tier::cold::storage::ColdTierCache;
+    use crate::cache::traits::CompressionAlgorithm;
+    use std::path::Path;
+    
+    // Create a temporary cold tier cache to store the value
+    let cold_cache = ColdTierCache::<K, V>::new(
+        Path::new("/tmp/cold_storage.dat"),
+        CompressionAlgorithm::None,
+    )?;
+    
+    cold_cache.put(key.clone(), value)?;
+    Ok(())
 }
 
-/// Trigger cleanup asynchronously
-pub fn async_cleanup<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
+/// Schedule maintenance task with worker
+pub fn schedule_maintenance(
+    worker: &CacheMaintenanceWorker,
+    task: MaintenanceTask,
 ) -> Result<(), CacheOperationError> {
-    worker.submit_task(MaintenanceTask::CleanupExpired)
+    worker.submit_task(task)
 }
 
-/// Trigger compaction asynchronously
-pub fn async_compact<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
+/// Trigger cleanup of expired entries
+pub fn async_cleanup(
+    worker: &CacheMaintenanceWorker,
+    ttl: std::time::Duration,
 ) -> Result<(), CacheOperationError> {
-    worker.submit_task(MaintenanceTask::CompactColdTier)
+    worker.submit_task(MaintenanceTask::CleanupExpired { 
+        ttl, 
+        batch_size: 100 
+    })
 }
 
-/// Schedule automatic maintenance for specific types
-pub fn schedule_maintenance<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
+/// Trigger compaction
+pub fn async_compact(
+    worker: &CacheMaintenanceWorker,
+    threshold: f64,
 ) -> Result<(), CacheOperationError> {
-    worker.schedule_maintenance()
+    worker.submit_task(MaintenanceTask::CompactStorage { 
+        compaction_threshold: threshold 
+    })
 }
 
 /// Get worker statistics
-pub fn get_worker_stats<K: CacheKey, V: CacheValue>(
-    worker: &CacheMaintenanceWorker<K, V>,
-) -> WorkerStats {
+pub fn get_worker_stats(
+    worker: &mut CacheMaintenanceWorker,
+) -> WorkerStatsSnapshot {
     worker.stats()
 }

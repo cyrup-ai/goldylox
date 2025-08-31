@@ -1,8 +1,11 @@
-//! Maintenance task types for warm tier background operations
+//! CANONICAL Maintenance task types for cache background operations
 //!
-//! This module defines all maintenance tasks that can be executed in the
-//! background to optimize cache performance, including cleanup, eviction,
-//! statistics updates, structure optimization, and tier synchronization.
+//! This module defines the CANONICAL MaintenanceTask enum that serves as the
+//! unified source of truth for all maintenance tasks across the entire cache system.
+//! Other modules should re-export this canonical implementation.
+//!
+//! ARCHITECTURAL DECISION: This is the most sophisticated implementation with
+//! comprehensive task types, rich parameter sets, and production-quality methods.
 
 use std::time::Duration;
 

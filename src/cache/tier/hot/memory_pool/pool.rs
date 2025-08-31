@@ -5,7 +5,7 @@
 
 use std::mem::MaybeUninit;
 
-use crate::cache::tier::hot::HotTierConfig;
+use crate::cache::config::types::HotTierConfig;
 use super::statistics::MemoryPoolStats;
 use super::types::{CacheSlot, SlotMetadata};
 use crate::cache::traits::{CacheKey, CacheValue};

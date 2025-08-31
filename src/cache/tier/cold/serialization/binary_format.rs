@@ -1,16 +1,11 @@
 //! This module provides generic binary serialization for any cache value
 //! that implements the CacheValue trait, making the cache truly generic.
 
-#[cfg(feature = "cold-tier")]
 use bincode::{config, decode_from_slice, encode_to_vec};
-#[cfg(feature = "cold-tier")]
 use lz4_flex;
 use serde::{de::DeserializeOwned, Serialize};
-#[cfg(feature = "compression")]
 use zstd;
-#[cfg(feature = "compression")]
 use brotli;
-#[cfg(feature = "compression")]
 use std::io::{Read, Cursor};
 
 use crate::cache::traits::CacheOperationError;
@@ -27,40 +22,25 @@ use crate::cache::traits::CompressionAlgorithm;
 // Migration logic removed - now handled by header.rs StorageHeader
 
 /// Helper function to serialize any value using bincode
-#[cfg(feature = "cold-tier")]
 #[inline]
-fn serialize_with_bincode<V: Serialize>(value: &V) -> Result<Vec<u8>, String> {
+#[allow(dead_code)]
+fn serialize_with_bincode<V: Serialize + bincode::Encode>(value: &V) -> Result<Vec<u8>, String> {
     encode_to_vec(value, config::standard()).map_err(|e| format!("Bincode serialization failed: {}", e))
 }
 
-/// Fallback serialization when bincode is not available
-#[cfg(not(feature = "cold-tier"))]
-#[inline]
-fn serialize_with_bincode<V: Serialize>(_value: &V) -> Result<Vec<u8>, String> {
-    Err("Bincode serialization not available - enable cold-tier feature".to_string())
-}
-
 /// Helper function to deserialize any value using bincode
-#[cfg(feature = "cold-tier")]
 #[inline]
-fn deserialize_with_bincode<V: DeserializeOwned>(data: &[u8]) -> Result<V, String> {
+fn deserialize_with_bincode<V: DeserializeOwned + bincode::Decode<()>>(data: &[u8]) -> Result<V, String> {
     decode_from_slice(data, config::standard())
         .map(|(v, _)| v)
         .map_err(|e| format!("Bincode deserialization failed: {}", e))
-}
-
-/// Fallback deserialization when bincode is not available
-#[cfg(not(feature = "cold-tier"))]
-#[inline]
-fn deserialize_with_bincode<V: DeserializeOwned>(_data: &[u8]) -> Result<V, String> {
-    Err("Bincode deserialization not available - enable cold-tier feature".to_string())
 }
 
 /// Serialize cache value to binary format (payload only, no headers)
 ///
 /// This function handles only payload serialization and compression.
 /// Header management is handled separately by storage_ops.rs using StorageHeader.
-pub fn serialize_cache_value<V: CacheValue + Serialize>(
+pub fn serialize_cache_value<V: CacheValue + Serialize + bincode::Encode>(
     value: &V,
     compression_algorithm: CompressionAlgorithm,
 ) -> Result<Vec<u8>, CacheOperationError> {
@@ -84,7 +64,7 @@ pub fn serialize_cache_value<V: CacheValue + Serialize>(
 /// This function handles only payload decompression and deserialization.
 /// Header parsing is handled separately by storage_ops.rs using StorageHeader.
 /// The compression algorithm is determined from the header and passed as a parameter.
-pub fn deserialize_cache_value<V: CacheValue + DeserializeOwned>(
+pub fn deserialize_cache_value<V: CacheValue + DeserializeOwned + bincode::Decode<()>>(
     compressed_data: &[u8],
     compression_algorithm: CompressionAlgorithm,
 ) -> Result<Option<V>, CacheOperationError> {
@@ -110,23 +90,11 @@ pub fn compress_data(
     match algorithm {
         CompressionAlgorithm::None => Ok(data.to_vec()),
 
-        #[cfg(feature = "cold-tier")]
         CompressionAlgorithm::Lz4 => Ok(lz4_flex::compress_prepend_size(data)),
 
-        #[cfg(feature = "compression")]
         CompressionAlgorithm::Zstd => zstd::encode_all(data, 3).map_err(|e| {
             CacheOperationError::serialization_failed(&format!("ZSTD compression failed: {}", e))
         }),
-
-        #[cfg(not(feature = "cold-tier"))]
-        CompressionAlgorithm::Lz4 => Err(CacheOperationError::serialization_failed(
-            "LZ4 compression not available - enable cold-tier feature",
-        )),
-
-        #[cfg(not(feature = "compression"))]
-        CompressionAlgorithm::Zstd => Err(CacheOperationError::serialization_failed(
-            "ZSTD compression not available - enable compression feature",
-        )),
 
         CompressionAlgorithm::Deflate => {
             use flate2::{write::DeflateEncoder, Compression};
@@ -141,7 +109,6 @@ pub fn compress_data(
             })
         },
 
-        #[cfg(feature = "compression")]
         CompressionAlgorithm::Brotli => {
             let mut output = Vec::new();
             let params = brotli::enc::BrotliEncoderParams::default();
@@ -149,11 +116,6 @@ pub fn compress_data(
                 .map_err(|e| CacheOperationError::serialization_failed(&format!("Brotli compression failed: {:?}", e)))?;
             Ok(output)
         },
-
-        #[cfg(not(feature = "compression"))]
-        CompressionAlgorithm::Brotli => Err(CacheOperationError::serialization_failed(
-            "Brotli compression not available - enable compression feature",
-        )),
     }
 }
 
@@ -166,24 +128,12 @@ pub fn decompress_data(
     match algorithm {
         CompressionAlgorithm::None => Ok(data.to_vec()),
 
-        #[cfg(feature = "cold-tier")]
         CompressionAlgorithm::Lz4 => lz4_flex::decompress_size_prepended(data)
             .map_err(|_| CacheOperationError::serialization_failed("LZ4 decompression failed")),
 
-        #[cfg(feature = "compression")]
         CompressionAlgorithm::Zstd => zstd::decode_all(data).map_err(|e| {
             CacheOperationError::serialization_failed(&format!("ZSTD decompression failed: {}", e))
         }),
-
-        #[cfg(not(feature = "cold-tier"))]
-        CompressionAlgorithm::Lz4 => Err(CacheOperationError::serialization_failed(
-            "LZ4 decompression not available - enable cold-tier feature",
-        )),
-
-        #[cfg(not(feature = "compression"))]
-        CompressionAlgorithm::Zstd => Err(CacheOperationError::serialization_failed(
-            "ZSTD decompression not available - enable compression feature",
-        )),
 
         CompressionAlgorithm::Deflate => {
             use flate2::write::DeflateDecoder;
@@ -198,7 +148,6 @@ pub fn decompress_data(
             })
         },
 
-        #[cfg(feature = "compression")]
         CompressionAlgorithm::Brotli => {
             let mut output = Vec::new();
             let mut decompressor = brotli::Decompressor::new(Cursor::new(data), 4096);
@@ -206,11 +155,6 @@ pub fn decompress_data(
                 .map_err(|e| CacheOperationError::serialization_failed(&format!("Brotli decompression failed: {}", e)))?;
             Ok(output)
         },
-
-        #[cfg(not(feature = "compression"))]
-        CompressionAlgorithm::Brotli => Err(CacheOperationError::serialization_failed(
-            "Brotli decompression not available - enable compression feature",
-        )),
     }
 }
 

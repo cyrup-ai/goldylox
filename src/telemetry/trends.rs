@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use super::alerts::AlertSystem;
+use crate::cache::manager::performance::alert_system::AlertSystem;
 use super::data_structures::{TrendHistoryBuffer, TrendSample};
-use super::history::PerformanceHistory;
+use super::performance_history::PerformanceHistory;
 use super::types::{MonitorConfig, PerformanceSample, PerformanceTrends};
 use crate::cache::types::statistics::multi_tier::ErrorRateTracker;
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -60,9 +60,9 @@ impl TrendAnalyzer {
     }
 
     /// Create new trend analyzer with AlertSystem integration
-    pub fn new_with_alerts(config: MonitorConfig) -> Result<Self, CacheOperationError> {
+    pub fn new_with_alerts(_config: MonitorConfig) -> Result<Self, CacheOperationError> {
         let mut analyzer = Self::new()?;
-        analyzer.alert_system = Some(AlertSystem::new(config)?);
+        analyzer.alert_system = Some(AlertSystem::new());
         Ok(analyzer)
     }
 
@@ -168,7 +168,7 @@ impl TrendAnalyzer {
         // Use the performance_history field we already added
         if let Some(history) = &self.performance_history {
             let summary = history.get_performance_summary();
-            summary.avg_ops_per_second
+            summary.avg_ops_per_second as f64
         } else {
             // Fallback to current throughput estimate
             let current = self.compute_current_throughput();
@@ -180,7 +180,7 @@ impl TrendAnalyzer {
     fn compute_current_error_rate(&self) -> f64 {
         // Use the production ErrorRateTracker
         if let Some(tracker) = &self.error_tracker {
-            tracker.get_error_rate()
+            tracker.overall_error_rate()
         } else {
             // Fallback to deriving from prediction accuracy
             let accuracy = self.prediction_accuracy() as f64;
@@ -265,6 +265,7 @@ impl TrendAnalyzer {
     }
 
     /// Compute operations per second trend direction (-100 to 100)
+    #[allow(dead_code)]
     fn compute_ops_trend(&self) -> i8 {
         // Operations trend often correlates with hit rate
         (self.compute_hit_rate_trend() as f32 * 0.8) as i8
@@ -315,13 +316,20 @@ impl TrendAnalyzer {
             // Convert samples to PerformanceSample format for AlertSystem
             for &(timestamp, value) in recent_samples {
                 let sample = PerformanceSample {
-                    timestamp,
-                    operation_latency_ns: (value * 1000.0) as u64,
-                    tier_hit: value > 0.5,
-                    memory_usage: (value * 1024.0) as usize,
+                    timestamp_ns: timestamp,
+                    hit_rate_x1000: (value * 1000.0) as u32,
+                    avg_access_time_ns: (value * 1000.0) as u32,
+                    memory_usage: (value * 1024.0) as u64,
+                    ops_per_second_x100: (value * 100.0) as u32,
+                    hot_utilization_x100: (value * 100.0) as u16,
+                    warm_utilization_x100: (value * 100.0) as u16,
+                    cold_utilization_x100: (value * 100.0) as u16,
                     latency_ns: (value * 1000.0) as u64,
                     throughput: value as f64,
                     error_count: 0,
+                    operation_latency_ns: (value * 1000.0) as u64,
+                    tier_hit: value > 0.5,
+                    _padding: [0; 3],
                 };
                 
                 // Use AlertSystem for anomaly detection
@@ -329,7 +337,7 @@ impl TrendAnalyzer {
                 for alert in alerts {
                     anomalies.push((
                         timestamp,
-                        alert.metric_value as f32,
+                        alert.current_value as f32,
                         alert.message
                     ));
                 }

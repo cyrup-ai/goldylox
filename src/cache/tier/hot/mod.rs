@@ -20,10 +20,7 @@ pub use simd_tier::SimdHotTier;
 // Re-export TierStatistics from canonical location
 pub use crate::cache::types::statistics::tier_stats::TierStatistics;
 
-use synchronization::{
-    AtomicTierStats, CoordinationState, ReadGuard, SimdHashState, SimdLruTracker,
-    WriteGuard,
-};
+
 // PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer
 pub use thread_local::{
     cleanup_expired_entries, compact_hot_tier, get_frequently_accessed_keys, get_idle_keys,
@@ -31,5 +28,5 @@ pub use thread_local::{
     init_simd_hot_tier, insert_promoted, process_prefetch_requests, remove_entry,
     should_optimize_hot_tier, simd_hot_get, simd_hot_put, simd_hot_remove, simd_hot_stats,
 };
-pub use types::HotTierConfig;
+pub use crate::cache::config::types::HotTierConfig;
 pub use types::{HotTierError, HotTierResult, SearchResult};

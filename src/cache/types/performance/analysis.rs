@@ -196,47 +196,23 @@ impl PerformanceAnalysis {
         }
     }
 
-    /// Get performance summary
+    /// Get performance summary using canonical PerformanceSummary
     pub fn summary(&self) -> PerformanceSummary {
-        PerformanceSummary {
-            is_fast: self.avg_duration_ns < 1_000_000, // Less than 1ms average
-            is_consistent: self.std_deviation_ns < (self.avg_duration_ns as f64 * 0.5), /* StdDev < 50% of average */
-            has_outliers: self.p99_duration_ns > (self.avg_duration_ns * 10), // P99 > 10x average
-            overhead_acceptable: self.overhead_percent < 10.0, // Less than 10% overhead
-        }
+        let mut summary = PerformanceSummary::default();
+        summary.avg_access_time_ns = self.avg_duration_ns;
+        summary.max_access_time_ns = self.p99_duration_ns;
+        summary.update_qualitative_analysis(
+            self.std_deviation_ns,
+            self.p99_duration_ns,
+            self.overhead_percent,
+        );
+        summary
     }
 }
 
-/// Performance summary flags
-#[derive(Debug, Clone, Copy)]
-pub struct PerformanceSummary {
-    /// Average performance is fast (< 1ms)
-    pub is_fast: bool,
-    /// Performance is consistent (low variance)
-    pub is_consistent: bool,
-    /// Has significant outliers
-    pub has_outliers: bool,
-    /// Overhead is acceptable
-    pub overhead_acceptable: bool,
-}
-
-impl PerformanceSummary {
-    /// Get overall performance grade
-    pub fn grade(&self) -> char {
-        let score = self.is_fast as u8
-            + self.is_consistent as u8
-            + (!self.has_outliers) as u8
-            + self.overhead_acceptable as u8;
-
-        match score {
-            4 => 'A',
-            3 => 'B',
-            2 => 'C',
-            1 => 'D',
-            _ => 'F',
-        }
-    }
-}
+// PerformanceSummary moved to canonical location: crate::telemetry::performance_history::PerformanceSummary
+// Use the enhanced canonical implementation with comprehensive quantitative metrics, error recovery tracking, and qualitative analysis
+pub use crate::telemetry::performance_history::PerformanceSummary;
 
 /// Operations grouped by performance tiers
 #[derive(Debug, Clone)]

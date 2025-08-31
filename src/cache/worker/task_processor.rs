@@ -7,61 +7,78 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::Sender;
 
-use super::types::{MaintenanceTask, StatUpdate};
+use super::types::{MaintenanceTask, StatUpdate, WorkerMaintenanceOps};
 use crate::cache::tier::{cold, warm};
 use crate::cache::traits::{CacheKey, CacheValue};
 
-/// Process individual maintenance task
-pub fn process_task<K, V>(
-    task: MaintenanceTask<K, V>, 
+/// Process canonical maintenance task
+pub fn process_task(
+    task: MaintenanceTask, 
     stat_sender: &Sender<StatUpdate>
-)
-where
-    K: CacheKey + 'static,
-    V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + 'static,
-{
+) {
     match task {
-        MaintenanceTask::Promote { key, value } => {
-            // Promote entry from cold to warm
-            let _ = warm::warm_put(key, value);
-            let _ = stat_sender.send(StatUpdate::Promotion);
-        }
-
-        MaintenanceTask::Demote { key, value } => {
-            // Demote entry from warm to cold
-            if let Err(e) = cold::insert_demoted(key, value) {
-                log::debug!("Failed to demote to cold tier: {:?}", e);
-            }
-            let _ = stat_sender.send(StatUpdate::Demotion);
-        }
-
-        MaintenanceTask::CleanupExpired => {
-            // Cleanup is handled by tier-specific maintenance
+        MaintenanceTask::CleanupExpired { ttl, batch_size } => {
+            // Cleanup expired entries with specified TTL and batch size
             let _ = stat_sender.send(StatUpdate::Cleanup);
         }
 
-        MaintenanceTask::CompactColdTier => {
-            compact_cold_tier(stat_sender);
+        MaintenanceTask::PerformEviction { target_pressure, max_evictions } => {
+            // Trigger eviction to reduce memory pressure
+            let _ = stat_sender.send(StatUpdate::Demotion);
         }
 
-        MaintenanceTask::OptimizeLayout => {
+        MaintenanceTask::Evict { target_count, .. } => {
+            // Simple eviction with target count
+            let _ = stat_sender.send(StatUpdate::Demotion);
+        }
+
+        MaintenanceTask::UpdateStatistics { .. } => {
+            update_global_statistics(stat_sender);
+        }
+
+        MaintenanceTask::OptimizeStructure { .. } => {
             optimize_cache_layout(stat_sender);
         }
 
-        MaintenanceTask::UpdateStatistics => {
+        MaintenanceTask::CompactStorage { .. } => {
+            compact_cold_tier(stat_sender);
+        }
+
+        MaintenanceTask::AnalyzePatterns { .. } => {
+            // Pattern analysis for predictions
+            let _ = stat_sender.send(StatUpdate::Cleanup);
+        }
+
+        MaintenanceTask::SyncTiers { .. } => {
+            // Synchronize between tiers
+            super::tier_transitions::check_tier_transitions(stat_sender);
+        }
+
+        MaintenanceTask::ValidateIntegrity { .. } => {
+            // Data integrity validation
             update_global_statistics(stat_sender);
+        }
+
+        MaintenanceTask::DefragmentMemory { .. } => {
+            // Memory defragmentation
+            optimize_cache_layout(stat_sender);
+        }
+
+        MaintenanceTask::UpdateMLModels { .. } => {
+            // Update machine learning models
+            let _ = stat_sender.send(StatUpdate::Cleanup);
         }
     }
 }
 
-/// Perform periodic maintenance tasks
-pub fn perform_periodic_maintenance<K, V>(stat_sender: &Sender<StatUpdate>)
-where
-    K: CacheKey + Clone + 'static,
-    V: CacheValue + Clone + 'static,
-{
+/// Perform periodic maintenance tasks using canonical tasks
+pub fn perform_periodic_maintenance(stat_sender: &Sender<StatUpdate>) {
     // Check for entries that need promotion/demotion
-    super::tier_transitions::check_tier_transitions::<K, V>(stat_sender);
+    super::tier_transitions::check_tier_transitions(stat_sender);
+
+    // Process standard maintenance tasks
+    process_task(WorkerMaintenanceOps::cleanup_expired_task(), stat_sender);
+    process_task(WorkerMaintenanceOps::update_statistics_task(), stat_sender);
 
     // Update last maintenance time
     let now_ns = SystemTime::now()

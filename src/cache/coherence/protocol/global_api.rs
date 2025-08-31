@@ -11,20 +11,18 @@ use crate::cache::traits::{CacheKey, CacheValue};
 // Connect to existing sophisticated type-safe deserialization infrastructure
 use crate::cache::traits::cache_entry::{CacheEntry, SerializationEnvelope};
 use crate::cache::traits::types_and_enums::TierLocation;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use serde_json;
 
-#[cfg(feature = "bincode")]
-#[allow(unused_imports)] // These are used conditionally based on bincode feature
-use bincode::{config, decode_from_slice, encode_to_vec};
+use bincode;
 
 // Global coherence functions for external use
-pub fn init_coherence_controller<K: CacheKey, V: CacheValue>() -> CoherenceController<K, V> {
+pub fn init_coherence_controller<K: CacheKey + Default + 'static, V: CacheValue + Default + 'static>() -> CoherenceController<K, V> {
     CoherenceController::new(ProtocolConfiguration::default())
 }
 
 /// Helper function to serialize tier value with SerializationEnvelope
-fn serialize_tier_value_with_envelope<K: CacheKey, V: CacheValue + Serialize>(
+fn serialize_tier_value_with_envelope<K: CacheKey + Default + bincode::Encode + 'static, V: CacheValue + Default + bincode::Encode + 'static + Serialize>(
     key: &K,
     value: V,
     tier: CacheTier,
@@ -60,7 +58,7 @@ fn serialize_tier_value_with_envelope<K: CacheKey, V: CacheValue + Serialize>(
     })
 }
 
-pub fn coherent_read<K: CacheKey, V: CacheValue + Serialize>(
+pub fn coherent_read<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + 'static + Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>>(
     controller: &CoherenceController<K, V>,
     key: &K,
     tier: CacheTier,
@@ -135,7 +133,7 @@ pub fn coherent_read<K: CacheKey, V: CacheValue + Serialize>(
     }
 }
 
-pub fn coherent_write<K: CacheKey + bincode::Decode<()>, V: CacheValue + DeserializeOwned + bincode::Decode<()>>(
+pub fn coherent_write<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + 'static + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>>(
     controller: &CoherenceController<K, V>,
     key: &K,
     data: Vec<u8>,

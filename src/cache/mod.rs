@@ -18,11 +18,10 @@ pub mod worker;
 
 pub use config::*;
 // REMOVED: Global function re-exports that hid generic architecture
-// These re-exports allowed broken String-dependent code to compile
-// Users must now import UnifiedCacheManager directly and specify generic types:
-// - Use coordinator::unified_manager::UnifiedCacheManager::<K, V>::new()
-// - No global functions - use manager instance methods
-pub use coordinator::unified_manager::UnifiedCacheManager;
+// HIGHLANDER RULES: No re-exports allowed! All code must use canonical paths:
+// - Use crate::cache::coordinator::unified_manager::UnifiedCacheManager::<K, V>::new()
+// - No global functions - use manager instance methods with explicit generics
+// - String-based usage is FORBIDDEN and will not compile
 pub use serde::*;
 pub use traits::{CacheKey, CacheTier, CacheValue};
 pub use types::{CacheResult, TierStatistics};

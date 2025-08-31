@@ -81,8 +81,7 @@ pub enum HashAlgorithm {
 }
 
 /// Serialization format enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub enum SerializationFormat {
     Binary,
     Json,
@@ -93,8 +92,7 @@ pub enum SerializationFormat {
 }
 
 /// Compression algorithm enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub enum CompressionAlgorithm {
     None,
     Lz4,

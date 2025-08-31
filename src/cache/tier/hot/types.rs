@@ -3,39 +3,7 @@
 //! This module contains all shared types, enums, and configuration
 //! structures used throughout the hot tier cache implementation.
 
-use std::time::Duration;
-
 use crate::cache::traits::types_and_enums::CacheOperationError;
-
-/// Configuration for hot tier cache
-#[derive(Debug, Clone)]
-pub struct HotTierConfig {
-    /// Maximum number of cache entries
-    pub max_entries: u32,
-    /// Enable SIMD optimizations
-    pub enable_simd: bool,
-    /// Enable prefetching
-    pub enable_prefetch: bool,
-    /// LRU eviction threshold
-    pub lru_threshold: Duration,
-    /// Memory limit in bytes
-    pub memory_limit: u64,
-    /// Cache line size for alignment
-    pub cache_line_size: usize,
-}
-
-impl Default for HotTierConfig {
-    fn default() -> Self {
-        Self {
-            max_entries: 256,
-            enable_simd: cfg!(target_arch = "x86_64"),
-            enable_prefetch: true,
-            lru_threshold: Duration::from_secs(300), // 5 minutes
-            memory_limit: 64 * 1024 * 1024,          // 64MB
-            cache_line_size: 64,
-        }
-    }
-}
 
 /// Search result for cache operations
 #[derive(Debug)]

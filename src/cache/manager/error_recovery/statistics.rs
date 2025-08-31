@@ -6,85 +6,33 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use super::types::{ErrorBurstDetector, ErrorType};
+use super::types::{ErrorBurstDetector, ErrorType, RecoveryStrategy};
 
-/// Error statistics tracking
+/// Error statistics tracking with comprehensive analytics
 #[derive(Debug)]
 pub struct ErrorStatistics {
-    /// Total errors by type
-    pub error_counts: CachePadded<[AtomicU64; 16]>, // Per error type
+    /// Total errors by type (private for better encapsulation)
+    error_counts: CachePadded<[AtomicU64; 16]>, // Per error type
     /// Error rates (errors per second)
-    pub error_rates: CachePadded<[AtomicU32; 16]>,
+    error_rates: CachePadded<[AtomicU32; 16]>,
     /// Recovery attempt counts
-    pub recovery_attempts: CachePadded<[AtomicU64; 8]>,
+    recovery_attempts: CachePadded<[AtomicU64; 8]>,
     /// Recovery success counts
-    pub recovery_successes: CachePadded<[AtomicU64; 8]>,
+    recovery_successes: CachePadded<[AtomicU64; 8]>,
     /// Mean time to recovery
-    pub mttr_ns: CachePadded<AtomicU64>,
+    mttr_ns: CachePadded<AtomicU64>,
     /// Error burst detection
-    pub burst_detector: ErrorBurstDetector,
+    burst_detector: ErrorBurstDetector,
 }
 
 impl ErrorStatistics {
-    /// Create new error statistics tracker
+    /// Create new error statistics tracker with optimized const initialization
     pub fn new() -> Self {
         Self {
-            error_counts: CachePadded::new([
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-            ]),
-            error_rates: CachePadded::new([
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-                std::sync::atomic::AtomicU32::new(0),
-            ]),
-            recovery_attempts: CachePadded::new([
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-            ]),
-            recovery_successes: CachePadded::new([
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-            ]),
+            error_counts: CachePadded::new([const { AtomicU64::new(0) }; 16]),
+            error_rates: CachePadded::new([const { AtomicU32::new(0) }; 16]),
+            recovery_attempts: CachePadded::new([const { AtomicU64::new(0) }; 8]),
+            recovery_successes: CachePadded::new([const { AtomicU64::new(0) }; 8]),
             mttr_ns: CachePadded::new(AtomicU64::new(0)),
             burst_detector: ErrorBurstDetector::new(),
         }
@@ -100,32 +48,55 @@ impl ErrorStatistics {
         }
     }
 
-    /// Record recovery attempt
+    /// Record recovery attempt (type-safe with RecoveryStrategy enum)
     #[inline]
-    pub fn record_recovery_attempt(&self, strategy_idx: usize) {
+    pub fn record_recovery_attempt(&self, strategy: RecoveryStrategy) {
+        let strategy_idx = strategy as usize;
         if strategy_idx < 8 {
             self.recovery_attempts[strategy_idx].fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Record recovery success
+    /// Record recovery attempt (legacy usize interface for compatibility)
     #[inline]
-    pub fn record_recovery_success(&self, strategy_idx: usize, recovery_time_ns: u64) {
+    pub fn record_recovery_attempt_by_index(&self, strategy_idx: usize) {
+        if strategy_idx < 8 {
+            self.recovery_attempts[strategy_idx].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record recovery success (type-safe with RecoveryStrategy enum)
+    #[inline]
+    pub fn record_recovery_success(&self, strategy: RecoveryStrategy, recovery_time_ns: u64) {
+        let strategy_idx = strategy as usize;
         if strategy_idx < 8 {
             self.recovery_successes[strategy_idx].fetch_add(1, Ordering::Relaxed);
-
-            // Update mean time to recovery using exponential moving average
-            const ALPHA: f64 = 0.1; // EMA smoothing factor
-            
-            let current_mttr = self.mttr_ns.load(Ordering::Relaxed);
-            let new_mttr = if current_mttr == 0 {
-                recovery_time_ns
-            } else {
-                // Exponential moving average: new = α * current + (1-α) * old
-                ((ALPHA * recovery_time_ns as f64) + ((1.0 - ALPHA) * current_mttr as f64)) as u64
-            };
-            self.mttr_ns.store(new_mttr, Ordering::Relaxed);
+            self.update_mttr_internal(recovery_time_ns);
         }
+    }
+
+    /// Record recovery success (legacy usize interface for compatibility)
+    #[inline]
+    pub fn record_recovery_success_by_index(&self, strategy_idx: usize, recovery_time_ns: u64) {
+        if strategy_idx < 8 {
+            self.recovery_successes[strategy_idx].fetch_add(1, Ordering::Relaxed);
+            self.update_mttr_internal(recovery_time_ns);
+        }
+    }
+
+    /// Internal MTTR update logic (shared between methods)
+    #[inline]
+    fn update_mttr_internal(&self, recovery_time_ns: u64) {
+        const ALPHA: f64 = 0.1; // EMA smoothing factor
+        
+        let current_mttr = self.mttr_ns.load(Ordering::Relaxed);
+        let new_mttr = if current_mttr == 0 {
+            recovery_time_ns
+        } else {
+            // Exponential moving average: new = α * current + (1-α) * old
+            ((ALPHA * recovery_time_ns as f64) + ((1.0 - ALPHA) * current_mttr as f64)) as u64
+        };
+        self.mttr_ns.store(new_mttr, Ordering::Relaxed);
     }
 
     /// Get error count for type
@@ -148,9 +119,10 @@ impl ErrorStatistics {
             .sum()
     }
 
-    /// Get recovery attempt count for strategy
+    /// Get recovery attempt count for strategy (type-safe)
     #[inline(always)]
-    pub fn get_recovery_attempts(&self, strategy_idx: usize) -> u64 {
+    pub fn get_recovery_attempts(&self, strategy: RecoveryStrategy) -> u64 {
+        let strategy_idx = strategy as usize;
         if strategy_idx < 8 {
             self.recovery_attempts[strategy_idx].load(Ordering::Relaxed)
         } else {
@@ -158,9 +130,20 @@ impl ErrorStatistics {
         }
     }
 
-    /// Get recovery success count for strategy
+    /// Get recovery attempt count for strategy (legacy usize interface)
     #[inline(always)]
-    pub fn get_recovery_successes(&self, strategy_idx: usize) -> u64 {
+    pub fn get_recovery_attempts_by_index(&self, strategy_idx: usize) -> u64 {
+        if strategy_idx < 8 {
+            self.recovery_attempts[strategy_idx].load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    }
+
+    /// Get recovery success count for strategy (type-safe)
+    #[inline(always)]
+    pub fn get_recovery_successes(&self, strategy: RecoveryStrategy) -> u64 {
+        let strategy_idx = strategy as usize;
         if strategy_idx < 8 {
             self.recovery_successes[strategy_idx].load(Ordering::Relaxed)
         } else {
@@ -168,9 +151,37 @@ impl ErrorStatistics {
         }
     }
 
-    /// Get recovery success rate for strategy
+    /// Get recovery success count for strategy (legacy usize interface)
     #[inline(always)]
-    pub fn get_recovery_success_rate(&self, strategy_idx: usize) -> f64 {
+    pub fn get_recovery_successes_by_index(&self, strategy_idx: usize) -> u64 {
+        if strategy_idx < 8 {
+            self.recovery_successes[strategy_idx].load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    }
+
+    /// Get recovery success rate for strategy (type-safe)
+    #[inline(always)]
+    pub fn get_recovery_success_rate(&self, strategy: RecoveryStrategy) -> f64 {
+        let strategy_idx = strategy as usize;
+        if strategy_idx >= 8 {
+            return 0.0;
+        }
+
+        let attempts = self.recovery_attempts[strategy_idx].load(Ordering::Relaxed);
+        let successes = self.recovery_successes[strategy_idx].load(Ordering::Relaxed);
+
+        if attempts > 0 {
+            successes as f64 / attempts as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Get recovery success rate for strategy (legacy usize interface)
+    #[inline(always)]
+    pub fn get_recovery_success_rate_by_index(&self, strategy_idx: usize) -> f64 {
         if strategy_idx >= 8 {
             return 0.0;
         }
@@ -197,6 +208,17 @@ impl ErrorStatistics {
         self.get_mttr_ns() as f64 / 1_000_000.0
     }
 
+    /// Get error rate for specific error type
+    #[inline(always)]
+    pub fn get_error_rate(&self, error_type: ErrorType) -> u32 {
+        let error_idx = error_type as usize;
+        if error_idx < 16 {
+            self.error_rates[error_idx].load(Ordering::Relaxed)
+        } else {
+            0
+        }
+    }
+
     /// Update error rate for specific error type
     #[inline]
     pub fn update_error_rate(&self, error_type: ErrorType, rate: u32) {
@@ -212,29 +234,28 @@ impl ErrorStatistics {
         self.burst_detector.in_burst.load(Ordering::Relaxed)
     }
 
-    /// Reset all statistics
-    pub fn reset_all(&self) {
-        // Reset error counts
-        for count in &self.error_counts[..] {
-            count.store(0, Ordering::Relaxed);
-        }
+    /// Reset all statistics (improved naming)
+    pub fn reset_statistics(&self) {
+        self.reset_all(); // Delegate to legacy method for compatibility
+    }
 
-        // Reset error rates
-        for rate in &self.error_rates[..] {
-            rate.store(0, Ordering::Relaxed);
+    /// Reset all statistics (legacy method name for compatibility)
+    pub fn reset_all(&self) {
+        // Reset error counts and rates
+        for i in 0..16 {
+            self.error_counts[i].store(0, Ordering::Relaxed);
+            self.error_rates[i].store(0, Ordering::Relaxed);
         }
 
         // Reset recovery statistics
-        for attempt in &self.recovery_attempts[..] {
-            attempt.store(0, Ordering::Relaxed);
+        for i in 0..8 {
+            self.recovery_attempts[i].store(0, Ordering::Relaxed);
+            self.recovery_successes[i].store(0, Ordering::Relaxed);
         }
 
-        for success in &self.recovery_successes[..] {
-            success.store(0, Ordering::Relaxed);
-        }
-
-        // Reset MTTR
+        // Reset MTTR and burst detector
         self.mttr_ns.store(0, Ordering::Relaxed);
+        self.burst_detector.in_burst.store(false, Ordering::Relaxed);
     }
 
     /// Get error distribution (percentage of each error type)
@@ -323,5 +344,43 @@ fn index_to_error_type(index: usize) -> Option<ErrorType> {
 impl Default for ErrorStatistics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for ErrorStatistics {
+    fn clone(&self) -> Self {
+        // Create a new instance and copy atomic values
+        let new_stats = Self::new();
+        
+        // Copy error counts
+        for i in 0..16 {
+            let value = self.error_counts[i].load(Ordering::Relaxed);
+            new_stats.error_counts[i].store(value, Ordering::Relaxed);
+        }
+        
+        // Copy error rates  
+        for i in 0..16 {
+            let value = self.error_rates[i].load(Ordering::Relaxed);
+            new_stats.error_rates[i].store(value, Ordering::Relaxed);
+        }
+        
+        // Copy recovery attempts
+        for i in 0..8 {
+            let value = self.recovery_attempts[i].load(Ordering::Relaxed);
+            new_stats.recovery_attempts[i].store(value, Ordering::Relaxed);
+        }
+        
+        // Copy recovery successes
+        for i in 0..8 {
+            let value = self.recovery_successes[i].load(Ordering::Relaxed);
+            new_stats.recovery_successes[i].store(value, Ordering::Relaxed);
+        }
+        
+        // Copy mean time to recovery
+        let mttr_value = self.mttr_ns.load(Ordering::Relaxed);
+        new_stats.mttr_ns.store(mttr_value, Ordering::Relaxed);
+        
+        // burst_detector is already cloned via the new() constructor
+        new_stats
     }
 }

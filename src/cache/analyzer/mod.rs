@@ -5,13 +5,14 @@
 
 pub mod access_record;
 pub mod analyzer_core;
-pub mod pattern_detection;
 pub mod types;
-pub mod utilities;
 
-// REMOVED: Backwards compatibility re-exports that hide canonical API paths
-// Users must now import from canonical module paths:
+// HIGHLANDER CANONICALIZATION: PatternDetector eliminated from this module
+// PatternDetector now uses canonical implementation at:
+// crate::cache::tier::hot::prefetch::pattern_detection::PatternDetector
+// 
+// Users must import from canonical module paths:
 // - Use analyzer::access_record::AccessRecord
-// - Use analyzer::analyzer_core::AccessPatternAnalyzer
-// - Use analyzer::pattern_detection::PatternDetector
+// - Use analyzer::analyzer_core::AccessPatternAnalyzer  
+// - Use tier::hot::prefetch::pattern_detection::PatternDetector (CANONICAL)
 // - Use analyzer::types::{AccessPattern, AccessPatternType, AnalyzerError, AnalyzerStatistics}

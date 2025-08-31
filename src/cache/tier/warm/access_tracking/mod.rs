@@ -16,5 +16,6 @@ pub use pattern_classifier::TemporalPatternClassifier;
 pub use tracker::{AccessAnalysisTask, ConcurrentAccessTracker};
 pub use types::{
     AccessContext, AccessRecord, AccessType, ClassificationParams, ConfidenceData,
-    GlobalConfidenceStats, HitStatus, PatternState, PatternType, TemporalPattern,
+    GlobalConfidenceStats, PatternState, PatternType, TemporalPattern,
 };
+pub use crate::cache::types::error_types::HitStatus; // Canonical location

@@ -6,6 +6,7 @@
 
 
 pub use crate::cache::traits::ErrorCategory;
+pub use crate::cache::types::error_types::HitStatus; // Canonical location
 use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
@@ -96,136 +97,12 @@ pub struct OperationMetadata {
     pub error: Option<CacheOperationError>,
 }
 
-/// Hit status enumeration for cache operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HitStatus {
-    /// Cache hit - value found
-    Hit,
-    /// Cache miss - value not found
-    Miss,
-    /// Operation error
-    Error,
-    /// Partial hit (multi-tier scenarios)
-    Partial,
-}
+// HitStatus CANONICALIZED: moved to canonical location: 
+// crate::cache::types::error_types::HitStatus
+// Use the canonical enum version with comprehensive multi-tier support
 
-// ErrorCategory moved to canonical location: crate::cache::traits::types_and_enums
-
-/// Recovery hint for cache operation errors
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecoveryHint {
-    /// Clear cache and retry operation
-    ClearAndRetry,
-    /// Retry with exponential backoff
-    RetryBackoff,
-    /// Fall back to alternative strategy
-    Fallback,
-    /// Restart cache subsystem
-    Restart,
-    /// No recovery possible
-    Fatal,
-}
-
-/// Cache operation error with recovery hints
-#[derive(Debug, Clone)]
-pub struct CacheOperationError {
-    /// Error category
-    pub category: ErrorCategory,
-    /// Error message
-    pub message: String,
-    /// Error code for programmatic handling
-    pub code: u32,
-    /// Recovery suggestion
-    pub recovery_hint: RecoveryHint,
-    /// Whether operation can be retried
-    pub retryable: bool,
-}
-
-impl CacheOperationError {
-    /// Create resource exhaustion error
-    #[inline(always)]
-    pub fn resource_exhausted(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Resource,
-            message: message.into(),
-            code: 1001,
-            recovery_hint: RecoveryHint::ClearAndRetry,
-            retryable: true,
-        }
-    }
-
-    /// Create invalid state error
-    #[inline(always)]
-    pub fn invalid_state(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::InvalidState,
-            message: message.into(),
-            code: 2001,
-            recovery_hint: RecoveryHint::Restart,
-            retryable: false,
-        }
-    }
-
-    /// Create serialization error
-    #[inline(always)]
-    pub fn serialization_failed(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Serialization,
-            message: message.into(),
-            code: 2001,
-            recovery_hint: RecoveryHint::Fallback,
-            retryable: false,
-        }
-    }
-
-    /// Create IO error
-    #[inline(always)]
-    pub fn io_failed(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Io,
-            message: message.into(),
-            code: 3001,
-            recovery_hint: RecoveryHint::RetryBackoff,
-            retryable: true,
-        }
-    }
-
-    /// Create configuration error
-    #[inline(always)]
-    pub fn configuration_error(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Configuration,
-            message: message.into(),
-            code: 4001,
-            recovery_hint: RecoveryHint::Restart,
-            retryable: false,
-        }
-    }
-
-    /// Create timing error
-    #[inline(always)]
-    pub fn timing_error(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Timing,
-            message: message.into(),
-            code: 5001,
-            recovery_hint: RecoveryHint::RetryBackoff,
-            retryable: true,
-        }
-    }
-
-    /// Create concurrency error
-    #[inline(always)]
-    pub fn concurrency_error(message: impl Into<String>) -> Self {
-        Self {
-            category: ErrorCategory::Concurrency,
-            message: message.into(),
-            code: 6001,
-            recovery_hint: RecoveryHint::RetryBackoff,
-            retryable: true,
-        }
-    }
-}
+// CacheOperationError moved to canonical location: crate::cache::traits::types_and_enums::CacheOperationError
+// Use the enhanced enum version with recovery hints, error codes, and production-quality features.
 
 /// Generic cache processing errors
 #[derive(Debug, Clone)]
@@ -392,76 +269,25 @@ impl std::error::Error for CacheError {}
 
 impl From<CacheError> for CacheOperationError {
     fn from(err: CacheError) -> Self {
-        Self {
-            category: ErrorCategory::Serialization,
-            message: format!("Cache error: {}", err.message),
-            code: err.code,
-            recovery_hint: RecoveryHint::Fallback,
-            retryable: false,
+        // Convert to appropriate enum variant based on error code
+        match err.code {
+            1001..=1099 => CacheOperationError::SerializationError(format!("Cache error: {}", err.message)),
+            2001..=2099 => CacheOperationError::StorageError(format!("Cache error: {}", err.message)),
+            3001..=3099 => CacheOperationError::MemoryLimitExceeded,
+            _ => CacheOperationError::InternalError,
         }
     }
 }
 
-/// Batch operation result for multi-key operations
-#[derive(Debug, Clone)]
-pub struct BatchResult<K: CacheKey, V: CacheValue> {
-    /// Operation results per key
-    pub results: Vec<(K, CacheResult<V>)>,
-    /// Total operation time
-    pub total_time_ns: u64,
-    /// Batch success rate
-    pub success_rate: f64,
-    /// Average latency per operation
-    pub avg_latency_ns: u64,
-}
-
-impl<K: CacheKey, V: CacheValue> BatchResult<K, V> {
-    /// Create new batch result
-    pub fn new(results: Vec<(K, CacheResult<V>)>) -> Self {
-        let total_operations = results.len();
-        let successful_operations = results.iter().filter(|(_, r)| r.is_success()).count();
-        let total_time_ns = results.iter().map(|(_, r)| r.latency_ns).sum();
-
-        let success_rate = if total_operations > 0 {
-            successful_operations as f64 / total_operations as f64
-        } else {
-            0.0
-        };
-
-        let avg_latency_ns = if total_operations > 0 {
-            total_time_ns / total_operations as u64
-        } else {
-            0
-        };
-
-        Self {
-            results,
-            total_time_ns,
-            success_rate,
-            avg_latency_ns,
-        }
-    }
-
-    /// Get successful results
-    pub fn successes(&self) -> impl Iterator<Item = (&K, &CacheResult<V>)> {
-        self.results
-            .iter()
-            .filter(|(_, result)| result.is_success())
-            .map(|(k, r)| (k, r))
-    }
-
-    /// Get failed results
-    pub fn failures(&self) -> impl Iterator<Item = (&K, &CacheResult<V>)> {
-        self.results
-            .iter()
-            .filter(|(_, result)| !result.is_success())
-            .map(|(k, r)| (k, r))
-    }
-}
+// BatchResult moved to canonical location: crate::cache::types::batch_operations::BatchResult
+// Use the enhanced canonical implementation with HashMap-based indexing for O(1) key lookup,
+// TimedResult wrapper for precise per-operation timing, comprehensive batch analysis methods,
+// and production-ready timing infrastructure that supports parallel execution metrics
+pub use crate::cache::types::batch_operations::BatchResult;
 
 impl From<crate::cache::traits::types_and_enums::CacheOperationError> for CacheError {
     fn from(error: crate::cache::traits::types_and_enums::CacheOperationError) -> Self {
-        use crate::cache::traits::types_and_enums::CacheOperationError;
+        // CacheOperationError is now canonical in types_and_enums - no need for import here
         match error {
             CacheOperationError::KeyNotFound => CacheError::not_found("Key not found"),
             CacheOperationError::SerializationError(msg) => CacheError::serialization_failed(msg),

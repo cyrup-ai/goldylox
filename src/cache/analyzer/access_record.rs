@@ -91,4 +91,20 @@ impl AccessRecord {
     pub fn memory_usage(&self) -> u32 {
         self.memory_usage.load(Ordering::Relaxed)
     }
+
+    /// Get cached pattern hint
+    #[inline(always)]
+    pub fn pattern_hint(&self) -> AccessPatternType {
+        match self.pattern_hint.load(Ordering::Relaxed) {
+            0 => AccessPatternType::Sequential,
+            1 => AccessPatternType::Temporal,
+            2 => AccessPatternType::Spatial,
+            _ => AccessPatternType::Random,
+        }
+    }
+
+    /// Update pattern hint based on access analysis
+    pub fn update_pattern_hint(&self, pattern: AccessPatternType) {
+        self.pattern_hint.store(pattern as u8, Ordering::Relaxed);
+    }
 }

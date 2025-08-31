@@ -10,15 +10,16 @@ use crate::cache::tier::hot::memory_pool::SlotMetadata;
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
-use crate::cache::traits::EvictionReason;
+use crate::cache::traits::types_and_enums::SelectionReason;
+use crate::cache::traits::{CacheKey, CacheValue};
 
-impl EvictionEngine {
+impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find LRU eviction candidate using SIMD parallel search
     pub fn find_lru_candidate(
         &self,
         metadata: &[SlotMetadata; 256],
         lru_tracker: &SimdLruTracker,
-    ) -> Option<EvictionCandidate> {
+    ) -> Option<EvictionCandidate<K, V>> {
         #[cfg(target_arch = "x86_64")]
         {
             let mut oldest_time = u64::MAX;
@@ -56,11 +57,12 @@ impl EvictionEngine {
             }
 
             if oldest_time != u64::MAX {
-                Some(EvictionCandidate {
-                    slot_index: oldest_slot,
-                    score: 1.0 / (oldest_time as f64 + 1.0),
-                    reason: EvictionReason::LeastRecentlyUsed,
-                })
+                Some(EvictionCandidate::from_slot_index(
+                    oldest_slot,
+                    K::default(), // Placeholder key - actual key will be provided by caller
+                    1.0 / (oldest_time as f64 + 1.0),
+                    SelectionReason::LeastRecentlyUsed,
+                ))
             } else {
                 None
             }
@@ -82,11 +84,12 @@ impl EvictionEngine {
             }
 
             if oldest_time != u64::MAX {
-                Some(EvictionCandidate {
-                    slot_index: oldest_slot,
-                    score: 1.0 / (oldest_time as f64 + 1.0),
-                    reason: EvictionReason::LeastRecentlyUsed,
-                })
+                Some(EvictionCandidate::from_slot_index(
+                    oldest_slot,
+                    K::default(), // Placeholder key - actual key will be provided by caller
+                    1.0 / (oldest_time as f64 + 1.0),
+                    SelectionReason::LeastRecentlyUsed,
+                ))
             } else {
                 None
             }
@@ -94,7 +97,7 @@ impl EvictionEngine {
     }
 
     /// Find LFU eviction candidate
-    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata; 256]) -> Option<EvictionCandidate> {
+    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata; 256]) -> Option<EvictionCandidate<K, V>> {
         let mut lowest_count = u8::MAX;
         let mut lowest_slot = 0;
 
@@ -106,11 +109,13 @@ impl EvictionEngine {
         }
 
         if lowest_count != u8::MAX {
-            Some(EvictionCandidate {
-                slot_index: lowest_slot,
-                score: 1.0 / (lowest_count as f64 + 1.0),
-                reason: EvictionReason::LeastFrequentlyUsed,
-            })
+            // Use existing EvictionCandidate from_slot_index constructor for hot tier compatibility
+            Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
+                lowest_slot,
+                K::default(), // Placeholder key - actual key will be provided by caller
+                lowest_count as f64, // LFU score based on access count
+                crate::cache::traits::types_and_enums::SelectionReason::LeastFrequentlyUsed,
+            ))
         } else {
             None
         }
@@ -122,8 +127,8 @@ impl EvictionEngine {
         metadata: &[SlotMetadata; 256],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
-    ) -> Option<EvictionCandidate> {
-        let mut best_candidate: Option<EvictionCandidate> = None;
+    ) -> Option<EvictionCandidate<K, V>> {
+        let mut best_candidate: Option<EvictionCandidate<K, V>> = None;
         let mut best_score = f64::NEG_INFINITY;
 
         for (slot_idx, meta) in metadata.iter().enumerate() {
@@ -145,11 +150,13 @@ impl EvictionEngine {
 
                 if score > best_score {
                     best_score = score;
-                    best_candidate = Some(EvictionCandidate {
-                        slot_index: slot_idx,
-                        score: 1.0 / score, // Invert for eviction (lower is better)
-                        reason: EvictionReason::AdaptiveReplacement,
-                    });
+                    // Use existing EvictionCandidate from_slot_index constructor for hot tier compatibility
+                    best_candidate = Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
+                        slot_idx,
+                        K::default(), // Placeholder key - actual key will be provided by caller
+                        score,
+                        crate::cache::traits::types_and_enums::SelectionReason::AdaptiveReplacementCache,
+                    ));
                 }
             }
         }

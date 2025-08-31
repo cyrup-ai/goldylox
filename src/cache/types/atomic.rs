@@ -55,7 +55,6 @@ pub struct AccessStats {
 }
 
 /// Atomic cache entry with lock-free metadata (cache-line aligned)
-#[derive(Debug)]
 #[repr(align(64))]
 pub struct AtomicCacheEntry<K: CacheKey, V: CacheValue> {
     /// Entry key (immutable after creation)
@@ -76,6 +75,24 @@ pub struct AtomicCacheEntry<K: CacheKey, V: CacheValue> {
     flags: AtomicU16,
     /// Cache-line padding to prevent false sharing
     _padding: [u8; 16],
+}
+
+impl<K: CacheKey, V: CacheValue> std::fmt::Debug for AtomicCacheEntry<K, V> 
+where
+    K: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AtomicCacheEntry")
+            .field("key", &self.key)
+            .field("value", &"<AtomicCell>")
+            .field("created_at", &self.created_at)
+            .field("last_accessed", &self.last_accessed.load(std::sync::atomic::Ordering::Relaxed))
+            .field("access_count", &self.access_count.load(std::sync::atomic::Ordering::Relaxed))
+            .field("size_bytes", &self.size_bytes.load(std::sync::atomic::Ordering::Relaxed))
+            .field("generation", &self.generation.load(std::sync::atomic::Ordering::Relaxed))
+            .field("flags", &self.flags.load(std::sync::atomic::Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
@@ -104,9 +121,12 @@ impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
         &self.key
     }
 
-    /// Get entry value (atomic load)
+    /// Get entry value (atomic load) - requires V: Copy for lock-free access
     #[inline(always)]
-    pub fn value(&self) -> V {
+    pub fn value(&self) -> V
+    where
+        V: Copy,
+    {
         self.value.load()
     }
 

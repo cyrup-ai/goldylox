@@ -4,6 +4,7 @@
 //! statistics collection and monitoring of cache coherence protocol performance.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use crossbeam_utils::CachePadded;
 
@@ -47,6 +48,9 @@ pub struct CoherenceStatistics {
     pub peak_concurrent_operations: CachePadded<AtomicU32>,
 }
 
+/// Global singleton instance for coherence statistics
+static GLOBAL_COHERENCE_STATS: OnceLock<CoherenceStatistics> = OnceLock::new();
+
 impl CoherenceStatistics {
     pub fn new() -> Self {
         Self {
@@ -61,6 +65,12 @@ impl CoherenceStatistics {
             avg_operation_latency_ns: CachePadded::new(AtomicU64::new(0)),
             peak_concurrent_operations: CachePadded::new(AtomicU32::new(0)),
         }
+    }
+
+    /// Get or create the global coherence statistics instance
+    pub fn get_global_instance() -> Result<&'static CoherenceStatistics, &'static str> {
+        GLOBAL_COHERENCE_STATS.get_or_init(|| CoherenceStatistics::new());
+        Ok(GLOBAL_COHERENCE_STATS.get().unwrap())
     }
 
     /// Record a state transition

@@ -13,7 +13,7 @@ pub use super::coordination::*;
 pub use super::core::LockFreeWarmTier;
 pub use super::maintenance::*;
 pub use super::metrics::*;
-pub use super::timing::*;
+
 
 // All LockFreeWarmTier implementations are now in core.rs
 // This file only provides re-exports and supporting types

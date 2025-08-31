@@ -103,25 +103,24 @@ impl BatchOperationManager {
         metrics: &BatchPerformanceMetrics,
         duration_ns: u64,
     ) -> ThroughputMetrics {
-        let ops_per_second = if duration_ns > 0 {
+        let _ops_per_second = if duration_ns > 0 {
             (metrics.total_operations as f64) / (duration_ns as f64 / 1_000_000_000.0)
         } else {
             0.0
         };
 
-        let successful_ops_per_second = if duration_ns > 0 {
+        let _successful_ops_per_second = if duration_ns > 0 {
             (metrics.successful_operations as f64) / (duration_ns as f64 / 1_000_000_000.0)
         } else {
             0.0
         };
 
-        ThroughputMetrics {
-            operations_per_second: ops_per_second,
-            successful_operations_per_second: successful_ops_per_second,
-            average_latency_ms: metrics.avg_latency_ns as f64 / 1_000_000.0,
-            p95_latency_estimate_ms: metrics.max_latency_ns as f64 / 1_000_000.0 * 0.95,
-            efficiency_score: metrics.success_rate * (1.0 / (metrics.avg_latency_ns as f64 + 1.0)),
-        }
+        ThroughputMetrics::calculate_from_batch_metrics(
+            metrics.total_operations,
+            metrics.successful_operations,
+            duration_ns,
+            metrics.avg_latency_ns,
+        )
     }
 }
 
@@ -199,20 +198,9 @@ impl BatchPerformanceMetrics {
     }
 }
 
-/// Throughput analysis metrics
-#[derive(Debug, Clone)]
-pub struct ThroughputMetrics {
-    /// Operations per second
-    pub operations_per_second: f64,
-    /// Successful operations per second
-    pub successful_operations_per_second: f64,
-    /// Average latency in milliseconds
-    pub average_latency_ms: f64,
-    /// Estimated 95th percentile latency in milliseconds
-    pub p95_latency_estimate_ms: f64,
-    /// Overall efficiency score (0.0 to 1.0)
-    pub efficiency_score: f64,
-}
+// ThroughputMetrics moved to canonical location: crate::cache::tier::warm::metrics::ThroughputMetrics
+// Use the canonical implementation with enhanced functionality including peak tracking, sustained averages, and atomic thread safety
+pub use crate::cache::tier::warm::metrics::ThroughputMetrics;
 
 /// Latency distribution analysis
 #[derive(Debug, Clone)]
