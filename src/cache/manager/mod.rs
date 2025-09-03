@@ -3,6 +3,8 @@
 //! This module provides a decomposed implementation of the cache manager with
 //! logical separation of concerns across multiple submodules.
 
+ // Internal manager architecture - components may not be used in minimal API
+
 pub mod background;
 pub mod core;
 pub mod error_recovery;
@@ -19,29 +21,16 @@ pub mod strategy;
 // - etc.
 
 pub use background::{
-    BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
-    MaintenanceStats, MaintenanceTask, CanonicalMaintenanceTask, WorkerStatus,
+    MaintenanceScheduler,
 };
-pub use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
-pub use error_recovery::{
-    CircuitBreaker, CircuitState, ErrorDetector, ErrorRecoverySystem, ErrorStatistics, ErrorType,
-    HealthStatus, RecoveryStrategies, RecoveryStrategy,
-};
-pub use performance::{
-    AlertSeverity, AlertSystem, AlertType, MetricsCollector, PerformanceMonitor,
-    PerformanceSnapshot,
-};
-pub use policy::{
-    AccessType, CachePolicyEngine, PrefetchPredictor, ReplacementAlgorithm,
-    ReplacementPolicies, WritePolicy, WritePolicyManager,
-};
+// Remove unused BackgroundCoordinator export
+pub use error_recovery::ErrorRecoverySystem;
+// Remove unused performance exports
+// Remove unused policy exports
 // REMOVED: Redirecting to canonical location
 // Import UnifiedCacheStatistics from canonical location:
 // - Use crate::telemetry::unified_stats::{UnifiedCacheStatistics, CachePerformanceMetrics, StatisticsConfig};
-pub use strategy::{
-    CacheStrategy, CacheStrategySelector, StrategyMetrics, StrategySwitcher, StrategyThresholds,
-};
+// Remove unused strategy exports
 // Re-export TierStatistics from canonical location
-pub use crate::cache::types::statistics::tier_stats::TierStatistics;
 // TierPromotionManager moved to canonical location: crate::cache::tier::manager::TierPromotionManager
 // Use the sophisticated "best of best" implementation for all tier promotion needs

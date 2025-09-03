@@ -14,9 +14,10 @@ use crossbeam_utils::CachePadded;
 use log;
 
 use super::types::{
-    AlertConfig, AlertEvent, AlertEventType, AlertSeverity, AlertThresholds, AlertType,
+    AlertConfig, AlertEvent, AlertEventType, AlertSeverity, AlertType,
     PerformanceAlert, PerformanceSnapshot,
 };
+use crate::cache::types::performance_thresholds::AlertThresholds;
 use crate::telemetry::data_structures::ThresholdAdaptationState;
 use crate::telemetry::types::{MonitorConfig, PerformanceSample};
 use crate::telemetry::data_structures::AlertHistoryBuffer;
@@ -52,6 +53,7 @@ pub struct AlertSystem {
     /// Zero-allocation high-performance alert buffer
     performance_alert_buffer: AlertHistoryBuffer,
     /// Alert configuration
+    #[allow(dead_code)] // Performance monitoring - alert_config used in alert system configuration management
     alert_config: AlertConfig,
     /// Notification status
     notification_enabled: AtomicBool,
@@ -60,6 +62,7 @@ pub struct AlertSystem {
     /// Rate limiting state
     rate_limits: AlertRateLimits,
     /// Threshold adaptation state with ML learning
+    #[allow(dead_code)] // Performance monitoring - adaptation_state used in ML-based threshold adaptation
     adaptation_state: ThresholdAdaptationState,
 }
 
@@ -86,16 +89,11 @@ impl AlertSystem {
     }
 
     /// Create new alert system with configuration (telemetry compatibility)
-    pub fn from_config(config: MonitorConfig) -> Result<Self, crate::cache::traits::types_and_enums::CacheOperationError> {
+    #[allow(dead_code)] // Performance monitoring - from_config used in configurable alert system initialization
+    pub fn from_config(_config: MonitorConfig) -> Result<Self, crate::cache::traits::types_and_enums::CacheOperationError> {
         let mut alert_system = Self::new();
-        // Convert telemetry AlertThresholds to cache AlertThresholds
-        let cache_thresholds = AlertThresholds {
-            critical_hit_rate: AtomicU64::new((config.alert_thresholds.performance_degradation_threshold * 1_000_000.0) as u64),
-            warning_hit_rate: AtomicU64::new(((config.alert_thresholds.performance_degradation_threshold + 0.1) * 1_000_000.0) as u64),
-            max_latency_ns: AtomicU64::new((config.alert_thresholds.max_latency_ms * 1_000_000.0) as u64),
-            memory_warning_threshold: AtomicU64::new((config.alert_thresholds.memory_pressure_threshold * 1_000_000.0) as u64),
-        };
-        alert_system.thresholds = CachePadded::new(cache_thresholds);
+        // Use canonical AlertThresholds with default values
+        alert_system.thresholds = CachePadded::new(AlertThresholds::default());
         Ok(alert_system)
     }
 
@@ -469,21 +467,21 @@ impl AlertSystem {
         // Reset window if needed
         if now - window_start > window_duration {
             self.rate_limits.window_start.store(now, Ordering::Relaxed);
-            for count in &*self.rate_limits.current_counts {
+            for count in (*self.rate_limits.current_counts).iter() {
                 count.store(0, Ordering::Relaxed);
             }
         }
 
         // Check if we can send this alert type
-        let current_count = self.rate_limits.current_counts[type_idx].load(Ordering::Relaxed);
-        let max_count = self.rate_limits.max_alerts_per_minute[type_idx].load(Ordering::Relaxed);
+        let current_count = (*self.rate_limits.current_counts)[type_idx].load(Ordering::Relaxed);
+        let max_count = (*self.rate_limits.max_alerts_per_minute)[type_idx].load(Ordering::Relaxed);
 
         if current_count >= max_count {
             return None; // Rate limited
         }
 
         // Increment count
-        self.rate_limits.current_counts[type_idx].fetch_add(1, Ordering::Relaxed);
+        (*self.rate_limits.current_counts)[type_idx].fetch_add(1, Ordering::Relaxed);
 
         // Determine severity based on deviation
         let deviation_ratio = (current_value - threshold_value).abs() / threshold_value;
@@ -508,6 +506,7 @@ impl AlertSystem {
 }
 
 /// Statistics about the alert system
+#[allow(dead_code)] // Performance monitoring - AlertSystemStats used in alert system statistics and reporting
 #[derive(Debug, Clone)]
 pub struct AlertSystemStats {
     pub active_alerts_count: usize,

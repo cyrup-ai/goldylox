@@ -15,6 +15,7 @@ pub fn timestamp_nanos(instant: Instant) -> u64 {
 }
 
 /// Statistics for cold tier cache performance
+#[allow(dead_code)] // Cold tier - ColdTierStats used in cold tier statistics reporting
 #[derive(Debug, Clone)]
 pub struct ColdTierStats {
     pub total_entries: u64,

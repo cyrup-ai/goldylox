@@ -61,16 +61,19 @@ impl PerformanceMonitor {
     }
 
     /// Get metrics collector reference
+    #[allow(dead_code)] // Performance monitoring - get_metrics_collector used in performance system access
     pub fn get_metrics_collector(&self) -> &MetricsCollector {
         &self.metrics_collector
     }
 
     /// Get alert system reference
+    #[allow(dead_code)] // Performance monitoring - get_alert_system used in alert system access
     pub fn get_alert_system(&self) -> &AlertSystem {
         &self.alert_system
     }
 
     /// Get mutable alert system reference
+    #[allow(dead_code)] // Performance monitoring - get_alert_system_mut used in alert system configuration
     pub fn get_alert_system_mut(&mut self) -> &mut AlertSystem {
         &mut self.alert_system
     }
@@ -93,6 +96,7 @@ impl PerformanceMonitor {
 }
 
 /// Performance recommendation
+#[allow(dead_code)] // Performance monitoring - PerformanceRecommendation used in performance analysis and recommendations
 #[derive(Debug, Clone)]
 pub struct PerformanceRecommendation {
     pub category: RecommendationCategory,
@@ -102,6 +106,7 @@ pub struct PerformanceRecommendation {
 }
 
 /// Recommendation category
+#[allow(dead_code)] // Performance monitoring - RecommendationCategory used in performance recommendation classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecommendationCategory {
     HitRate,
@@ -112,6 +117,7 @@ pub enum RecommendationCategory {
 }
 
 /// Recommendation priority
+#[allow(dead_code)] // Performance monitoring - RecommendationPriority used in performance recommendation prioritization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecommendationPriority {
     Low,

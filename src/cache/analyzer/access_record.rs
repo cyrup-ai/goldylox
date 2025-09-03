@@ -3,6 +3,8 @@
 //! This module provides thread-safe access tracking for cache keys using
 //! cache-line aligned atomic operations for optimal performance.
 
+ // Internal analyzer architecture - components may not be used in minimal API
+
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crossbeam_utils::CachePadded;

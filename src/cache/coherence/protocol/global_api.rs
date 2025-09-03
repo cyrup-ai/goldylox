@@ -3,186 +3,154 @@
 //! This module provides the public interface for external use of the
 //! coherence protocol with simplified function signatures.
 
-use crate::cache::coherence::communication::{CoherenceError, ReadResponse};
-use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, ProtocolConfiguration};
-use crate::cache::coherence::data_structures::CoherenceController;
+ // Internal protocol architecture - components may not be used in minimal API
+
+use crate::cache::coherence::data_structures::ProtocolConfiguration;
+use crate::cache::coherence::communication::{ReadResponse, WriteResponse, CoherenceError};
+use crate::cache::coherence::CacheTier;
+use crate::cache::coherence::worker::worker_manager::{CoherenceSender, CoherenceWorkerManager};
+use crate::cache::coherence::worker::message_types::{CoherenceRequest, CoherenceResponse};
 use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::traits::cache_entry::SerializationEnvelope;
 
-// Connect to existing sophisticated type-safe deserialization infrastructure
-use crate::cache::traits::cache_entry::{CacheEntry, SerializationEnvelope};
-use crate::cache::traits::types_and_enums::TierLocation;
-use serde::Serialize;
-use serde_json;
+use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use bincode;
+// Global request ID counter
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-// Global coherence functions for external use
-pub fn init_coherence_controller<K: CacheKey + Default + 'static, V: CacheValue + Default + 'static>() -> CoherenceController<K, V> {
-    CoherenceController::new(ProtocolConfiguration::default())
+/// Coherence system handle that manages worker lifecycle
+pub struct CoherenceSystem<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static> {
+    sender: CoherenceSender<K, V>,
+    #[allow(dead_code)] // MESI coherence - worker manager used for lifecycle management
+    manager: CoherenceWorkerManager<K, V>,
 }
 
-/// Helper function to serialize tier value with SerializationEnvelope
-fn serialize_tier_value_with_envelope<K: CacheKey + Default + bincode::Encode + 'static, V: CacheValue + Default + bincode::Encode + 'static + Serialize>(
-    key: &K,
-    value: V,
-    tier: CacheTier,
-    controller: &CoherenceController<K, V>,
-) -> Result<Vec<u8>, CoherenceError> {
-    // Convert CacheTier to TierLocation for CacheEntry::new
-    let tier_location = match tier {
-        CacheTier::Hot => TierLocation::Hot,
-        CacheTier::Warm => TierLocation::Warm,
-        CacheTier::Cold => TierLocation::Cold,
-    };
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static> CoherenceSystem<K, V> {
+    /// Initialize coherence system with worker-owned architecture
+    pub fn new() -> Result<Self, CoherenceError> {
+        let mut manager = CoherenceWorkerManager::<K, V>::new(ProtocolConfiguration::default())?;
+        let sender = manager.start_worker()?;
+        Ok(Self { sender, manager })
+    }
     
-    // Create sophisticated CacheEntry with all metadata
-    let cache_entry = CacheEntry::new(
-        key.clone(), 
-        value.clone(), 
-        tier_location
-    );
+    /// Get sender for communication with worker
+    pub fn sender(&self) -> &CoherenceSender<K, V> {
+        &self.sender
+    }
     
-    // Use existing SerializationEnvelope with coherence integration
-    let envelope = SerializationEnvelope::new_with_coherence(
-        cache_entry,
-        controller
-    ).map_err(|e| match e {
-        crate::cache::coherence::CoherenceError::CacheLineNotFound => CoherenceError::CacheLineNotFound,
-        crate::cache::coherence::CoherenceError::InvalidStateTransition { from, to } => CoherenceError::InvalidStateTransition { from, to },
-        _ => CoherenceError::SerializationFailed("Coherence error during envelope creation".to_string()),
-    })?;
-    
-    // Serialize SerializationEnvelope with serde_json (bincode not available due to Instant fields)
-    serde_json::to_vec(&envelope).map_err(|e| {
-        CoherenceError::SerializationFailed(format!("JSON serialization failed: {}", e))
-    })
-}
-
-pub fn coherent_read<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + 'static + Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>>(
-    controller: &CoherenceController<K, V>,
-    key: &K,
-    tier: CacheTier,
-) -> Result<Option<Vec<u8>>, CoherenceError> {
-    let _coherence_key = CoherenceKey::from_cache_key(key);
-
-    // Handle read request through coherence protocol
-    match controller.handle_read_request(key, tier)? {
-        ReadResponse::Hit => {
-            // Value is present and can be read directly
-            match tier {
-                CacheTier::Hot => {
-                    if let Some(value) = crate::cache::tier::hot::simd_hot_get::<K, V>(key) {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                CacheTier::Warm => {
-                    if let Some(value) = crate::cache::tier::warm::warm_get::<K, V>(key) {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                CacheTier::Cold => match crate::cache::tier::cold::cold_get::<K, V>(key) {
-                    Ok(Some(value)) => {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(CoherenceError::TierAccessFailed(format!(
-                        "Cold tier access failed: {:?}", e
-                    ))),
-                },
-            }
-        }
-        ReadResponse::Miss => Ok(None),
-        ReadResponse::SharedGranted => {
-            // Shared access granted - read the value
-            match tier {
-                CacheTier::Hot => {
-                    if let Some(value) = crate::cache::tier::hot::simd_hot_get::<K, V>(key) {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                CacheTier::Warm => {
-                    if let Some(value) = crate::cache::tier::warm::warm_get::<K, V>(key) {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                CacheTier::Cold => match crate::cache::tier::cold::cold_get::<K, V>(key) {
-                    Ok(Some(value)) => {
-                        let serialized = serialize_tier_value_with_envelope(key, value, tier, controller)?;
-                        Ok(Some(serialized))
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(CoherenceError::TierAccessFailed(format!(
-                        "Cold tier access failed: {:?}", e
-                    ))),
-                },
-            }
-        }
+    /// Shutdown the coherence system gracefully
+    #[allow(dead_code)] // MESI coherence - graceful shutdown used in system lifecycle
+    pub fn shutdown(self) -> Result<(), CoherenceError> {
+        self.sender.shutdown()?;
+        self.manager.shutdown()
     }
 }
 
-pub fn coherent_write<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + 'static + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>>(
-    controller: &CoherenceController<K, V>,
-    key: &K,
-    data: Vec<u8>,
-    tier: CacheTier,
-) -> Result<(), CoherenceError> {
-    // Connect to existing SerializationEnvelope<K,V> infrastructure  
-    // Use serde_json to deserialize SerializationEnvelope (bincode not available due to Instant fields)
-    let envelope: SerializationEnvelope<K, V> = serde_json::from_slice(&data)
-        .map_err(|e| {
-            CoherenceError::SerializationFailed(format!("JSON deserialization failed: {}", e))
-        })?;
+/// Initialize coherence system with worker-owned architecture (legacy compatibility)
+pub fn init_coherence_system<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>() -> Result<CoherenceSystem<K, V>, CoherenceError> {
+    CoherenceSystem::new()
+}
 
-    // Extract value from sophisticated envelope with all metadata preserved
-    let cache_entry = envelope.entry;
-    let value = cache_entry.value;
+/// Perform coherent read operation using channel-based worker communication
+/// 
+/// This function sends read requests to the background worker that exclusively owns
+/// all coherence data. No shared controller access - pure message passing.
+#[allow(dead_code)] // MESI coherence - used in protocol coherent read operations  
+pub fn coherent_read<K, V>(
+    system: &CoherenceSystem<K, V>,
+    key: K,
+    requesting_tier: CacheTier,
+) -> Result<ReadResponse, CoherenceError>
+where
+    K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let sender = system.sender();
+    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request = CoherenceRequest::Read {
+        key,
+        requesting_tier,
+        request_id,
+    };
+    
+    // Send request to worker via channel
+    sender.send_request(request)?;
+    
+    // Wait for response with timeout
+    match sender.receive_response(request_id, Duration::from_secs(5))? {
+        CoherenceResponse::ReadSuccess { response, .. } => Ok(response),
+        CoherenceResponse::Error { error, .. } => Err(error),
+        _ => Err(CoherenceError::ProtocolViolation),
+    }
+}
 
-    // Connect to existing coherence validation
-    controller.validate_schema_version(envelope.schema_version)?;
-    controller.validate_checksum(key, envelope.checksum)?;
+/// Perform coherent write operation using channel-based worker communication
+/// 
+/// This function sends write requests to the background worker that exclusively owns
+/// all coherence data. Write propagation handled by worker thread.
+#[allow(dead_code)] // MESI coherence - used in protocol coherent write operations  
+pub fn coherent_write<K, V>(
+    system: &CoherenceSystem<K, V>,
+    key: K,
+    data: V,
+    requesting_tier: CacheTier,
+) -> Result<WriteResponse, CoherenceError>
+where
+    K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let sender = system.sender();
+    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request = CoherenceRequest::Write {
+        key,
+        data,
+        requesting_tier,
+        request_id,
+    };
+    
+    // Send request to worker via channel
+    sender.send_request(request)?;
+    
+    // Wait for response with timeout
+    match sender.receive_response(request_id, Duration::from_secs(5))? {
+        CoherenceResponse::WriteSuccess { response, .. } => Ok(response),
+        CoherenceResponse::Error { error, .. } => Err(error),
+        _ => Err(CoherenceError::ProtocolViolation),
+    }
+}
 
-    // Handle write request through coherence protocol
-    match controller.handle_write_request(key, tier, value.clone())? {
-        crate::cache::coherence::WriteResponse::Success => {
-            // Write was approved by coherence protocol - execute the write
-            match tier {
-                CacheTier::Hot => {
-                    crate::cache::tier::hot::simd_hot_put(key.clone(), value)
-                        .map_err(|e| CoherenceError::TierAccessFailed(format!(
-                            "Hot tier write failed: {:?}", e
-                        )))?;
-                }
-                CacheTier::Warm => {
-                    crate::cache::tier::warm::warm_put(key.clone(), value)
-                        .map_err(|e| CoherenceError::TierAccessFailed(format!(
-                            "Warm tier write failed: {:?}", e
-                        )))?;
-                }
-                CacheTier::Cold => {
-                    crate::cache::tier::cold::insert_demoted(key.clone(), value)
-                        .map_err(|e| CoherenceError::TierAccessFailed(format!(
-                            "Cold tier write failed: {:?}", e
-                        )))?;
-                }
-            }
-            Ok(())
-        }
-        crate::cache::coherence::WriteResponse::Conflict => {
-            // Write conflict detected by coherence protocol
-            Err(CoherenceError::WriteConflict)
-        }
+/// Serialize cache value with comprehensive envelope metadata using coherence integration
+/// 
+/// Creates a SerializationEnvelope with complete metadata for tier-aware serialization following
+/// the production pattern. Uses channel-based worker communication for exclusive coherence access.
+#[allow(dead_code)] // MESI coherence - used in protocol tier-aware serialization operations  
+pub fn serialize_tier_value_with_envelope<K, V>(
+    system: &CoherenceSystem<K, V>,
+    key: K,
+    value: V,
+    target_tier: CacheTier,
+) -> Result<SerializationEnvelope<K, V>, CoherenceError>
+where
+    K: CacheKey + Clone + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    V: CacheValue + Clone + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let sender = system.sender();
+    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request = CoherenceRequest::Serialize {
+        key,
+        value,
+        target_tier,
+        request_id,
+    };
+    
+    // Send request to worker via channel
+    sender.send_request(request)?;
+    
+    // Wait for response with timeout
+    match sender.receive_response(request_id, Duration::from_secs(5))? {
+        CoherenceResponse::SerializeSuccess { envelope, .. } => Ok(envelope),
+        CoherenceResponse::Error { error, .. } => Err(error),
+        _ => Err(CoherenceError::ProtocolViolation),
     }
 }

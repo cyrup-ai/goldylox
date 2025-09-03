@@ -76,18 +76,25 @@ pub struct PrefetchPredictor<K: CacheKey> {
     
     // Enhanced features from policy engine version for ML-based predictions and SIMD optimization
     /// Polynomial regression coefficients (updated via atomic swaps for thread safety)
+    #[allow(dead_code)] // ML system - used in machine learning regression and prefetch prediction
     regression_coefficients: std::sync::Arc<[crossbeam_utils::atomic::AtomicCell<f32>; 8]>,
     /// Prediction confidence scores per pattern type with atomic updates
+    #[allow(dead_code)] // ML system - used in machine learning confidence tracking and prediction
     confidence_scores: std::sync::Arc<[std::sync::atomic::AtomicU32; 4]>, // Sequential, Temporal, Spatial, Random
     /// SIMD-optimized prediction computation buffers (AVX2-aligned for parallel computation)
+    #[allow(dead_code)] // ML system - used in machine learning SIMD-optimized prediction computation
     prediction_buffer: [f32; 16],
     /// Feature extraction buffer for ML computations
+    #[allow(dead_code)] // ML system - used in machine learning feature extraction and prefetch prediction
     feature_buffer: [f32; 16],
     /// Prefetch success rate tracking with atomic counters
+    #[allow(dead_code)] // ML system - used in machine learning success rate tracking and adaptation
     success_tracker: EnhancedPrefetchSuccessTracker,
     /// Adaptive learning rate for online training (thread-safe atomic updates)
+    #[allow(dead_code)] // ML system - used in machine learning adaptive learning rate optimization
     learning_rate: crossbeam_utils::atomic::AtomicCell<f32>,
     /// Pattern correlation matrix for complex predictions (atomic for thread safety)
+    #[allow(dead_code)] // ML system - used in machine learning pattern correlation analysis
     correlation_matrix: std::sync::Arc<[[std::sync::atomic::AtomicU32; 4]; 4]>,
 }
 

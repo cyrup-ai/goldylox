@@ -24,6 +24,7 @@ pub struct TrendAnalyzer {
     /// Trend detection sensitivity
     sensitivity_threshold: CachePadded<AtomicU32>, // Threshold * 1000
     /// Historical trend data for analysis
+    
     trend_history: TrendHistoryBuffer,
     /// Sample count for statistical confidence calculation
     trend_samples: CachePadded<AtomicU32>,
@@ -265,7 +266,7 @@ impl TrendAnalyzer {
     }
 
     /// Compute operations per second trend direction (-100 to 100)
-    #[allow(dead_code)]
+    
     fn compute_ops_trend(&self) -> i8 {
         // Operations trend often correlates with hit rate
         (self.compute_hit_rate_trend() as f32 * 0.8) as i8

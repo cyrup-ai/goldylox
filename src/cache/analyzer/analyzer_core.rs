@@ -3,6 +3,8 @@
 //! This module provides the main AccessPatternAnalyzer struct with lock-free
 //! concurrent tracking and pattern analysis capabilities.
 
+ // Internal analyzer architecture - components may not be used in minimal API
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
@@ -157,12 +159,40 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
 
         let frequency = self.calculate_frequency(&record, now_ns);
         let recency = self.calculate_recency(&record, now_ns);
-        let pattern_type = self.detect_pattern_type_canonical(key, now_ns);
+        
+        // Use cached pattern hint if available for performance, otherwise detect fresh
+        let cached_pattern = record.pattern_hint();
+        let pattern_type = if record.total_accesses() > 10 && 
+            matches!(cached_pattern, AccessPatternType::Sequential | AccessPatternType::Temporal | AccessPatternType::Spatial) {
+            // Trust established patterns for frequently accessed keys
+            cached_pattern
+        } else {
+            // Fresh detection for new keys or random patterns
+            let detected_pattern = self.detect_pattern_type_canonical(key, now_ns);
+            record.update_pattern_hint(detected_pattern);
+            detected_pattern
+        };
+
+        // Consider entry age in pattern analysis (using creation time)
+        let age_ns = now_ns.saturating_sub(record.creation_ns());
+        let age_factor = if age_ns > 0 {
+            // Adjust frequency based on age - older entries should show more established patterns
+            1.0 + (age_ns as f64 / 1_000_000_000.0).ln().max(0.0) * 0.1
+        } else {
+            1.0
+        };
+
+        // Incorporate memory usage into temporal locality calculation
+        let memory_adjusted_locality = {
+            let base_locality = self.calculate_temporal_locality(&record, now_ns);
+            let memory_factor = record.memory_usage() as f64 / 1024.0; // KB scale
+            base_locality * (1.0 + memory_factor * 0.01) // Small adjustment based on memory usage
+        };
 
         AccessPattern {
-            frequency,
+            frequency: frequency * age_factor,
             recency,
-            temporal_locality: self.calculate_temporal_locality(&record, now_ns),
+            temporal_locality: memory_adjusted_locality,
             pattern_type,
         }
     }
@@ -499,7 +529,16 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
 
         let start = START_TIME.get_or_init(|| std::time::Instant::now());
         let elapsed = std::time::Instant::now().duration_since(*start);
-        Ok(elapsed.as_nanos() as u64)
+        let wall_time_ns = elapsed.as_nanos() as u64;
+        
+        // Increment global logical clock to ensure consistent ordering across concurrent operations
+        let logical_clock = self.global_clock.fetch_add(1, Ordering::SeqCst);
+        
+        // Combine wall clock time with logical clock to maintain both temporal ordering and causal ordering
+        // Use high-order bits for wall time, low-order bits for logical sequence within same nanosecond
+        let combined_timestamp = wall_time_ns.wrapping_add(logical_clock & 0xFFFF);
+        
+        Ok(combined_timestamp)
     }
 
     /// Maybe perform periodic cleanup

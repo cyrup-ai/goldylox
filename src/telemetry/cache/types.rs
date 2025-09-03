@@ -1,7 +1,5 @@
 //! Cache measurement types and error definitions
 
-/// Re-export CacheOperationError from the consolidated traits module
-pub use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Performance measurement types
 #[derive(Debug, Clone, Copy, Default)]

@@ -18,6 +18,5 @@
 // - ValueCharacteristics -> crate::cache::coordinator::tier_operations::ValueCharacteristics  
 // - UnifiedCacheManager -> crate::cache::coordinator::unified_manager::UnifiedCacheManager
 // - UnifiedStats -> crate::telemetry::unified_stats::UnifiedStats
-// Re-export from correct locations
-pub use crate::cache::types::{AccessPath, PlacementDecision};
+// Remove unused re-exports per HIGHLANDER RULES
 // PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer

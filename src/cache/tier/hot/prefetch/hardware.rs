@@ -17,7 +17,7 @@ impl HardwarePrefetcher {
     #[inline(always)]
     pub fn prefetch_for_access<K: CacheKey, V: CacheValue>(
         key: &K,
-        entries: &[CacheSlot<K, V>; 256],
+        entries: &[CacheSlot<K, V>],
     ) {
         #[cfg(target_arch = "x86_64")]
         unsafe {
@@ -26,7 +26,7 @@ impl HardwarePrefetcher {
             let key_hash = key
                 .fast_hash(&hash_context)
                 .wrapping_mul(0x9e3779b97f4a7c15);
-            let slot_idx = (key_hash as usize) & 255;
+            let slot_idx = (key_hash as usize) % entries.len();
 
             // Prefetch cache lines
             let slot_ptr = &entries[slot_idx] as *const CacheSlot<K, V>;
@@ -35,7 +35,7 @@ impl HardwarePrefetcher {
             _mm_prefetch::<{ _MM_HINT_T0 }>(slot_ptr as *const i8);
 
             // Prefetch adjacent slots for spatial locality
-            if slot_idx + 1 < 256 {
+            if slot_idx + 1 < entries.len() {
                 let next_slot_ptr = &entries[slot_idx + 1] as *const CacheSlot<K, V>;
                 _mm_prefetch::<{ _MM_HINT_T1 }>(next_slot_ptr as *const i8);
             }
@@ -52,14 +52,14 @@ impl HardwarePrefetcher {
     #[inline(always)]
     pub fn prefetch_batch<K: CacheKey, V: CacheValue>(
         slot_indices: &[usize],
-        entries: &[CacheSlot<K, V>; 256],
+        entries: &[CacheSlot<K, V>],
     ) {
         #[cfg(target_arch = "x86_64")]
         unsafe {
             for &slot_idx in slot_indices.iter().take(8) {
                 // Limit to 8 prefetches
-                if slot_idx < 256 {
-                    let slot_ptr = &entries[slot_idx] as *const CacheSlot;
+                if slot_idx < entries.len() {
+                    let slot_ptr = &entries[slot_idx] as *const CacheSlot<K, V>;
                     _mm_prefetch::<{ _MM_HINT_T0 }>(slot_ptr as *const i8);
                 }
             }

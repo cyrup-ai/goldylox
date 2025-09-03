@@ -123,16 +123,22 @@ pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serd
 #[derive(Debug, Clone)]
 pub struct TaskInfo<K: CacheKey> {
     /// Task ID
+    
     id: u64,
     /// Task type description
+    
     task_type: String,
     /// Task priority level
+    
     priority: u16,
     /// Start time
+    
     started_at: Instant,
     /// Estimated completion time
+    
     estimated_completion: Option<Instant>,
     /// Associated cache keys
+    
     keys: Vec<K>, // Generic keys for tracking
 }
 
@@ -168,14 +174,19 @@ pub struct TaskExecutionContext<K: CacheKey, V: CacheValue> {
 #[derive(Debug, Clone)]
 pub struct TaskMetadata {
     /// Task type description
+    
     task_type: String,
     /// Priority level
+    
     priority: u16,
     /// Expected duration
+    
     expected_duration: Duration,
     /// Retry count
+    
     retry_count: u32,
     /// NUMA node preference
+    
     numa_node: Option<usize>,
 }
 

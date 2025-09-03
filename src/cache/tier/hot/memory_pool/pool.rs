@@ -3,7 +3,6 @@
 //! This module provides the main MemoryPool struct with lock-free allocation,
 //! slot management, and memory tracking capabilities.
 
-use std::mem::MaybeUninit;
 
 use crate::cache::config::types::HotTierConfig;
 use super::statistics::MemoryPoolStats;
@@ -15,9 +14,9 @@ use crate::cache::traits::{CacheKey, CacheValue};
 #[repr(align(64))]
 pub struct MemoryPool<K: CacheKey, V: CacheValue> {
     /// Cache entries (SIMD-aligned for vectorized operations)
-    pub entries: Box<[CacheSlot<K, V>; 256]>, // Power of 2 for fast modulo via bit mask
+    pub entries: Vec<CacheSlot<K, V>>,
     /// Metadata array for SIMD parallel searches
-    pub metadata: Box<[SlotMetadata; 256]>,
+    pub metadata: Vec<SlotMetadata>,
     /// Free slot stack for efficient allocation
     free_slots: Vec<usize>,
     /// Cache mask for fast modulo (capacity - 1)
@@ -31,33 +30,17 @@ impl<K: CacheKey + Default, V: CacheValue> MemoryPool<K, V> {
     pub fn new(config: &HotTierConfig) -> Self {
         // Ensure capacity is power of 2 for fast modulo
         let capacity = config.max_entries.next_power_of_two() as usize;
-        assert!(
-            capacity <= 256,
-            "Hot tier capacity must be <= 256 for SIMD optimization"
-        );
 
-        // Initialize SIMD-aligned storage
-        let entries = {
-            let mut entries: Box<[MaybeUninit<CacheSlot<K, V>>; 256]> =
-                Box::new(unsafe { MaybeUninit::uninit().assume_init() });
+        // Initialize dynamic SIMD-aligned storage
+        let mut entries = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            entries.push(CacheSlot::<K, V>::empty());
+        }
 
-            for entry in entries.iter_mut() {
-                entry.write(CacheSlot::<K, V>::empty());
-            }
-
-            unsafe { std::mem::transmute(entries) }
-        };
-
-        let metadata = {
-            let mut metadata: Box<[MaybeUninit<SlotMetadata>; 256]> =
-                Box::new(unsafe { MaybeUninit::uninit().assume_init() });
-
-            for meta in metadata.iter_mut() {
-                meta.write(SlotMetadata::empty());
-            }
-
-            unsafe { std::mem::transmute(metadata) }
-        };
+        let mut metadata = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            metadata.push(SlotMetadata::empty());
+        }
 
         // Initialize free slots stack
         let free_slots: Vec<usize> = (0..capacity).collect();

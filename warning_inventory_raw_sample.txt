@@ -1,0 +1,50 @@
+warning: multiple fields are never read
+  --> src/cache/coherence/statistics/core_statistics.rs:14:9
+   |
+13 | pub struct CoherenceStatisticsSnapshot {
+   |            --------------------------- fields in this struct
+14 |     pub total_transitions: u64,
+   |         ^^^^^^^^^^^^^^^^^
+15 |     pub invalidations_sent: u64,
+   |         ^^^^^^^^^^^^^^^^^^
+16 |     pub invalidations_received: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^^^
+17 |     pub writebacks_performed: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^
+18 |     pub coherence_overhead_ns: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^^
+19 |     pub protocol_violations: u32,
+   |         ^^^^^^^^^^^^^^^^^^^
+20 |     pub successful_operations: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^^
+21 |     pub failed_operations: u64,
+   |         ^^^^^^^^^^^^^^^^^
+22 |     pub avg_operation_latency_ns: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^
+23 |     pub peak_concurrent_operations: u32,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `CoherenceStatisticsSnapshot` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: methods `record_transition`, `record_overhead`, `record_violation`, `update_concurrent_operations`, `success_rate`, and `invalidation_efficiency` are never used
+   --> src/cache/coherence/statistics/core_statistics.rs:78:12
+    |
+ 54 | impl CoherenceStatistics {
+    | ------------------------ methods in this implementation
+...
+ 78 |     pub fn record_transition(&self) {
+    |            ^^^^^^^^^^^^^^^^^
+...
+ 98 |     pub fn record_overhead(&self, overhead_ns: u64) {
+    |            ^^^^^^^^^^^^^^^
+...
+104 |     pub fn record_violation(&self) {
+    |            ^^^^^^^^^^^^^^^^
+...
+132 |     pub fn update_concurrent_operations(&self, count: u32) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+157 |     pub fn success_rate(&self) -> f64 {
+    |            ^^^^^^^^^^^^
+...

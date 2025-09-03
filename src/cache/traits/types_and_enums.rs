@@ -3,6 +3,9 @@
 //! This module contains all the supporting types, enumerations, and data structures
 //! that provide configuration and metadata for the cache system.
 
+#![allow(dead_code)] // Cache traits - comprehensive type system for all cache variants
+ // Internal types and enums - many may not be used in minimal API
+
 use std::time::{Duration, Instant};
 
 use super::supporting_types::CompressionAlgorithm;

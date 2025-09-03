@@ -87,15 +87,7 @@ pub struct ColdTierConfig {
     pub _padding: [u8; 2],
 }
 
-/// Alert thresholds configuration
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct AlertThresholdsConfig {
-    pub min_hit_rate_x1000: u32,
-    pub max_access_time_ns: u32,
-    pub max_memory_bytes: u64,
-    pub min_ops_per_second_x100: u32,
-    pub max_error_rate_x1000: u32,
-}
+
 
 /// Monitoring configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +97,6 @@ pub struct MonitoringConfig {
     pub max_history_samples: u32,
     pub enable_alerts: bool,
     pub enable_tracing: bool,
-    pub alert_thresholds: AlertThresholdsConfig,
     pub metrics_frequency_hz: u16,
     #[serde(skip)]
     pub _padding: [u8; 4],
@@ -186,6 +177,7 @@ pub struct CacheConfig {
 }
 
 /// Configuration error types
+#[allow(dead_code)] // Configuration system - used in config validation and error handling
 #[derive(Debug, Clone)]
 pub enum ConfigError {
     InvalidValue(String),
@@ -312,17 +304,7 @@ impl Default for ColdTierConfig {
     }
 }
 
-impl Default for AlertThresholdsConfig {
-    fn default() -> Self {
-        Self {
-            min_hit_rate_x1000: 70_000,
-            max_access_time_ns: 1_000_000,
-            max_memory_bytes: 100 * 1024 * 1024,
-            min_ops_per_second_x100: 10_000,
-            max_error_rate_x1000: 5_000,
-        }
-    }
-}
+
 
 impl Default for MonitoringConfig {
     fn default() -> Self {
@@ -332,7 +314,6 @@ impl Default for MonitoringConfig {
             max_history_samples: 1024,
             enable_alerts: true,
             enable_tracing: false,
-            alert_thresholds: AlertThresholdsConfig::default(),
             metrics_frequency_hz: 100,
             _padding: [0; 4],
         }
@@ -404,6 +385,7 @@ impl Default for CacheConfig {
 
 impl MemoryConfig {
     /// Validate memory configuration parameters
+    #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate threshold ordering and ranges
         if !(0.0..=1.0).contains(&self.low_pressure_threshold) {
@@ -499,6 +481,7 @@ impl MemoryConfig {
 
 impl CacheConfig {
     /// Validate entire cache configuration
+    #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate memory configuration
         self.memory_config.validate()?;
@@ -509,6 +492,7 @@ impl CacheConfig {
     }
 
     /// Create high-performance configuration
+    #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn high_performance() -> Self {
         Self {
             hot_tier: HotTierConfig {
@@ -535,6 +519,7 @@ impl CacheConfig {
     }
 
     /// Create low-memory configuration
+    #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn low_memory() -> Self {
         Self {
             hot_tier: HotTierConfig {

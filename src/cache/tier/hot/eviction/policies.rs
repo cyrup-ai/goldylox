@@ -17,7 +17,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find LRU eviction candidate using SIMD parallel search
     pub fn find_lru_candidate(
         &self,
-        metadata: &[SlotMetadata; 256],
+        metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
     ) -> Option<EvictionCandidate<K, V>> {
         #[cfg(target_arch = "x86_64")]
@@ -74,7 +74,8 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             let mut oldest_slot = 0;
 
             // Fallback linear search
-            for slot_idx in 0..256 {
+            let capacity = metadata.len();
+            for slot_idx in 0..capacity {
                 if metadata[slot_idx].is_occupied()
                     && lru_tracker.timestamps[slot_idx] < oldest_time
                 {
@@ -97,7 +98,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     }
 
     /// Find LFU eviction candidate
-    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata; 256]) -> Option<EvictionCandidate<K, V>> {
+    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata]) -> Option<EvictionCandidate<K, V>> {
         let mut lowest_count = u8::MAX;
         let mut lowest_slot = 0;
 
@@ -124,7 +125,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find ARC (Adaptive Replacement Cache) eviction candidate
     pub fn find_arc_candidate(
         &self,
-        metadata: &[SlotMetadata; 256],
+        metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
     ) -> Option<EvictionCandidate<K, V>> {

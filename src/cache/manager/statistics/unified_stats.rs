@@ -3,8 +3,7 @@
 //! UnifiedCacheStatistics moved to canonical location: crate::telemetry::unified_stats::UnifiedCacheStatistics
 //! Use the canonical implementation with comprehensive metrics and performance tracking.
 
-// Re-export canonical types for backward compatibility
-pub use crate::telemetry::unified_stats::{CachePerformanceMetrics, UnifiedCacheStatistics};
+// Canonical types available at: crate::telemetry::unified_stats::{CachePerformanceMetrics, UnifiedCacheStatistics}
 
 // Duplicate impl block removed - all methods available in canonical location:
 // crate::telemetry::unified_stats::UnifiedCacheStatistics

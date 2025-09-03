@@ -3,6 +3,8 @@
 //! This module provides comprehensive generic cache data structures
 //! that can be used for any key-value caching scenario.
 
+ // Internal types architecture - components may not be used in minimal API
+
 // Module declarations
 pub mod atomic;
 pub mod batch_operations;
@@ -10,6 +12,7 @@ pub mod core_types;
 pub mod error_types;
 pub mod eviction;
 pub mod performance;
+pub mod performance_thresholds;
 pub mod performance_tools;
 pub mod results;
 pub mod simd;
@@ -17,10 +20,8 @@ pub mod statistics;
 
 // Re-export main types
 pub use atomic::timestamp_nanos;
-pub use error_types::HitStatus; // Canonical location  
-pub use results::CacheResult;
+ // Canonical location  
 pub use statistics::tier_stats::TierStatistics;
-pub use crate::cache::worker::types::StatUpdate;
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -51,10 +52,13 @@ impl Default for CacheTier {
 pub struct AccessPath {
     // Recording fields for tier access history
     /// Tiers accessed in order
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub tiers_accessed: Vec<CacheTier>,
     /// Total access time in nanoseconds
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub total_time_ns: u64,
     /// Cache hits by tier
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub hits_by_tier: Vec<(CacheTier, bool)>,
     
     // Analysis fields for pattern detection
@@ -65,6 +69,7 @@ pub struct AccessPath {
     /// Whether cold tier was tried
     pub tried_cold: bool,
     /// Start time for latency tracking
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub start_time: Instant,
 }
 
@@ -83,6 +88,7 @@ impl AccessPath {
     }
 
     /// Record tier access
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub fn record_access(&mut self, tier: CacheTier, hit: bool, time_ns: u64) {
         self.tiers_accessed.push(tier);
         self.hits_by_tier.push((tier, hit));
@@ -104,6 +110,7 @@ impl AccessPath {
     }
 
     /// Get recent access count
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub fn recent_access_count(&self, stats: &crate::telemetry::unified_stats::UnifiedCacheStatistics) -> u32 {
         // Get the ACTUAL total access count from the unified statistics system
         // The total_operations() method tracks all cache accesses (hits and misses)
@@ -111,6 +118,7 @@ impl AccessPath {
     }
 
     /// Calculate temporal locality score
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub fn temporal_locality_score(&self) -> f32 {
         let elapsed = self.start_time.elapsed().as_nanos() as f32;
         // Higher score for more recent access
@@ -118,6 +126,7 @@ impl AccessPath {
     }
 
     /// Calculate spatial locality score
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub fn spatial_locality_score<K: crate::cache::traits::CacheKey>(&self, analyzer: &crate::cache::analyzer::analyzer_core::AccessPatternAnalyzer<K>, key: &K) -> f32 {
         // Use the ACTUAL sophisticated spatial locality analysis from AccessPatternAnalyzer
         // The analyzer tracks spatial patterns using the is_spatial_pattern() method
@@ -127,6 +136,7 @@ impl AccessPath {
     }
 
     /// Calculate average access delay
+    #[allow(dead_code)] // Utility system - used in access pattern analysis and tier coordination
     pub fn average_access_delay(&self) -> f32 {
         let elapsed_ns = self.start_time.elapsed().as_nanos() as f32;
         let tier_count = [self.tried_hot, self.tried_warm, self.tried_cold]
@@ -150,11 +160,13 @@ pub struct PlacementDecision {
     /// Additional tiers for replication
     pub replication_tiers: Vec<CacheTier>,
     /// Confidence score (0.0-1.0)
+    #[allow(dead_code)] // Utility system - used in placement decision analysis and tier coordination
     pub confidence: f32,
 }
 
 impl PlacementDecision {
     /// Create placement decision for specific tier
+    #[allow(dead_code)] // Utility system - used in placement decision analysis and tier coordination
     pub fn for_tier(tier: CacheTier) -> Self {
         Self {
             primary_tier: tier,

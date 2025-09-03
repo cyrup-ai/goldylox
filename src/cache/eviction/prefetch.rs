@@ -18,22 +18,26 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 pub use crate::cache::tier::hot::prefetch::core::PrefetchPredictor;
 
 /// Eviction-specific prefetch adapter functions
+#[allow(dead_code)] // Prefetch system - adapter used in eviction-specific prefetch operations
 pub struct EvictionPrefetchAdapter;
 
 impl EvictionPrefetchAdapter {
     /// Create new PrefetchPredictor from cache configuration (eviction compatibility)
+    #[allow(dead_code)] // Prefetch system - predictor factory used in eviction-specific initialization
     pub fn new_predictor<K: CacheKey>(_config: &CacheConfig) -> Result<PrefetchPredictor<K>, CacheOperationError> {
         let prefetch_config = crate::cache::tier::hot::prefetch::PrefetchConfig::default();
         Ok(PrefetchPredictor::new(prefetch_config))
     }
     
     /// Record access event for pattern learning (eviction compatibility)
+    #[allow(dead_code)] // Prefetch system - access recording used in pattern analysis
     pub fn record_access_event<K: CacheKey>(predictor: &mut PrefetchPredictor<K>, event: &AccessEvent<K>) {
         // Convert AccessEvent to the format expected by canonical predictor
         predictor.record_access(&event.key, event.timestamp, 0); // Default context hash
     }
     
     /// Execute prefetch operations and return eviction-specific results
+    #[allow(dead_code)] // Prefetch system - execution used in prefetch operation processing
     pub fn execute_prefetch<K: CacheKey>(
         predictor: &mut PrefetchPredictor<K>, 
         requests: &[PrefetchRequest<K>]
@@ -63,6 +67,7 @@ impl EvictionPrefetchAdapter {
     }
     
     /// Get prefetch metrics (eviction compatibility) - returns canonical enhanced PrefetchStats
+    #[allow(dead_code)] // Prefetch system - metrics used in performance monitoring
     pub fn get_metrics<K: CacheKey>(predictor: &PrefetchPredictor<K>) -> PrefetchStats {
         let stats = predictor.get_stats();
         PrefetchStats {
@@ -85,6 +90,7 @@ impl EvictionPrefetchAdapter {
     }
     
     /// Shutdown predictor (eviction compatibility)
+    #[allow(dead_code)] // Prefetch system - shutdown used in graceful cleanup
     pub fn shutdown<K: CacheKey>(predictor: &mut PrefetchPredictor<K>) -> Result<(), CacheOperationError> {
         // Clear predictor state for clean shutdown
         predictor.clear();

@@ -16,6 +16,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
     PersistentColdTier<K, V>
 {
     /// Read data from storage using metadata
+    #[allow(dead_code)] // Cold tier - read_from_storage used in cold tier data retrieval
     pub fn read_from_storage(&self, _key: &K, metadata: &IndexEntry) -> io::Result<V> {
         // Read compressed data from memory-mapped file
         let compressed_data = self.read_compressed_data(metadata)?;

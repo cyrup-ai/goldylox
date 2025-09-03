@@ -12,18 +12,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[repr(align(64))]
 pub struct SimdLruTracker {
     /// Access order timestamps (SIMD-parallel updates)
-    pub timestamps: Box<[u64; 256]>,
+    pub timestamps: Vec<u64>,
     /// Current time counter
     time_counter: AtomicU64,
     /// SIMD work buffer for vectorized operations
+    
     simd_buffer: [u64; 8], // 8 u64s = 512 bits (AVX-512 ready)
 }
 
 impl SimdLruTracker {
-    /// Create new SIMD LRU tracker
-    pub fn new() -> Self {
+    /// Create new SIMD LRU tracker with specified capacity
+    pub fn new(capacity: usize) -> Self {
         Self {
-            timestamps: Box::new([0; 256]),
+            timestamps: vec![0; capacity],
             time_counter: AtomicU64::new(1),
             simd_buffer: [0; 8],
         }
@@ -32,7 +33,7 @@ impl SimdLruTracker {
     /// Record access with atomic timestamp update
     #[inline(always)]
     pub fn record_access(&mut self, slot_index: usize) {
-        if slot_index < 256 {
+        if slot_index < self.timestamps.len() {
             let timestamp = self.time_counter.fetch_add(1, Ordering::Relaxed);
             self.timestamps[slot_index] = timestamp;
         }
@@ -41,7 +42,7 @@ impl SimdLruTracker {
     /// Get access timestamp for slot
     #[inline(always)]
     pub fn get_timestamp(&self, slot_index: usize) -> u64 {
-        if slot_index < 256 {
+        if slot_index < self.timestamps.len() {
             self.timestamps[slot_index]
         } else {
             0
@@ -88,7 +89,7 @@ impl SimdLruTracker {
 
                     // Update actual timestamps
                     for (i, &slot_idx) in chunk.iter().enumerate() {
-                        if slot_idx < 256 {
+                        if slot_idx < self.timestamps.len() {
                             self.timestamps[slot_idx] = self.simd_buffer[i];
                         }
                     }
@@ -103,7 +104,7 @@ impl SimdLruTracker {
                 .time_counter
                 .fetch_add(slot_indices.len() as u64, Ordering::Relaxed);
             for (i, &slot_idx) in slot_indices.iter().enumerate() {
-                if slot_idx < 256 {
+                if slot_idx < self.timestamps.len() {
                     self.timestamps[slot_idx] = base_timestamp + i as u64;
                 }
             }
@@ -116,15 +117,17 @@ impl SimdLruTracker {
         {
             let mut oldest_time = u64::MAX;
             let mut oldest_slot = 0;
+            let capacity = self.timestamps.len();
 
             unsafe {
-                for chunk_start in (0..256).step_by(4) {
-                    // Load 4 timestamps
+                for chunk_start in (0..capacity).step_by(4) {
+                    // Load up to 4 timestamps (handle partial chunks at end)
+                    let remaining = capacity - chunk_start;
                     let timestamps = [
                         self.timestamps[chunk_start],
-                        self.timestamps[chunk_start + 1],
-                        self.timestamps[chunk_start + 2],
-                        self.timestamps[chunk_start + 3],
+                        if remaining > 1 { self.timestamps[chunk_start + 1] } else { u64::MAX },
+                        if remaining > 2 { self.timestamps[chunk_start + 2] } else { u64::MAX },
+                        if remaining > 3 { self.timestamps[chunk_start + 3] } else { u64::MAX },
                     ];
 
                     let times_vec = _mm256_loadu_si256(timestamps.as_ptr() as *const __m256i);
@@ -134,8 +137,9 @@ impl SimdLruTracker {
                     let comparison = _mm256_cmpgt_epi64(current_min, times_vec);
                     let mask = _mm256_movemask_epi8(comparison);
 
-                    // Check each slot in this chunk
-                    for i in 0..4 {
+                    // Check each slot in this chunk (only up to remaining slots)
+                    let chunk_size = std::cmp::min(4, remaining);
+                    for i in 0..chunk_size {
                         if (mask >> (i * 8)) & 0xFF != 0 && timestamps[i] < oldest_time {
                             oldest_time = timestamps[i];
                             oldest_slot = chunk_start + i;

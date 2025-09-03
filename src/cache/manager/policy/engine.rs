@@ -4,4 +4,3 @@
 //! CachePolicyEngine implementation from the eviction module.
 
 // Re-export the feature-rich CachePolicyEngine implementation
-pub use crate::cache::eviction::policy_engine::CachePolicyEngine;

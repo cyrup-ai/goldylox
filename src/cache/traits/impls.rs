@@ -3,6 +3,8 @@
 //! This module provides clean implementations that work with our simplified traits.
 //! All infrastructure concerns are handled by CacheEntry<K,V>.
 
+ // Internal trait implementations - may not be used in minimal API
+
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 

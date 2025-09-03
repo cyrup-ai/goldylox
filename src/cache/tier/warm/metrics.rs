@@ -107,7 +107,6 @@ pub enum OperationType {
 }
 
 // TierStatsSnapshot moved to canonical location: crate::cache::tier::warm::monitoring::types::TierStatsSnapshot
-pub use crate::cache::tier::warm::monitoring::types::TierStatsSnapshot;
 
 /// Frequency trend analysis for access patterns
 pub enum FrequencyTrend {

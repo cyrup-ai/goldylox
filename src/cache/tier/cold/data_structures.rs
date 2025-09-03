@@ -16,19 +16,23 @@ use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use memmap2::MmapMut;
 
-use crate::cache::config::ColdTierConfig;
+use crate::cache::config::types::ColdTierConfig;
 use crate::cache::tier::cold::sync::SyncStatsSnapshot;
 use crate::cache::traits::*;
 use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
 
 /// Binary format constants for cache value serialization
 /// These constants define a stable, versioned binary format for persistent storage
+#[allow(dead_code)] // Cold tier - magic header used in serialization format
 pub const CACHE_VALUE_MAGIC: &[u8; 4] = b"BLZ1";
+#[allow(dead_code)] // Cold tier - version field used in serialization format  
 pub const CACHE_VALUE_VERSION: u8 = 0x01;
+#[allow(dead_code)] // Cold tier - header size used in compression calculations
 pub const HEADER_SIZE: usize = 16; // Magic(4) + Version(1) + Compression(1) + Reserved(2) + Timestamp(8)
 
 /// Compression algorithm types for the compression engine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Cold tier - complete compression algorithm support
 pub enum CompressionAlgorithm {
     None,
     Lz4,
@@ -101,25 +105,33 @@ pub struct StorageManager {
 #[derive(Debug)]
 pub struct CompressionEngine {
     /// Current compression algorithm
+    #[allow(dead_code)] // Cold tier - algorithm selection used in compression engine core
     pub algorithm: AtomicCell<CompressionAlgorithm>,
     /// Compression statistics
     pub compression_stats: CompressionStats,
     /// Per-algorithm performance metrics (thread-safe)
+    #[allow(dead_code)] // Cold tier - metrics tracking used in adaptive compression selection
     pub algorithm_metrics: DashMap<CompressionAlgorithm, AlgorithmMetrics>,
     /// Adaptive compression thresholds
+    #[allow(dead_code)] // Cold tier - thresholds used in adaptive compression decisions
     pub adaptive_thresholds: AdaptiveThresholds,
     /// Adaptation coordination counter
+    #[allow(dead_code)] // Cold tier - counter used in compression algorithm adaptation
     pub adaptation_counter: AtomicU64,
     /// Last adaptation timestamp (nanoseconds)
+    #[allow(dead_code)] // Cold tier - timestamp used in compression algorithm adaptation
     pub last_adaptation: AtomicU64,
     /// Compression level for algorithms that support it
+    #[allow(dead_code)] // Cold tier - level used in compression configuration
     pub compression_level: AtomicU8,
     /// Fast mode setting for performance optimization
+    #[allow(dead_code)] // Cold tier - fast mode used in compression performance optimization
     pub fast_mode: AtomicBool,
 }
 
 /// Compression result with comprehensive metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Cold tier - compression result used in serialization operations
 pub struct CompressionResult {
     /// Compressed data
     pub data: Vec<u8>,
@@ -137,6 +149,7 @@ pub struct CompressionResult {
 
 /// Decompression result with metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Cold tier - decompression result used in deserialization operations
 pub struct DecompressionResult {
     /// Decompressed data
     pub data: Vec<u8>,
@@ -150,12 +163,16 @@ pub struct DecompressionResult {
 #[derive(Debug)]
 pub struct MetadataIndex<K: CacheKey> {
     /// In-memory index (key -> file offset mapping)
+    #[allow(dead_code)] // Cold tier - key index used in metadata lookup operations
     pub key_index: HashMap<ColdCacheKey<K>, IndexEntry>,
     /// Bloom filter for fast negative lookups
+    #[allow(dead_code)] // Cold tier - bloom filter used in fast negative lookup optimization
     pub bloom_filter: BloomFilter<K>,
     /// Index modification tracking
+    #[allow(dead_code)] // Cold tier - dirty entries tracking used in index synchronization
     pub dirty_entries: AtomicU32,
     /// Last index sync timestamp
+    #[allow(dead_code)] // Cold tier - sync timestamp used in index persistence
     pub last_sync_ns: AtomicU64,
 }
 
@@ -163,15 +180,21 @@ pub struct MetadataIndex<K: CacheKey> {
 #[derive(Debug)]
 pub struct CompactionSystem {
     /// Compaction task queue
+    #[allow(dead_code)] // Cold tier - compaction channels used in background file optimization
     pub compaction_tx: Sender<CompactionTask>,
+    #[allow(dead_code)] // Cold tier - compaction channels used in background file optimization
     pub compaction_rx: Receiver<CompactionTask>,
     /// Compaction state
+    #[allow(dead_code)] // Cold tier - state tracking used in compaction process monitoring
     pub compaction_state: CompactionState,
     /// Last compaction timestamp
+    #[allow(dead_code)] // Cold tier - timestamp used in compaction scheduling
     pub last_compaction_ns: AtomicU64,
     /// Compaction thread handle
+    #[allow(dead_code)] // Cold tier - thread handle used in background compaction management
     pub compaction_handle: Option<std::thread::JoinHandle<()>>,
     /// Last checkpoint snapshot
+    #[allow(dead_code)] // Cold tier - checkpoint used in compaction recovery
     pub last_checkpoint: Option<SyncStatsSnapshot>,
 }
 
@@ -284,16 +307,22 @@ pub struct BloomFilter<K: CacheKey> {
 #[derive(Debug)]
 pub struct CompressionStats {
     /// Total bytes compressed
+    #[allow(dead_code)] // Cold tier - compression statistics used in performance monitoring
     pub total_compressed: AtomicU64,
     /// Total bytes uncompressed
+    #[allow(dead_code)] // Cold tier - compression statistics used in performance monitoring
     pub total_uncompressed: AtomicU64,
     /// Compression operations count
+    #[allow(dead_code)] // Cold tier - operation counters used in statistics reporting
     pub compression_ops: AtomicU64,
     /// Decompression operations count
+    #[allow(dead_code)] // Cold tier - operation counters used in statistics reporting
     pub decompression_ops: AtomicU64,
     /// Total compression time
+    #[allow(dead_code)] // Cold tier - timing metrics used in performance analysis
     pub total_compression_time_ns: AtomicU64,
     /// Total decompression time
+    #[allow(dead_code)] // Cold tier - timing metrics used in performance analysis
     pub total_decompression_time_ns: AtomicU64,
 }
 
@@ -318,19 +347,19 @@ pub struct AlgorithmMetrics {
 #[derive(Debug)]
 pub struct AdaptiveThresholds {
     /// Minimum size for compression
-    pub min_compression_size: u32,
-    /// Compression ratio threshold
-    pub min_compression_ratio: f32,
-    /// Speed threshold for algorithm selection
-    pub speed_threshold: f64,
+    pub min_compression_size: AtomicU32,
+    /// Compression ratio threshold (stored as bits)
+    pub min_compression_ratio: AtomicU32,
+    /// Speed threshold for algorithm selection (stored as bits)
+    pub speed_threshold: AtomicU64,
 }
 
 impl Default for AdaptiveThresholds {
     fn default() -> Self {
         Self {
-            min_compression_size: 512,
-            min_compression_ratio: 0.8,
-            speed_threshold: 100_000_000.0, // 100 MB/s
+            min_compression_size: AtomicU32::new(512),
+            min_compression_ratio: AtomicU32::new(0.8_f32.to_bits()),
+            speed_threshold: AtomicU64::new(100_000_000.0_f64.to_bits()), // 100 MB/s
         }
     }
 }

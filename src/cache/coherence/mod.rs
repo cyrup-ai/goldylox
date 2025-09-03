@@ -10,33 +10,27 @@ pub mod protocol;
 pub mod state_management;
 pub mod statistics;
 pub mod write_propagation;
+pub mod worker;
 
-// Re-export main types for convenience
-pub use communication::{
-    CoherenceError, CoherenceMessage, CommunicationHub, ExclusiveResponse, MessageStatistics,
-    MessageStatisticsSnapshot, ReadResponse, WriteResponse,
+// Worker types available through direct submodule access only  
+pub use data_structures::{CacheTier, ProtocolConfiguration};
+// Worker manager and protocol API exports removed - not used in current implementation
+
+
+// Internal types remain accessible within coherence module but not exported
+pub(crate) use communication::{
+    CoherenceError, CoherenceMessage,
 };
-pub use data_structures::{
-    CacheLineState, CacheTier, CoherenceController, CoherenceKey, CoherenceMetadata,
-    InvalidationReason, MesiState, ProtocolConfiguration,
+pub(crate) use data_structures::{
+    CacheLineState, CoherenceController, CoherenceKey,
+    InvalidationReason, MesiState,
 };
-pub use invalidation::{
-    InvalidationConfig, InvalidationManager, InvalidationPriority, InvalidationRequest,
-    InvalidationResult, InvalidationStatistics, InvalidationStatisticsSnapshot,
+pub(crate) use invalidation::InvalidationStatistics;
+// Remove unused protocol functions
+pub(crate) use state_management::{
+    StateTransitionRequest, TransitionReason,
 };
-// Re-export protocol implementation and global functions
-pub use protocol::{coherent_read, coherent_write, init_coherence_controller};
-pub use state_management::{
-    StateTransitionRequest, StateTransitionValidator, TransitionReason, TransitionResult,
-    TransitionStatistics, TransitionStatisticsSnapshot, ViolationDetector,
-    ViolationStatisticsSnapshot,
+pub(crate) use statistics::{
+    CoherenceStatistics, CoherenceStatisticsSnapshot,
 };
-pub use statistics::{
-    CoherencePerformanceMetrics, CoherenceStatistics, CoherenceStatisticsSnapshot,
-    OperationMetrics, TierCoherenceStats, TierSpecificStats,
-};
-pub use write_propagation::{
-    PropagationConfig, PropagationPolicy, PropagationStatistics, PropagationStatisticsSnapshot,
-    WorkerChannels, WorkerHealth, WriteBackCompletion, WriteBackRequest, WriteBackResult,
-    WriteBackTask, WritePriority, WritePropagationSystem,
-};
+// Remove unused write propagation imports

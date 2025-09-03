@@ -7,5 +7,3 @@ pub mod candidate;
 pub mod selector;
 
 // Re-export main types
-pub use candidate::{CandidateMetadata, EvictionCandidate};
-pub use selector::{CandidateAnalysis, EvictionSelector, SelectorConfig};

@@ -5,7 +5,6 @@
 
 
 
-pub use crate::cache::traits::ErrorCategory;
 pub use crate::cache::types::error_types::HitStatus; // Canonical location
 use crate::cache::traits::*;
 
@@ -283,7 +282,6 @@ impl From<CacheError> for CacheOperationError {
 // Use the enhanced canonical implementation with HashMap-based indexing for O(1) key lookup,
 // TimedResult wrapper for precise per-operation timing, comprehensive batch analysis methods,
 // and production-ready timing infrastructure that supports parallel execution metrics
-pub use crate::cache::types::batch_operations::BatchResult;
 
 impl From<crate::cache::traits::types_and_enums::CacheOperationError> for CacheError {
     fn from(error: crate::cache::traits::types_and_enums::CacheOperationError) -> Self {

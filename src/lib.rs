@@ -14,11 +14,14 @@
 //! - **Compression support**: LZ4 and Zstd for cold tier storage
 //! - **Async support**: Tokio integration for async workloads
 
-pub mod cache;
-pub mod telemetry;
+// Public API modules
+pub mod goldylox;
+pub mod prelude;
 
-// REMOVED: Compatibility re-exports that hide canonical API paths
-// These re-exports enabled broken code to import via the root instead of explicit paths
-// Users must now import from canonical module paths:
-// - Use goldylox::cache::coordinator:: for coordinator functionality
-// - Use specific cache::* imports instead of wildcard re-exports
+// Internal implementation modules (crate private)
+pub(crate) mod cache;
+pub(crate) mod telemetry;
+
+// Re-export the public API at the crate root for convenience
+pub use goldylox::{Goldylox, GoldyloxBuilder};
+pub use prelude::*;

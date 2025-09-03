@@ -5,7 +5,7 @@
 
 
 
-pub use crate::cache::traits::{AccessType, EvictionReason};
+pub(crate) use crate::cache::traits::AccessType;
 
 /// Eviction policy types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,17 +62,23 @@ pub struct EvictionMetrics {
 }
 
 // Re-export canonical EvictionConfig from warm tier
-pub use crate::cache::tier::warm::config::{EvictionConfig, HotTierEvictionConfig};
+pub use crate::cache::tier::warm::config::HotTierEvictionConfig;
 use crate::cache::tier::warm::eviction::types::EvictionPolicyType;
 
 /// Eviction statistics
 #[derive(Debug, Clone)]
 pub struct EvictionStats {
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub policy: EvictionPolicy,
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub total_evictions: u64,
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub hit_rate: f64,
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub avg_eviction_time_ns: u64,
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub feature_weights: FeatureWeights,
+    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub learning_enabled: bool,
 }
 

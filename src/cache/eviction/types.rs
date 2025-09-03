@@ -5,16 +5,20 @@
 
 
 use crate::cache::coherence::CacheTier;
-pub use crate::cache::traits::AccessType;
+pub(crate) use crate::cache::traits::AccessType;
 use crate::cache::traits::CacheKey;
 
 /// Policy type enumeration for adaptive switching
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyType {
     AdaptiveLRU,
+    #[allow(dead_code)] // Eviction policies - adaptive LFU used in policy switching
     AdaptiveLFU,
+    #[allow(dead_code)] // Eviction policies - two queue used in policy switching
     TwoQueue,
+    #[allow(dead_code)] // Eviction policies - ARC used in policy switching
     ARC,
+    #[allow(dead_code)] // Eviction policies - ML predictive used in policy switching
     MLPredictive,
 }
 
@@ -22,7 +26,9 @@ pub enum PolicyType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteStrategy {
     WriteThrough,
+    #[allow(dead_code)] // Write policies - write back used in write strategy configuration
     WriteBack,
+    #[allow(dead_code)] // Write policies - write behind used in write strategy configuration
     WriteBehind,
 }
 
@@ -30,7 +36,9 @@ pub enum WriteStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsistencyLevel {
     Eventual,
+    #[allow(dead_code)] // Write policies - strong consistency used in consistency configuration
     Strong,
+    #[allow(dead_code)] // Write policies - causal consistency used in consistency configuration
     Causal,
 }
 
@@ -84,6 +92,7 @@ impl Default for ConsistencyLevel {
 
 impl<K: CacheKey> AccessEvent<K> {
     /// Create new access event with current timestamp
+    #[allow(dead_code)] // Eviction policies - new access event used in access pattern tracking
     pub fn new(key: K, access_type: AccessType, tier: CacheTier, hit: bool) -> Self {
         static EVENT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         
@@ -101,12 +110,14 @@ impl<K: CacheKey> AccessEvent<K> {
     }
     
     /// Create event with slot index for hot tier
+    #[allow(dead_code)] // Eviction policies - with slot index used in hot tier event tracking
     pub fn with_slot_index(mut self, slot_index: usize) -> Self {
         self.slot_index = Some(slot_index);
         self
     }
     
     /// Create event with performance metrics
+    #[allow(dead_code)] // Eviction policies - with metrics used in performance event tracking
     pub fn with_metrics(mut self, latency_ns: u64, entry_size: usize) -> Self {
         self.latency_ns = latency_ns;
         self.entry_size = entry_size;
@@ -114,6 +125,7 @@ impl<K: CacheKey> AccessEvent<K> {
     }
 
     /// Create basic access event (backward compatibility)  
+    #[allow(dead_code)] // Eviction policies - new simple used in backward compatibility
     pub fn new_simple(key: K, access_type: AccessType, tier: CacheTier) -> Self {
         Self {
             event_id: 0, // No event ID for simple version

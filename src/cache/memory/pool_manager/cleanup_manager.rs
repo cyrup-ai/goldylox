@@ -16,9 +16,11 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 #[derive(Debug)]
 pub enum PoolCleanupRequest {
     EmergencyCleanup {
+        #[allow(dead_code)] // Memory management - used in pool cleanup coordination and emergency responses
         response: Sender<Result<usize, CacheOperationError>>,
     },
     TriggerDefragmentation {
+        #[allow(dead_code)] // Memory management - used in pool cleanup coordination and emergency responses
         response: Sender<Result<usize, CacheOperationError>>,
     },
 }
@@ -33,6 +35,7 @@ static POOL_COORDINATOR: AtomicPtr<PoolCoordinator> = AtomicPtr::new(std::ptr::n
 
 impl PoolCoordinator {
     /// Initialize the global coordinator
+    #[allow(dead_code)] // Memory management - used in pool cleanup coordination and emergency responses
     pub fn initialize(cleanup_sender: Sender<PoolCleanupRequest>) -> Result<(), CacheOperationError> {
         if !POOL_COORDINATOR.load(Ordering::Acquire).is_null() {
             return Ok(()); // Already initialized
@@ -67,6 +70,7 @@ impl PoolCoordinator {
 }
 
 /// Efficiency analysis request types
+#[allow(dead_code)] // Memory management - EfficiencyRequest used in pool efficiency analysis
 pub enum EfficiencyRequest {
     GetFragmentation(Sender<f32>),
     GetSnapshot(Sender<(f32, f32, f32)>),
@@ -74,6 +78,7 @@ pub enum EfficiencyRequest {
 }
 
 /// Maintenance task request
+#[allow(dead_code)] // Memory management - MaintenanceRequest used in memory maintenance coordination
 pub enum MaintenanceRequest {
     SubmitTask(crate::cache::tier::warm::maintenance::MaintenanceTask, u32, Sender<Result<(), CacheOperationError>>),
     SubmitUrgentTask(crate::cache::tier::warm::maintenance::MaintenanceTask, Sender<Result<(), CacheOperationError>>),
@@ -83,6 +88,7 @@ pub enum MaintenanceRequest {
 
 
 /// Pool cleanup manager that integrates with existing sophisticated systems
+#[allow(dead_code)] // Memory management - PoolCleanupManager used in pool cleanup coordination
 #[derive(Debug)]
 pub struct PoolCleanupManager {
     efficiency_sender: Sender<EfficiencyRequest>,
@@ -90,6 +96,7 @@ pub struct PoolCleanupManager {
 }
 
 /// Decision result from cleanup analysis
+#[allow(dead_code)] // Memory management - CompactionDecision used in memory compaction decision making
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactionDecision {
     /// Compaction is required

@@ -19,6 +19,7 @@ use super::types::{
 // complete batching and flush coordination, and production-ready error handling
 
 impl<K: crate::cache::traits::CacheKey> WriteScheduler<K> {
+    #[allow(dead_code)] // Policy management - new used in write scheduler initialization
     pub fn new() -> Self {
         Self {
             pending_writes: AtomicU32::new(0),
@@ -34,6 +35,7 @@ impl<K: crate::cache::traits::CacheKey> WriteScheduler<K> {
 // All methods available through canonical implementation with enhanced functionality
 
 impl AdaptivePolicyConfig {
+    #[allow(dead_code)] // Policy management - new used in adaptive policy configuration initialization
     pub fn new() -> Self {
         Self {
             enable_ml_prediction: AtomicBool::new(true),
@@ -45,6 +47,7 @@ impl AdaptivePolicyConfig {
 }
 
 impl BackgroundWriteCoordinator {
+    #[allow(dead_code)] // Policy management - new used in background write coordinator initialization
     pub fn new() -> Self {
         Self {
             active_writers: AtomicU32::new(0),

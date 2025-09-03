@@ -4,6 +4,8 @@
 //! policy decisions including replacement algorithms, write policies, and
 //! machine learning-based prefetch prediction.
 
+#![allow(dead_code)] // Cache policies - intelligent replacement and ML-based prediction algorithms
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::time::{Duration, Instant};
 
@@ -11,7 +13,7 @@ use crossbeam_queue::ArrayQueue;
 use crossbeam_utils::{atomic::AtomicCell, CachePadded};
 
 
-pub use crate::cache::traits::AccessType;
+pub(crate) use crate::cache::traits::AccessType;
 
 /// Multi-algorithm cache replacement policies with machine learning adaptation
 #[derive(Debug)]
@@ -45,12 +47,10 @@ pub struct ReplacementPolicies<K: crate::cache::traits::CacheKey> {
 // Use the enhanced canonical implementation with comprehensive async write-behind processing,
 // complete batching configuration, flush coordination, detailed statistics tracking,
 // and production-ready error handling with channels and background processing
-pub use crate::cache::eviction::write_policies::WritePolicyManager;
 
 // PrefetchPredictor moved to canonical location: crate::cache::tier::hot::prefetch::core::PrefetchPredictor
 // Use the enhanced canonical implementation with comprehensive pattern detection workflow,
 // performance-optimized ML regression, atomic operations, and SIMD optimizations
-pub use crate::cache::tier::hot::prefetch::core::PrefetchPredictor;
 
 /// Replacement algorithm types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +120,6 @@ pub struct WriteScheduler<K: crate::cache::traits::CacheKey> {
 
 // ThroughputMetrics moved to canonical location: crate::cache::tier::warm::metrics::ThroughputMetrics
 // Use the canonical implementation which includes all write metrics plus advanced features like peak tracking and efficiency ratios
-pub use crate::cache::tier::warm::metrics::ThroughputMetrics;
 
 /// Adaptive policy configuration
 #[derive(Debug)]
@@ -142,7 +141,7 @@ pub struct BackgroundWriteCoordinator {
 
 // Pattern analysis types moved to canonical location: crate::cache::tier::hot::prefetch::types
 // Use the canonical types from the hot tier prefetch module
-pub use crate::cache::tier::hot::prefetch::types::{AccessSequence, DetectedPattern, PrefetchRequest};
+pub use crate::cache::tier::hot::prefetch::types::AccessSequence;
 
 /// Coordinator status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

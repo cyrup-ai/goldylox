@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 #[derive(Debug)]
 pub struct PoolStatistics {
     /// Allocation counts per pool
+    #[allow(dead_code)] // Memory management - pool_allocations used in pool allocation statistics
     pub pool_allocations: [AtomicU64; 3], // Small, Medium, Large
     /// Hit rates per pool (successful allocation)
     pub pool_hit_rates: [AtomicU32; 3], // Rate * 1000
@@ -44,6 +45,7 @@ impl PoolStatistics {
         }
     }
 
+    #[allow(dead_code)] // Memory management - record_pool_allocation used in pool allocation tracking
     pub fn record_pool_allocation(&self, pool_index: usize) {
         if pool_index < 3 {
             self.pool_allocations[pool_index].fetch_add(1, Ordering::Relaxed);

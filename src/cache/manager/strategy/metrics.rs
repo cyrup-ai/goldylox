@@ -23,6 +23,8 @@ pub struct StrategyMetrics {
     /// Memory efficiency scores per strategy (x1000)
     memory_efficiency: CachePadded<[AtomicU32; 5]>,
     /// Evaluation period for strategy comparison
+    
+    #[allow(dead_code)] // Strategy management - evaluation_period used in strategy metrics evaluation timing
     evaluation_period: Duration,
     /// Last evaluation timestamp
     last_evaluation: AtomicCell<Instant>,
@@ -60,6 +62,7 @@ impl StrategyMetrics {
     }
 
     /// Get hit rate for strategy (0-1000)
+    #[allow(dead_code)] // Strategy management - hit_rate used in strategy performance evaluation
     #[inline(always)]
     pub fn hit_rate(&self, strategy: CacheStrategy) -> u32 {
         let idx = strategy.index();

@@ -28,6 +28,7 @@ impl BackgroundWorkerState {
     }
 
     /// Get worker ID
+    #[allow(dead_code)] // Background workers - worker_id used in worker identification and coordination
     #[inline(always)]
     pub fn worker_id(&self) -> u32 {
         self.worker_id

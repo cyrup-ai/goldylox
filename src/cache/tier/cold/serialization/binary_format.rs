@@ -23,7 +23,7 @@ use crate::cache::traits::CompressionAlgorithm;
 
 /// Helper function to serialize any value using bincode
 #[inline]
-#[allow(dead_code)]
+
 fn serialize_with_bincode<V: Serialize + bincode::Encode>(value: &V) -> Result<Vec<u8>, String> {
     encode_to_vec(value, config::standard()).map_err(|e| format!("Bincode serialization failed: {}", e))
 }

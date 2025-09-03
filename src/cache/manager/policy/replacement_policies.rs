@@ -20,6 +20,7 @@ use crate::cache::tier::warm::eviction::{
 
 impl<K: crate::cache::traits::CacheKey> ReplacementPolicies<K> {
     /// Create new replacement policies manager
+    #[allow(dead_code)] // Policy management - new used in replacement policies initialization
     pub fn new() -> Self {
         Self {
             active_algorithm: AtomicCell::new(ReplacementAlgorithm::LRU),
@@ -113,6 +114,7 @@ impl<K: crate::cache::traits::CacheKey> ReplacementPolicies<K> {
         }
     }
 
+    #[allow(dead_code)] // ML system - used in machine learning victim selection integration
     fn ml_select(&self, candidates: &[K]) -> Option<K> {
         // Convert to WarmCacheKey and delegate to real ML implementation
         let warm_candidates: Vec<WarmCacheKey<K>> = candidates
@@ -140,6 +142,7 @@ impl<K: crate::cache::traits::CacheKey> ReplacementPolicies<K> {
 }
 
 impl AlgorithmMetrics {
+    #[allow(dead_code)] // Policy management - new used in algorithm metrics initialization
     pub const fn new() -> Self {
         Self {
             hit_count: std::sync::atomic::AtomicU64::new(0),

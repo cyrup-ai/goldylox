@@ -16,11 +16,46 @@ use crate::cache::traits::supporting_types::HashContext;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SerdeCacheKey<T>(pub T)
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static;
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static;
+
+impl<T> Default for SerdeCacheKey<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+{
+    fn default() -> Self {
+        SerdeCacheKey(T::default())
+    }
+}
+
+impl<T> bincode::Encode for SerdeCacheKey<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + 'static,
+{
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.0.encode(encoder)
+    }
+}
+
+impl<T> bincode::Decode<()> for SerdeCacheKey<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Decode<()> + 'static,
+{
+    fn decode<D: bincode::de::Decoder<Context = ()>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let inner = T::decode(decoder)?;
+        Ok(SerdeCacheKey(inner))
+    }
+}
+
+
 
 impl<T> CacheKey for SerdeCacheKey<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
 {
     type HashContext = super::traits::impls::StandardHashContext;
     type Priority = super::traits::impls::StandardPriority;
@@ -55,11 +90,46 @@ where
 #[derive(Debug, Clone, Serialize)]
 pub struct SerdeCacheValue<T>(pub T)
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + 'static;
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static;
+
+impl<T> Default for SerdeCacheValue<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
+{
+    fn default() -> Self {
+        SerdeCacheValue(T::default())
+    }
+}
+
+impl<T> bincode::Encode for SerdeCacheValue<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + 'static,
+{
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.0.encode(encoder)
+    }
+}
+
+impl<T> bincode::Decode<()> for SerdeCacheValue<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Decode<()> + 'static,
+{
+    fn decode<D: bincode::de::Decoder<Context = ()>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let inner = T::decode(decoder)?;
+        Ok(SerdeCacheValue(inner))
+    }
+}
+
+
 
 impl<T> CacheValue for SerdeCacheValue<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
 {
     type Metadata = super::traits::metadata::CacheValueMetadata;
 
@@ -78,6 +148,7 @@ where
 }
 
 /// Helper trait for converting types to serde wrappers
+ // Helper trait - may not be used in minimal API
 pub trait ToSerdeCache {
     type Key: CacheKey;
     type Value: CacheValue;
@@ -88,7 +159,7 @@ pub trait ToSerdeCache {
 
 impl<T> ToSerdeCache for T
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
 {
     type Key = SerdeCacheKey<T>;
     type Value = SerdeCacheValue<T>;
@@ -105,7 +176,7 @@ where
 // Manual Deserialize implementations to avoid trait bound conflicts
 impl<'de, T> Deserialize<'de> for SerdeCacheKey<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -118,7 +189,7 @@ where
 
 impl<'de, T> Deserialize<'de> for SerdeCacheValue<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -128,3 +199,5 @@ where
         Ok(SerdeCacheValue(inner))
     }
 }
+
+

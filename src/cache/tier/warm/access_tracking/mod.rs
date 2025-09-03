@@ -10,12 +10,5 @@ pub mod tracker;
 pub mod types;
 
 // Re-export main types for convenience
-pub use confidence_tracker::ConfidenceTracker;
-pub use frequency_estimator::FrequencyEstimator;
-pub use pattern_classifier::TemporalPatternClassifier;
-pub use tracker::{AccessAnalysisTask, ConcurrentAccessTracker};
-pub use types::{
-    AccessContext, AccessRecord, AccessType, ClassificationParams, ConfidenceData,
-    GlobalConfidenceStats, PatternState, PatternType, TemporalPattern,
-};
-pub use crate::cache::types::error_types::HitStatus; // Canonical location
+pub use tracker::ConcurrentAccessTracker;
+ // Canonical location

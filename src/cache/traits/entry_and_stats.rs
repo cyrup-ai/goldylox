@@ -3,6 +3,8 @@
 //! This module defines traits for cache entry access, statistics collection,
 //! access pattern tracking, eviction candidate selection, and error handling.
 
+ // Internal trait definitions - may not be used in minimal API
+
 use std::fmt::Debug;
 use std::time::Instant;
 

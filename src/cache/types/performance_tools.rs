@@ -11,16 +11,16 @@ use std::arch::x86_64::*;
 // PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
 // CacheLine moved to canonical location: crate::cache::types::simd::memory::CacheLine
-// Re-export canonical implementation for backward compatibility
-pub use crate::cache::types::simd::memory::CacheLine;
 
 // SimdHasher moved to canonical location: crate::cache::types::simd::hasher::SimdHasher
 
 /// SIMD-optimized memory operations
+#[allow(dead_code)] // Utility system - used in SIMD optimization and performance tools
 pub struct SimdMemory;
 
 impl SimdMemory {
     /// Copy memory using SIMD operations
+    #[allow(dead_code)] // Utility system - used in SIMD optimization and performance tools
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     pub unsafe fn copy_simd(src: *const u8, dst: *mut u8, len: usize) {
@@ -58,6 +58,7 @@ impl SimdMemory {
     }
 
     /// Zero memory using SIMD operations
+    #[allow(dead_code)] // Utility system - used in SIMD optimization and performance tools
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     pub unsafe fn zero_simd(dst: *mut u8, len: usize) {

@@ -6,7 +6,7 @@
 use std::io;
 use std::path::Path;
 
-use crate::cache::config::ColdTierConfig;
+use crate::cache::config::types::ColdTierConfig;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::core::{CacheKey, CacheValue};

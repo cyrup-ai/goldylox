@@ -3,6 +3,8 @@
 //! This module contains all shared types, enums, and configuration
 //! structures used throughout the hot tier cache implementation.
 
+#![allow(dead_code)] // Hot tier - SIMD-optimized high-performance cache layer
+
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Search result for cache operations

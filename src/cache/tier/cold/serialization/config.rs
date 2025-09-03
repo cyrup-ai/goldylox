@@ -26,6 +26,7 @@ impl Default for SerializationConfig {
 /// Serialization engine for cache value data
 #[derive(Debug)]
 pub struct SerializationEngine {
+    
     config: SerializationConfig,
 }
 

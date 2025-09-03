@@ -3,6 +3,8 @@
 //! This module provides blazing-fast error handling with zero-allocation error propagation
 //! and intelligent recovery mechanisms for production cache systems.
 
+ // Internal error traits - may not be used in minimal API
+
 use std::fmt::Debug;
 
 use super::types_and_enums::{ErrorCategory, RecoveryHint};

@@ -82,7 +82,6 @@ pub enum CacheRequest<K: CacheKey, V: CacheValue> {
 
 /// Trait for type-erased hot tier operations
 trait HotTierOperations: std::any::Any + Send + Sync {
-    #[allow(dead_code)]
     fn shutdown(&self);
     fn as_any(&self) -> &dyn std::any::Any;
 }

@@ -5,15 +5,13 @@
 
 // Re-export the advanced monitoring system components
 pub use crate::cache::tier::warm::monitoring::memory_pressure::MemoryPressureMonitor;
-pub use crate::cache::tier::warm::monitoring::types::{MemoryAlert, PressureThresholds, MemoryMonitoringStats};
-pub use crate::cache::tier::warm::monitoring::alert_system::MemoryAlertSystem;
-pub use crate::cache::tier::warm::monitoring::usage_history::MemoryUsageHistory;
-pub use crate::cache::tier::warm::monitoring::trend_analysis::TrendAnalysis;
+pub use crate::cache::tier::warm::monitoring::types::PressureThresholds;
 
 use crate::cache::config::CacheConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Create advanced pressure monitor with configuration
+#[allow(dead_code)] // Memory management - used in pressure monitoring and threshold management
 pub fn create_advanced_pressure_monitor(config: &CacheConfig) -> Result<MemoryPressureMonitor, CacheOperationError> {
     let thresholds = PressureThresholds {
         low_pressure: config.memory_config.low_pressure_threshold,
@@ -35,12 +33,14 @@ pub fn create_advanced_pressure_monitor(config: &CacheConfig) -> Result<MemoryPr
 }
 
 /// Create advanced pressure monitor with default settings
+#[allow(dead_code)] // Memory management - used in pressure monitoring and threshold management
 pub fn create_default_pressure_monitor() -> Result<MemoryPressureMonitor, CacheOperationError> {
     let memory_limit = 1024 * 1024 * 1024; // 1GB default
     Ok(MemoryPressureMonitor::new(memory_limit))
 }
 
 /// Get system memory with cross-platform support
+#[allow(dead_code)] // Memory management - used in pressure monitoring and threshold management
 pub fn get_system_memory_with_fallback() -> u64 {
     #[cfg(target_os = "linux")]
     {

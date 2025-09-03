@@ -22,6 +22,7 @@ pub struct MemoryPoolManager {
     /// Pool selection statistics
     pool_stats: PoolStatistics,
     /// Pool configuration parameters
+    #[allow(dead_code)] // Memory management - pool_config used in memory pool configuration management
     pool_config: PoolConfiguration,
 }
 

@@ -8,12 +8,5 @@ pub mod core;
 pub mod metrics_collector;
 pub mod types;
 
-// Re-export main types and structs
-pub use core::{
-    PerformanceMonitor, PerformanceRecommendation, PerformanceReport, RecommendationCategory,
-    RecommendationPriority,
-};
+// Re-export only actually used types
 
-pub use alert_system::{AlertSystem, AlertSystemStats};
-pub use metrics_collector::{MetricsBufferStats, MetricsCollector};
-pub use types::*;

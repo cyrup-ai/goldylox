@@ -46,7 +46,7 @@ impl<V: CacheValue> TimedResult<V> {
 }
 
 /// Extension trait for Result to provide is_success method
-#[allow(dead_code)]
+
 trait ResultExt<T, E> {
     fn is_success(&self) -> bool;
 }

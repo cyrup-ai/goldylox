@@ -17,8 +17,8 @@ use crate::cache::traits::{CacheKey, CacheValue};
 pub struct WritePropagationSystem<K: CacheKey, V: CacheValue> {
     /// Write-back queue
     pub writeback_queue: SkipMap<u64, WriteBackRequest<K, V>>,
-    /// Write propagation policy
-    pub propagation_policy: PropagationPolicy,
+    /// Write propagation policy (atomic for safe runtime updates)
+    pub propagation_policy: std::sync::atomic::AtomicU8, // Encoded PropagationPolicy
     /// Background worker channels
     pub worker_channels: WorkerChannels<K, V>,
     /// Propagation statistics
@@ -26,6 +26,7 @@ pub struct WritePropagationSystem<K: CacheKey, V: CacheValue> {
     /// System configuration
     pub config: PropagationConfig,
     /// Worker health monitoring
+    #[allow(dead_code)] // Background workers - used in async task processing and worker coordination
     pub worker_health: AtomicU32, // Encoded WorkerHealth
 }
 
@@ -68,6 +69,7 @@ pub struct PropagationConfig {
     /// Batch size for bulk operations
     pub batch_size: u32,
     /// Enable adaptive policy switching
+    #[allow(dead_code)] // MESI coherence - used in adaptive policy configuration and switching logic
     pub adaptive_switching: bool,
     /// Worker thread count
     pub worker_threads: u32,
@@ -111,20 +113,3 @@ pub enum WorkerHealth {
     Failed = 3,
 }
 
-/// Snapshot of propagation statistics for monitoring
-#[derive(Debug, Clone, Copy)]
-pub struct PropagationStatisticsSnapshot {
-    pub writebacks: u64,
-    pub propagations: u64,
-    pub failed_writes: u64,
-    pub avg_write_latency_ns: u64,
-    pub peak_queue_depth: u32,
-    pub current_queue_depth: u32,
-    pub total_bytes_written: u64,
-    pub low_priority_writes: u64,
-    pub normal_priority_writes: u64,
-    pub high_priority_writes: u64,
-    pub critical_priority_writes: u64,
-    pub worker_tasks_processed: u64,
-    pub worker_errors: u64,
-}

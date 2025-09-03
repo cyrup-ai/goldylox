@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicU64;
 
 use crossbeam_utils::atomic::AtomicCell;
 
-pub use crate::cache::traits::{AccessType, EvictionReason};
 
 /// Eviction policy types for cache management - CANONICAL IMPLEMENTATION
 /// Consolidated "best of best" with all unique features from duplicates

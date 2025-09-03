@@ -3,6 +3,8 @@
 //! This module contains all the enums, structs, and configuration types
 //! used throughout the error recovery system.
 
+#![allow(dead_code)] // Error recovery - comprehensive resilience infrastructure
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::time::{Duration, Instant};
 

@@ -9,8 +9,10 @@ use crossbeam::atomic::AtomicCell;
 
 use super::types::MaintenanceStats;
 
+#[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
 #[derive(Debug)]
 pub struct BackgroundStatistics {
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     stats: MaintenanceStats,
 }
 
@@ -33,6 +35,7 @@ impl MaintenanceStats {
     }
 
     /// Get failure rate (0.0 to 1.0)
+    #[allow(dead_code)] // Background workers - failure_rate used in background operation failure analysis
     #[inline(always)]
     pub fn failure_rate(&self) -> f64 {
         let total = self.operations_executed.load(Ordering::Relaxed);

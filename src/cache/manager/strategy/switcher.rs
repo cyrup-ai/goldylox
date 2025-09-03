@@ -101,6 +101,7 @@ impl StrategySwitcher {
     }
 
     /// Get current stability ratio (0.0 = unstable, 1.0 = very stable)
+    #[allow(dead_code)] // Strategy management - stability_ratio used in strategy stability analysis
     #[inline(always)]
     pub fn stability_ratio(&self) -> f32 {
         let counter = self.stability_counter.load(Ordering::Relaxed);
@@ -108,6 +109,7 @@ impl StrategySwitcher {
     }
 
     /// Check if currently in emergency mode
+    #[allow(dead_code)] // Strategy management - is_emergency_mode used in emergency strategy detection
     #[inline(always)]
     pub fn is_emergency_mode(&self) -> bool {
         self.emergency_mode.load(Ordering::Relaxed)

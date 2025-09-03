@@ -349,6 +349,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> Ti
     }
 
     /// Get promotion statistics
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     pub fn get_statistics(&self) -> &PromotionStatistics {
         &self.promotion_stats
     }

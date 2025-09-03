@@ -7,12 +7,14 @@
 #[derive(Debug)]
 pub struct PoolConfiguration {
     /// Pool size limits (objects)
+    #[allow(dead_code)] // Memory management - size_limits used in pool size configuration management
     size_limits: [usize; 3], // Small, Medium, Large pool sizes
     /// Growth factors when expanding pools
     growth_factors: [f32; 3], // Growth multipliers
     /// Shrink thresholds (utilization percentage)
     shrink_thresholds: [u32; 3], // Percentage * 100
     /// Pool maintenance intervals (nanoseconds)
+    
     maintenance_intervals: [u64; 3],
 }
 
@@ -42,6 +44,7 @@ impl PoolConfiguration {
         }
     }
 
+    #[allow(dead_code)] // Memory management - should_grow_pool used in pool growth decision making
     pub fn should_grow_pool(&self, pool_index: usize, current_utilization: u32) -> bool {
         if pool_index >= 3 {
             return false;

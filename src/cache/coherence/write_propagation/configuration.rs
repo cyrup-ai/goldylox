@@ -7,6 +7,7 @@ use super::types::PropagationConfig;
 
 impl PropagationConfig {
     /// Default balanced configuration
+    #[allow(dead_code)] // MESI coherence - configuration used in write propagation setup
     pub fn default() -> Self {
         Self {
             writeback_delay_ns: 1_000_000_000, // 1 second

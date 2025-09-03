@@ -95,6 +95,7 @@ pub struct WarmTierCoordinator {
     /// Storage for different K,V type combinations using lock-free DashMap
     warm_tiers: DashMap<(TypeId, TypeId), Box<dyn WarmTierOperations>>,
     /// Instance counter for load balancing (if we add multiple instances later)
+    
     instance_selector: AtomicUsize,
 }
 
@@ -234,6 +235,7 @@ impl WarmTierCoordinator {
     }
 
     /// Execute cache operation via specific message types (following hot tier pattern)
+    
     fn execute_operation<K: CacheKey + 'static, V: CacheValue + Default + 'static, T: Send + 'static>(
         &self,
         _operation: impl FnOnce(&mut LockFreeWarmTier<K, V>) -> Result<T, CacheOperationError>,
@@ -247,6 +249,7 @@ impl WarmTierCoordinator {
     }
     
     /// Send a message to a tier and wait for response
+    
     fn send_message<K: CacheKey + 'static, V: CacheValue + Default + 'static, R: 'static>(
         &self,
         create_message: impl FnOnce(Sender<R>) -> WarmCacheRequest<K, V>,
@@ -601,6 +604,7 @@ pub fn get_warm_tier_type_count() -> usize {
 }
 
 /// Get ML eviction policy metrics from all warm tier instances
+#[allow(dead_code)] // ML system - used in machine learning policy metrics collection and monitoring
 pub fn get_warm_tier_ml_policies<K: CacheKey + 'static, V: CacheValue + Default + 'static>() -> Result<Vec<crate::cache::tier::warm::eviction::types::PolicyPerformanceMetrics>, CacheOperationError> {
     let coordinator = WarmTierCoordinator::get()?;
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);

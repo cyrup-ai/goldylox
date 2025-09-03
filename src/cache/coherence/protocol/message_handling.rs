@@ -3,16 +3,19 @@
 //! This module implements processing of incoming coherence messages
 //! and coordination of background operations.
 
+ // Internal protocol architecture - components may not be used in minimal API
+
 use std::time::Instant;
 
 use crate::cache::coherence::communication::{CoherenceError, CoherenceMessage};
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey};
-use crate::cache::coherence::invalidation::InvalidationPriority;
+use crate::cache::coherence::invalidation::types::InvalidationPriority;
 use crate::cache::coherence::data_structures::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned> CoherenceController<K, V> {
     /// Process pending coherence operations
+    #[allow(dead_code)] // MESI coherence - used in protocol background operation processing
     pub fn process_pending_operations(&self) {
         // Process pending invalidations
         let invalidation_messages = self.invalidation_manager.process_pending();
@@ -37,6 +40,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
     }
 
     /// Handle incoming coherence message
+    #[allow(dead_code)] // MESI coherence - used in protocol message processing and handling
     pub fn handle_coherence_message(
         &self,
         message: CoherenceMessage<K, V>,
@@ -68,6 +72,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         }
     }
 
+    #[allow(dead_code)] // MESI coherence - used in protocol exclusive access request handling
     fn handle_exclusive_request(
         &self,
         key: CoherenceKey<K>,
@@ -95,6 +100,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         Ok(())
     }
 
+    #[allow(dead_code)] // MESI coherence - used in protocol shared access request handling
     fn handle_shared_request(
         &self,
         key: CoherenceKey<K>,
@@ -113,6 +119,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         Ok(())
     }
 
+    #[allow(dead_code)] // MESI coherence - used in protocol invalidation message handling
     fn handle_invalidation_message(
         &self,
         key: CoherenceKey<K>,
@@ -125,6 +132,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
         Ok(())
     }
 
+    #[allow(dead_code)] // MESI coherence - used in protocol writeback message handling
     fn handle_writeback_message(
         &self,
         _key: CoherenceKey<K>,

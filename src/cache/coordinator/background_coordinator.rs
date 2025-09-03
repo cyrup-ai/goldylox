@@ -3,6 +3,8 @@
 //! This module manages background tasks, maintenance scheduling, and worker coordination
 //! for the unified cache system using lock-free channels and atomic state management.
 
+ // Internal coordinator architecture - components may not be used in minimal API
+
 use std::marker::PhantomData;
 
 use std::thread;
@@ -21,6 +23,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 #[derive(Debug)]
 enum TimerCommand {
     /// Schedule a task after delay
+    #[allow(dead_code)] // Background coordination - used in timer-based task scheduling and background processing
     Schedule { delay_ms: u64, task: BackgroundTask },
     /// Shutdown timer thread
     Shutdown,
@@ -30,6 +33,7 @@ enum TimerCommand {
 #[derive(Debug)]
 pub struct BackgroundCoordinator<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static, P: TaskProcessor = DefaultProcessor> {
     /// Background task queue (lock-free channel)
+    #[allow(dead_code)] // Background coordination - used in task queue management and work distribution
     task_queue: Sender<BackgroundTask>,
     /// Task receiver for processing
     task_receiver: Receiver<BackgroundTask>,
@@ -46,6 +50,7 @@ pub struct BackgroundCoordinator<K: CacheKey + Default, V: CacheValue + Default 
     /// Maintenance scheduler with atomic timing
     maintenance_scheduler: MaintenanceScheduler<K, V>,
     /// Background worker state with atomic coordination
+    #[allow(dead_code)] // Background coordination - used in worker state management and coordination
     worker_state: BackgroundWorkerState,
     /// Phantom data for generics
     _phantom: PhantomData<(K, V, P)>,
@@ -59,6 +64,7 @@ pub struct DefaultProcessor;
 
 impl DefaultProcessor {
     /// Create new default processor instance
+    #[allow(dead_code)] // Background coordination - new used in default processor initialization
     pub fn new() -> Self {
         Self
     }

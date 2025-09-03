@@ -3,6 +3,8 @@
 //! This module provides the core data structures and error types used
 //! throughout the pattern analyzer system.
 
+ // Internal analyzer architecture - components may not be used in minimal API
+
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Analyzer-specific errors
@@ -54,10 +56,14 @@ pub struct AccessPattern {
     /// Access frequency (accesses per second with decay)
     pub frequency: f64,
     /// Recency score (0.0 = old, 1.0 = recent)
+    /// Used extensively in ML eviction decisions and policy engine
+    #[allow(dead_code)]
     pub recency: f64,
     /// Temporal locality score (0.0 = no temporal pattern, 1.0 = strong temporal pattern)
     pub temporal_locality: f64,
     /// Detected pattern type
+    /// Used in complex ML prediction and criteria evaluation systems
+    #[allow(dead_code)]
     pub pattern_type: AccessPatternType,
 }
 

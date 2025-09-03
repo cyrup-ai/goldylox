@@ -38,29 +38,7 @@ pub enum AlertType {
     HighMemoryUsage,
 }
 
-/// Alert thresholds configuration
-#[derive(Debug, Clone)]
-pub struct AlertThresholds {
-    pub memory_pressure_threshold: f64,
-    pub performance_degradation_threshold: f64,
-    pub error_rate_threshold: f64,
-    pub throughput_threshold: f64,
-    pub max_latency_ms: f64,
-    pub max_memory_mb: f64,
-}
 
-impl Default for AlertThresholds {
-    fn default() -> Self {
-        Self {
-            memory_pressure_threshold: 0.8,
-            performance_degradation_threshold: 0.5,
-            error_rate_threshold: 0.05,
-            throughput_threshold: 0.7,
-            max_latency_ms: 100.0,
-            max_memory_mb: 512.0,
-        }
-    }
-}
 
 /// Performance alert structure
 #[derive(Debug, Clone)]
@@ -83,7 +61,6 @@ pub use crate::telemetry::data_structures::PerformanceSample;
 pub struct MonitorConfig {
     pub sample_interval: Duration,
     pub history_size: usize,
-    pub alert_thresholds: AlertThresholds,
     pub enable_adaptive_thresholds: bool,
     pub sample_interval_ms: u64,
 }
@@ -93,7 +70,6 @@ impl Default for MonitorConfig {
         Self {
             sample_interval: Duration::from_millis(100),
             history_size: 1000,
-            alert_thresholds: AlertThresholds::default(),
             enable_adaptive_thresholds: true,
             sample_interval_ms: 100,
         }
@@ -108,11 +84,9 @@ pub use crate::telemetry::data_structures::AlertRateLimits;
 
 // ThresholdAdaptationState moved to canonical location: crate::telemetry::data_structures::ThresholdAdaptationState  
 // Use the canonical implementation with enhanced thread-safe atomic fields and rich ML features
-pub use crate::telemetry::data_structures::ThresholdAdaptationState;
 
 // TrendSample moved to canonical location: crate::telemetry::data_structures::TrendSample
 // Use the canonical implementation with comprehensive performance metrics including hit rate, latency, memory, throughput, trend direction, and strength
-pub use crate::telemetry::data_structures::TrendSample;
 
 /// Performance trends analysis
 #[derive(Debug, Clone)]

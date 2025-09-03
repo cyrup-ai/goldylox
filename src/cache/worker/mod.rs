@@ -3,6 +3,8 @@
 //! This module provides high-performance async worker infrastructure for cache operations,
 //! including work-stealing task pools, command queues, and NUMA-aware coordination.
 
+ // Internal worker architecture - components may not be used in minimal API
+
 // async_infrastructure module deleted - use BackgroundCoordinator directly
 pub mod global_api;
 pub mod task_coordination;
@@ -17,14 +19,10 @@ use log::{info, debug};
 // use crate::cache::coordinator::background_coordinator::BackgroundCoordinator;
 // use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask};
 
-pub use task_coordination::{
-    CacheCommand, CacheCommandQueue, CommandQueueStatsSnapshot, CoordinatorStatsSnapshot,
-    TaskCoordinator, TaskExecutionContext,
-};
+pub use task_coordination::TaskCoordinator;
 // Note: GlobalCacheWorker and WorkerConfiguration don't exist in global_api
 // Note: TierTransitionManager and TransitionStrategy don't exist in tier_transitions
 // These modules only export functions, not types
-pub use types::{CacheMaintenanceWorker, MaintenanceTask, WorkerStats};
 
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};

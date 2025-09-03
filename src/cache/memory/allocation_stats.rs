@@ -27,6 +27,7 @@ pub struct AllocationStatistics {
     /// Memory fragmentation level (percentage * 100)
     fragmentation_level: CachePadded<AtomicU32>,
     /// Average allocation size (bytes)
+    #[allow(dead_code)] // Memory management - avg_allocation_size used in allocation size statistics
     avg_allocation_size: CachePadded<AtomicUsize>,
 }
 
@@ -46,6 +47,7 @@ impl AllocationStatistics {
     }
 
     /// Record a memory allocation
+    #[allow(dead_code)] // Memory management - record_allocation used in allocation statistics tracking
     pub fn record_allocation(&self, size: u64) {
         self.total_allocated.fetch_add(size, Ordering::Relaxed);
         self.allocation_operations.fetch_add(1, Ordering::Relaxed);
@@ -93,6 +95,7 @@ impl AllocationStatistics {
     }
 
     /// Get current memory statistics snapshot
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     pub fn get_statistics(&self) -> MemoryStatistics {
         MemoryStatistics {
             total_allocated: self.total_allocated.load(Ordering::Relaxed),

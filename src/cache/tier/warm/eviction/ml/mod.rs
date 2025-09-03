@@ -6,5 +6,4 @@
 pub mod features;
 pub mod policy;
 
-pub use features::{FeatureVector, FEATURE_COUNT};
 pub use policy::MachineLearningEvictionPolicy;

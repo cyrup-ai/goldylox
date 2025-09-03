@@ -235,7 +235,7 @@ impl PerformanceHistory {
                         .iter()
                         .map(|sample| sample.avg_access_time_ns as f64)
                         .collect();
-                    access_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    access_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     
                     let q1_idx = (count as f64 * 0.25) as usize;
                     let q3_idx = (count as f64 * 0.75) as usize;

@@ -3,11 +3,12 @@
 //! This module provides re-exports of canonical implementations from types_and_enums
 //! for backward compatibility.
 
+ // Internal structure traits - may not be used in minimal API
+
 use std::fmt::Debug;
 
 
-// Re-export canonical implementations for backward compatibility
-pub use super::types_and_enums::{CapacityInfo, MaintenanceReport, PerformanceMetrics};
+// Canonical implementations available at: super::types_and_enums::{CapacityInfo, MaintenanceReport, PerformanceMetrics}
 
 /// Latency performance categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

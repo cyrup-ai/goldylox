@@ -12,9 +12,10 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find ML-based eviction candidate using learned patterns
+    #[allow(dead_code)] // ML system - used in hot tier machine learning eviction candidate selection
     pub fn find_ml_candidate(
         &mut self,
-        metadata: &[SlotMetadata; 256],
+        metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
     ) -> Option<EvictionCandidate<K, V>> {
@@ -42,6 +43,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     }
 
     /// Calculate utility score using machine learning features
+    #[allow(dead_code)] // ML system - used in hot tier machine learning utility scoring and feature analysis
     pub fn calculate_utility_score(
         &self,
         slot_idx: usize,
@@ -68,6 +70,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     }
 
     /// Analyze temporal access patterns for a slot
+    #[allow(dead_code)] // ML system - used in hot tier machine learning temporal pattern analysis
     pub fn analyze_temporal_pattern(&self, slot_idx: usize) -> f64 {
         // Count recent accesses to this slot
         let recent_accesses = self

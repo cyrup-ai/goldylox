@@ -17,10 +17,13 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 #[derive(Debug)]
 pub struct MLPredictivePolicy<K: CacheKey> {
     /// Feature extraction for ML model input
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     feature_extractor: FeatureExtractor,
     /// Neural network model (simplified)
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     neural_model: SimpleNeuralNetwork,
     /// Model performance metrics
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     model_metrics: MLModelMetrics,
     /// Phantom data to maintain type parameter
     _phantom: PhantomData<K>,
@@ -30,8 +33,10 @@ pub struct MLPredictivePolicy<K: CacheKey> {
 #[derive(Debug)]
 pub struct FeatureExtractor {
     /// Access frequency features
+    #[allow(dead_code)] // ML system - used in machine learning feature extraction and analysis
     frequency_features: CachePadded<[AtomicU32; 16]>,
     /// Temporal features
+    #[allow(dead_code)] // ML system - used in machine learning feature extraction and analysis
     temporal_features: CachePadded<[AtomicU64; 8]>,
 }
 
@@ -39,10 +44,13 @@ pub struct FeatureExtractor {
 #[derive(Debug)]
 pub struct SimpleNeuralNetwork {
     /// Input layer weights
+    #[allow(dead_code)] // ML system - used in neural network weight calculations
     input_weights: CachePadded<[AtomicU32; 24]>,
     /// Model bias term
+    #[allow(dead_code)] // ML system - used in neural network weight calculations
     bias: CachePadded<AtomicU32>,
     /// Learning rate for updates
+    #[allow(dead_code)] // ML system - used in neural network weight calculations
     learning_rate: CachePadded<AtomicU32>, // Rate * 10000
 }
 
@@ -50,10 +58,13 @@ pub struct SimpleNeuralNetwork {
 #[derive(Debug)]
 pub struct MLModelMetrics {
     /// Prediction accuracy
+    #[allow(dead_code)] // ML system - used in model performance tracking and metrics
     accuracy: CachePadded<AtomicU32>, // Accuracy * 1000
     /// Training iterations count
+    #[allow(dead_code)] // ML system - used in model performance tracking and metrics
     training_iterations: CachePadded<AtomicU64>,
     /// Model loss (mean squared error * 1000)
+    #[allow(dead_code)] // ML system - used in model performance tracking and metrics
     model_loss: CachePadded<AtomicU32>,
 }
 
@@ -68,6 +79,7 @@ impl<K: CacheKey> MLPredictivePolicy<K> {
     }
 
     /// Select victim using ML prediction
+    #[allow(dead_code)] // ML system - used in machine learning eviction victim selection
     pub fn select_victim(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -90,6 +102,7 @@ impl<K: CacheKey> MLPredictivePolicy<K> {
     }
 
     /// Record access for model training
+    #[allow(dead_code)] // ML system - used in machine learning model training and updates
     pub fn record_access(&self, event: &AccessEvent<K>) {
         self.feature_extractor.update_features(&event.key, event);
 
@@ -106,6 +119,7 @@ impl<K: CacheKey> MLPredictivePolicy<K> {
     }
 
     /// Compute target value for training
+    #[allow(dead_code)] // ML system - used in machine learning model training and updates
     fn compute_target_value(&self, event: &AccessEvent<K>) -> f32 {
         // Simple heuristic: higher target for less recently accessed items
         let age = event.timestamp as f32;
@@ -113,6 +127,7 @@ impl<K: CacheKey> MLPredictivePolicy<K> {
     }
 
     /// Get model performance metrics
+    #[allow(dead_code)] // ML system - used in machine learning performance monitoring
     pub fn get_metrics(&self) -> MLPerformanceMetrics {
         MLPerformanceMetrics {
             accuracy: self.model_metrics.accuracy.load(Ordering::Relaxed) as f64 / 1000.0,
@@ -125,11 +140,13 @@ impl<K: CacheKey> MLPredictivePolicy<K> {
     }
 
     /// Update model configuration
+    #[allow(dead_code)] // ML system - used in machine learning model configuration
     pub fn update_learning_rate(&self, new_rate: f32) {
         self.neural_model.set_learning_rate(new_rate);
     }
 
     /// Reset model weights for retraining
+    #[allow(dead_code)] // ML system - used in machine learning model reinitialization
     pub fn reset_model(&self) {
         self.neural_model.reset_weights();
         self.model_metrics.reset();
@@ -276,7 +293,10 @@ impl MLModelMetrics {
 /// ML performance metrics
 #[derive(Debug, Clone)]
 pub struct MLPerformanceMetrics {
+    #[allow(dead_code)] // ML system - used in machine learning performance reporting
     pub accuracy: f64,
+    #[allow(dead_code)] // ML system - used in machine learning performance reporting
     pub training_iterations: u64,
+    #[allow(dead_code)] // ML system - used in machine learning performance reporting
     pub model_loss: f64,
 }

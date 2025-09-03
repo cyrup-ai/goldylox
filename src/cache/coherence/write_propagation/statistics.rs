@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::types::{PropagationStatistics, PropagationStatisticsSnapshot};
+use super::types::PropagationStatistics;
 
 impl PropagationStatistics {
     /// Create new statistics instance with zero values
@@ -66,26 +66,9 @@ impl PropagationStatistics {
         self.total_bytes_written.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Create snapshot of current statistics
-    pub fn snapshot(&self, current_queue_depth: u32) -> PropagationStatisticsSnapshot {
-        PropagationStatisticsSnapshot {
-            writebacks: self.writebacks.load(Ordering::Relaxed),
-            propagations: self.propagations.load(Ordering::Relaxed),
-            failed_writes: self.failed_writes.load(Ordering::Relaxed),
-            avg_write_latency_ns: self.avg_write_latency_ns.load(Ordering::Relaxed),
-            peak_queue_depth: self.peak_queue_depth.load(Ordering::Relaxed),
-            current_queue_depth,
-            total_bytes_written: self.total_bytes_written.load(Ordering::Relaxed),
-            low_priority_writes: self.low_priority_writes.load(Ordering::Relaxed),
-            normal_priority_writes: self.normal_priority_writes.load(Ordering::Relaxed),
-            high_priority_writes: self.high_priority_writes.load(Ordering::Relaxed),
-            critical_priority_writes: self.critical_priority_writes.load(Ordering::Relaxed),
-            worker_tasks_processed: self.worker_tasks_processed.load(Ordering::Relaxed),
-            worker_errors: self.worker_errors.load(Ordering::Relaxed),
-        }
-    }
 
     /// Reset all statistics to zero
+    #[allow(dead_code)] // MESI coherence - statistics reset used in system maintenance
     pub fn reset(&self) {
         self.writebacks.store(0, Ordering::Relaxed);
         self.propagations.store(0, Ordering::Relaxed);

@@ -1,6 +1,7 @@
 //! Cache configuration for measurement system
 
 /// Configuration for measurement cache
+#[allow(dead_code)] // Configuration system - used in measurement and telemetry configuration
 #[derive(Debug, Clone)]
 pub struct MeasurementCacheConfig {
     pub max_entries: usize,

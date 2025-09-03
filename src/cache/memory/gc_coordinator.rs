@@ -16,21 +16,22 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crossbeam_channel::Sender;
 use crate::cache::manager::background::types::MaintenanceTask;
 use crate::cache::tier::warm::maintenance::MaintenanceTask as CanonicalMaintenanceTask;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
+use std::sync::{Mutex, OnceLock};
 
 /// Global maintenance task sender for GC coordination
-static GLOBAL_MAINTENANCE_SENDER: Lazy<Mutex<Option<Sender<MaintenanceTask>>>> = Lazy::new(|| {
-    Mutex::new(None)
-});
+static GLOBAL_MAINTENANCE_SENDER: OnceLock<Mutex<Option<Sender<MaintenanceTask>>>> = OnceLock::new();
 
 /// Set the global maintenance sender for all GC coordinators
-pub fn set_global_maintenance_sender(sender: Sender<MaintenanceTask>) {
-    let mut global_sender = GLOBAL_MAINTENANCE_SENDER.lock().unwrap();
+pub fn set_global_maintenance_sender(sender: Sender<MaintenanceTask>) -> Result<(), CacheOperationError> {
+    let mutex = GLOBAL_MAINTENANCE_SENDER.get_or_init(|| Mutex::new(None));
+    let mut global_sender = mutex.lock()
+        .map_err(|_| CacheOperationError::InvalidState("Poisoned maintenance sender mutex".to_string()))?;
     *global_sender = Some(sender);
+    Ok(())
 }
 
 /// Garbage collection coordinator
+#[allow(dead_code)] // Memory management - used in garbage collection and cleanup coordination
 #[derive(Debug)]
 pub struct GCCoordinator {
     /// GC scheduling state
@@ -46,6 +47,7 @@ pub struct GCCoordinator {
 }
 
 /// GC execution state tracking
+#[allow(dead_code)] // Memory management - used in garbage collection and cleanup coordination
 #[derive(Debug)]
 struct GCState {
     /// Whether GC is currently running
@@ -61,6 +63,7 @@ struct GCState {
 }
 
 /// GC performance metrics
+#[allow(dead_code)] // Memory management - used in garbage collection and cleanup coordination
 #[derive(Debug)]
 struct GCMetrics {
     /// Total GC cycles completed
@@ -78,13 +81,17 @@ struct GCMetrics {
 }
 
 /// GC task queue for scheduling
+#[allow(dead_code)] // Memory management - used in garbage collection and cleanup coordination
 #[derive(Debug)]
 struct GCTaskQueue {
     /// Pending GC tasks
+    
     pending_tasks: ArrayVec<GCTask, 64>,
     /// Queue head position
+    
     queue_head: AtomicUsize,
     /// Queue tail position
+    
     queue_tail: AtomicUsize,
     /// Queue size
     queue_size: AtomicUsize,
@@ -92,9 +99,16 @@ struct GCTaskQueue {
 
 impl GCCoordinator {
     /// Create new GC coordinator
+    #[allow(dead_code)] // Memory management - new used in GC coordinator initialization
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
         // Get the global maintenance sender if available
-        let maintenance_sender = GLOBAL_MAINTENANCE_SENDER.lock().unwrap().clone();
+        let maintenance_sender = if let Some(mutex) = GLOBAL_MAINTENANCE_SENDER.get() {
+            mutex.lock()
+                .map_err(|_| CacheOperationError::InvalidState("Poisoned maintenance sender mutex".to_string()))?
+                .clone()
+        } else {
+            None
+        };
         
         Ok(Self {
             gc_state: GCState {

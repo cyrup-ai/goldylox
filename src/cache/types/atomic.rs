@@ -20,6 +20,7 @@ pub fn timestamp_nanos(_instant: Instant) -> u64 {
 }
 
 /// Atomic update operation result
+#[allow(dead_code)] // Utility system - used in atomic operations and concurrent access coordination
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateError {
     /// Concurrent modification prevented update after max retries
@@ -31,6 +32,7 @@ pub enum UpdateError {
 }
 
 /// Access result from atomic entry update
+#[allow(dead_code)] // Utility system - used in atomic operations and concurrent access coordination
 #[derive(Debug, Clone, Copy)]
 pub struct AccessResult {
     /// Previous access timestamp (nanoseconds)
@@ -42,6 +44,7 @@ pub struct AccessResult {
 }
 
 /// Access statistics for cache entries
+#[allow(dead_code)] // Utility system - used in atomic operations and concurrent access coordination
 #[derive(Debug, Clone, Copy)]
 pub struct AccessStats {
     /// Total access count

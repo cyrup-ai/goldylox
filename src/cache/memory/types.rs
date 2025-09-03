@@ -5,6 +5,7 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Error types for memory detection operations
+#[allow(dead_code)] // Memory management - MemoryError used in memory detection error handling
 #[derive(Debug)]
 pub enum MemoryError {
     SystemCallFailed(String),
@@ -14,6 +15,7 @@ pub enum MemoryError {
 }
 
 /// Memory statistics snapshot
+#[allow(dead_code)] // Memory management - MemoryStatistics used in memory statistics reporting
 #[derive(Debug, Clone)]
 pub struct MemoryStatistics {
     pub total_allocated: u64,
@@ -27,6 +29,7 @@ pub struct MemoryStatistics {
 }
 
 /// Efficiency analysis result with recommendations
+#[allow(dead_code)] // Memory management - EfficiencyAnalysisResult used in efficiency analysis reporting
 #[derive(Debug, Clone)]
 pub struct EfficiencyAnalysisResult {
     pub timestamp: u64,
@@ -38,6 +41,7 @@ pub struct EfficiencyAnalysisResult {
 }
 
 /// Optimization recommendations for memory management
+#[allow(dead_code)] // Memory management - OptimizationRecommendation used in memory optimization suggestions
 #[derive(Debug, Clone, PartialEq)]
 pub enum OptimizationRecommendation {
     /// Increase memory pool sizes
@@ -51,6 +55,7 @@ pub enum OptimizationRecommendation {
 }
 
 /// Garbage collection task types
+#[allow(dead_code)] // Memory management - GCTaskType used in garbage collection task classification
 #[derive(Debug, Clone, Copy)]
 pub enum GCTaskType {
     Normal,
@@ -59,6 +64,7 @@ pub enum GCTaskType {
 }
 
 /// Garbage collection task
+#[allow(dead_code)] // Memory management - GCTask used in garbage collection task management
 #[derive(Debug, Clone)]
 pub struct GCTask {
     pub task_type: GCTaskType,
@@ -79,6 +85,7 @@ impl Default for GCTask {
 }
 
 /// Memory pressure sample for trend analysis
+#[allow(dead_code)] // Memory management - PressureSample used in memory pressure trend analysis
 #[derive(Debug, Clone, Copy)]
 pub struct PressureSample {
     pub timestamp: u64,        // Nanoseconds since epoch
@@ -88,6 +95,7 @@ pub struct PressureSample {
 }
 
 /// Analysis result for efficiency tracking
+#[allow(dead_code)] // Memory management - AnalysisResult used in efficiency analysis result tracking
 #[derive(Debug, Clone, Copy)]
 pub struct AnalysisResult {
     pub timestamp: u64,              // Nanoseconds since epoch

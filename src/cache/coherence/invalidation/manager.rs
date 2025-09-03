@@ -3,6 +3,8 @@
 //! This module implements the main InvalidationManager that coordinates
 //! invalidations across cache tiers and handles request processing.
 
+ // Internal coherence architecture - components may not be used in minimal API
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
@@ -194,41 +196,21 @@ impl<K: CacheKey> InvalidationManager<K> {
     }
 
     /// Get pending invalidation count
+    #[allow(dead_code)] // MESI coherence - used in invalidation management and coordination
     pub fn pending_count(&self) -> usize {
         self.pending_invalidations.len()
     }
 
-    /// Get invalidation statistics
-    pub fn get_statistics(&self) -> crate::cache::coherence::InvalidationStatisticsSnapshot {
-        use crate::cache::coherence::InvalidationStatisticsSnapshot;
 
-        InvalidationStatisticsSnapshot {
-            total_requested: self
-                .invalidation_stats
-                .total_requested
-                .load(Ordering::Relaxed),
-            successful: self.invalidation_stats.successful.load(Ordering::Relaxed),
-            failed: self.invalidation_stats.failed.load(Ordering::Relaxed),
-            retried: self.invalidation_stats.retried.load(Ordering::Relaxed),
-            timed_out: self.invalidation_stats.timed_out.load(Ordering::Relaxed),
-            avg_processing_time_ns: self
-                .invalidation_stats
-                .avg_processing_time_ns
-                .load(Ordering::Relaxed),
-            peak_pending_count: self
-                .invalidation_stats
-                .peak_pending_count
-                .load(Ordering::Relaxed),
-            current_pending_count: self.pending_count() as u32,
-        }
-    }
 
     /// Clear all pending invalidations
+    #[allow(dead_code)] // MESI coherence - used in invalidation management and coordination
     pub fn clear_pending(&self) {
         self.pending_invalidations.clear();
     }
 
     /// Get invalidations for specific tier
+    #[allow(dead_code)] // MESI coherence - used in invalidation management and coordination
     pub fn get_tier_invalidations(&self, tier: CacheTier) -> Vec<InvalidationRequest<K>> {
         self.pending_invalidations
             .iter()

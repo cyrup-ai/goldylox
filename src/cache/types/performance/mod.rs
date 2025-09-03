@@ -8,6 +8,3 @@ pub mod session;
 pub mod timer;
 
 // Re-export main types
-pub use analysis::{OperationTiers, PerformanceAnalysis, PerformanceReport, PerformanceSummary};
-pub use session::{BatchTiming, OperationHandle, OperationTiming, PerformanceSession};
-pub use timer::{timestamp_nanos, PrecisionTimer, Stopwatch, TimerCollection};

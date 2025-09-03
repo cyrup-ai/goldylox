@@ -10,8 +10,4 @@ pub mod manager;
 pub mod statistics;
 
 // Re-export main types for convenience
-pub use cleanup_manager::{CompactionDecision, PoolCleanupManager};
-pub use configuration::PoolConfiguration;
-pub use individual_pool::MemoryPool;
 pub use manager::MemoryPoolManager;
-pub use statistics::PoolStatistics;

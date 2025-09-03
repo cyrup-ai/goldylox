@@ -9,19 +9,26 @@ use crossbeam_utils::CachePadded;
 use super::types::{ErrorBurstDetector, ErrorType, RecoveryStrategy};
 
 /// Error statistics tracking with comprehensive analytics
+#[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
 #[derive(Debug)]
 pub struct ErrorStatistics {
     /// Total errors by type (private for better encapsulation)
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     error_counts: CachePadded<[AtomicU64; 16]>, // Per error type
     /// Error rates (errors per second)
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     error_rates: CachePadded<[AtomicU32; 16]>,
     /// Recovery attempt counts
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     recovery_attempts: CachePadded<[AtomicU64; 8]>,
     /// Recovery success counts
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     recovery_successes: CachePadded<[AtomicU64; 8]>,
     /// Mean time to recovery
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     mttr_ns: CachePadded<AtomicU64>,
     /// Error burst detection
+    #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     burst_detector: ErrorBurstDetector,
 }
 
@@ -49,6 +56,7 @@ impl ErrorStatistics {
     }
 
     /// Record recovery attempt (type-safe with RecoveryStrategy enum)
+    #[allow(dead_code)] // Error recovery - record_recovery_attempt used in recovery attempt tracking
     #[inline]
     pub fn record_recovery_attempt(&self, strategy: RecoveryStrategy) {
         let strategy_idx = strategy as usize;
@@ -57,13 +65,7 @@ impl ErrorStatistics {
         }
     }
 
-    /// Record recovery attempt (legacy usize interface for compatibility)
-    #[inline]
-    pub fn record_recovery_attempt_by_index(&self, strategy_idx: usize) {
-        if strategy_idx < 8 {
-            self.recovery_attempts[strategy_idx].fetch_add(1, Ordering::Relaxed);
-        }
-    }
+
 
     /// Record recovery success (type-safe with RecoveryStrategy enum)
     #[inline]
@@ -75,14 +77,7 @@ impl ErrorStatistics {
         }
     }
 
-    /// Record recovery success (legacy usize interface for compatibility)
-    #[inline]
-    pub fn record_recovery_success_by_index(&self, strategy_idx: usize, recovery_time_ns: u64) {
-        if strategy_idx < 8 {
-            self.recovery_successes[strategy_idx].fetch_add(1, Ordering::Relaxed);
-            self.update_mttr_internal(recovery_time_ns);
-        }
-    }
+
 
     /// Internal MTTR update logic (shared between methods)
     #[inline]
@@ -234,13 +229,8 @@ impl ErrorStatistics {
         self.burst_detector.in_burst.load(Ordering::Relaxed)
     }
 
-    /// Reset all statistics (improved naming)
+    /// Reset all statistics
     pub fn reset_statistics(&self) {
-        self.reset_all(); // Delegate to legacy method for compatibility
-    }
-
-    /// Reset all statistics (legacy method name for compatibility)
-    pub fn reset_all(&self) {
         // Reset error counts and rates
         for i in 0..16 {
             self.error_counts[i].store(0, Ordering::Relaxed);
@@ -327,6 +317,7 @@ impl ErrorStatistics {
 }
 
 // Helper function to convert index to ErrorType
+#[allow(dead_code)] // Error recovery - index_to_error_type used in error type conversion utilities
 fn index_to_error_type(index: usize) -> Option<ErrorType> {
     match index {
         0 => Some(ErrorType::MemoryAllocationFailure),

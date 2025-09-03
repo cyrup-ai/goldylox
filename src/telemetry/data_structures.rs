@@ -3,6 +3,8 @@
 //! This module contains common data structures used across the performance
 //! tracking system for better organization and reusability.
 
+#![allow(dead_code)] // Telemetry system - comprehensive monitoring infrastructure
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
@@ -81,6 +83,7 @@ pub struct OpsPerSecondState {
     /// Current ops per second value (packed * 100)
     current_ops_per_sec: AtomicU32,
     /// Moving average window size
+    
     window_size: u32,
 }
 
@@ -251,16 +254,22 @@ impl AlertHistoryBuffer {
 #[derive(Debug)]
 pub struct ThresholdAdaptationState {
     /// Adaptation learning rate (rate * 10000 for precision)
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub learning_rate: AtomicU32,
     /// Adaptation directions per alert type (direction * 1000)
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub adaptation_directions: [AtomicU32; 5], // Per AlertType
     /// Last adaptation timestamps (nanoseconds since epoch)
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub last_adaptations: [AtomicU64; 5],
     /// Baseline values per alert type (scaled by 1000 for atomic storage)
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub baseline_values: [AtomicU32; 5], // Baseline values * 1000
     /// Adaptation factor for sensitivity tuning (factor * 1000)
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub adaptation_factor: AtomicU32,
     /// Enable/disable adaptive behavior
+    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub adaptive_enabled: AtomicBool,
 }
 

@@ -51,6 +51,7 @@ pub struct CacheMaintenanceWorker {
     /// Task channel sender (uses canonical MaintenanceTask)
     pub task_sender: Sender<MaintenanceTask>,
     /// Task channel receiver (moved to worker thread on start)
+    
     task_receiver: Option<Receiver<MaintenanceTask>>,
     /// Stats update sender for worker to send updates
     pub stat_sender: Sender<StatUpdate>,
@@ -156,12 +157,6 @@ impl CacheMaintenanceWorker {
 pub use crate::cache::tier::warm::maintenance::{
     MaintenanceTask,
     OptimizationLevel,
-    AnalysisDepth,
-    SyncDirection,
-    ConsistencyLevel,
-    ValidationLevel,
-    ModelComplexity,
-    TaskPriority,
 };
 
 /// Worker-specific maintenance operations using canonical tasks

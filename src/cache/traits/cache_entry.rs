@@ -15,7 +15,7 @@ use super::core::{CacheKey, CacheValue};
 use super::supporting_types::{CompressionAlgorithm, SerializationFormat};
 use super::types_and_enums::{AccessType, TemporalPattern, TierAffinity, TierLocation};
 use crate::cache::coherence::data_structures::CacheTier;
-use crate::cache::coherence::write_propagation::WritePriority;
+use crate::cache::coherence::write_propagation::types::WritePriority;
 // Coherence module imports for delegation to existing infrastructure
 use crate::cache::coherence::{
     CoherenceController, CoherenceError, CoherenceKey, CoherenceMessage, MesiState,
@@ -125,6 +125,7 @@ pub struct CacheEntryMetadata {
     pub last_error_ns: Option<u64>,
 }
 
+ // Internal metadata methods - may not be used in minimal API
 impl CacheEntryMetadata {
     /// Create new metadata for cache entry
     pub fn new(size_bytes: usize, creation_cost: u64) -> Self {
@@ -146,7 +147,7 @@ impl CacheEntryMetadata {
 
     /// Record successful access using coherence protocol delegation
     #[inline]
-    pub fn record_access<K: CacheKey, V: CacheValue>(
+    pub fn record_access<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         cache_key: &K,
         tier_location: TierLocation,
@@ -267,6 +268,7 @@ pub struct AccessTracker<K: CacheKey> {
     pub hit_rate: f64,
 }
 
+ // Internal access tracking methods - may not be used in minimal API
 impl<K: CacheKey> AccessTracker<K> {
     /// Create new access tracker
     pub fn new() -> Self {
@@ -473,6 +475,7 @@ pub struct TierInfo {
     pub transition_count: u32,
 }
 
+ // Internal tier management methods - may not be used in minimal API
 impl TierInfo {
     /// Create new tier info for specified tier
     pub fn new(initial_tier: TierLocation) -> Self {
@@ -601,6 +604,7 @@ pub struct SerializationContext {
     pub compression_level: u8,
 }
 
+ // Internal serialization methods - may not be used in minimal API
 impl SerializationContext {
     /// Create new serialization context
     pub fn new(format: SerializationFormat, compression: CompressionAlgorithm) -> Self {
@@ -656,6 +660,7 @@ pub struct CacheEntry<K: CacheKey, V: CacheValue> {
     pub serialization_context: SerializationContext,
 }
 
+ // Internal cache entry methods - may not be used in minimal API
 impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
     /// Create new cache entry with user key/value
     pub fn new(key: K, value: V, initial_tier: TierLocation) -> Self {
@@ -869,10 +874,11 @@ impl Default for TierSerializationContext {
     }
 }
 
+ // Internal serialization methods - may not be used in minimal API
 impl<K, V> SerializationEnvelope<K, V>
 where
-    K: CacheKey + Clone + Default + bincode::Encode,
-    V: CacheValue + Clone + Default + bincode::Encode,
+    K: CacheKey + Clone + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned,
+    V: CacheValue + Clone + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned,
 {
     /// Create new serialization envelope using coherence write propagation system
     pub fn new_with_coherence(

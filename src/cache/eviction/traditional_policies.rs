@@ -21,18 +21,23 @@ use crate::cache::traits::AccessType;
 #[derive(Debug)]
 pub struct ReplacementPolicies<K: CacheKey> {
     /// LRU policy with frequency weighting
+    #[allow(dead_code)] // Traditional policies - adaptive LRU used in replacement victim selection
     adaptive_lru: AdaptiveLRUPolicy<K>,
     /// LFU policy with recency considerations
+    #[allow(dead_code)] // Traditional policies - adaptive LFU used in replacement victim selection
     adaptive_lfu: AdaptiveLFUPolicy<K>,
     /// Two-Queue algorithm for scan resistance
+    #[allow(dead_code)] // Traditional policies - two queue used in replacement victim selection
     two_queue: TwoQueuePolicy<K>,
     /// Adaptive Replacement Cache (ARC) implementation
+    #[allow(dead_code)] // Traditional policies - ARC policy used in replacement victim selection
     arc_policy: ARCPolicy<K>,
     /// Neural Network ML policy (24-dimensional features)
     neural_ml: MLPredictivePolicy<K>,
     /// Linear Regression ML policy (16-dimensional features)  
     linear_ml: MachineLearningEvictionPolicy<K>,
     /// Current active policy (atomic switching)
+    #[allow(dead_code)] // Traditional policies - active policy used in policy switching
     active_policy: AtomicCell<PolicyType>,
     /// Policy performance metrics for comparison
     policy_metrics: PolicyMetrics,
@@ -44,6 +49,7 @@ pub struct AdaptiveLRUPolicy<K: CacheKey> {
     /// LRU tracking with atomic timestamps - lock-free concurrent access
     lru_timestamps: DashMap<K, AtomicU64>,
     /// Frequency counters for weighting - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - frequency counters used in adaptive LRU weighting
     frequency_counters: DashMap<K, AtomicU32>,
     /// Adaptive weighting factor (frequency vs recency)
     weighting_factor: CachePadded<AtomicU32>, // Factor * 1000
@@ -53,12 +59,16 @@ pub struct AdaptiveLRUPolicy<K: CacheKey> {
 #[derive(Debug)]
 pub struct AdaptiveLFUPolicy<K: CacheKey> {
     /// Frequency counters with decay - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - frequency counters used in adaptive LFU tracking
     frequency_counters: DashMap<K, AtomicU32>,
     /// Last access timestamps for recency weighting - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - last access used in recency weighting
     last_access: DashMap<K, AtomicU64>,
     /// Frequency decay rate per second
+    #[allow(dead_code)] // Traditional policies - decay rate used in frequency aging
     decay_rate: CachePadded<AtomicU32>, // Rate * 1000
     /// Recency weighting factor
+    #[allow(dead_code)] // Traditional policies - recency weight used in LFU recency calculations
     recency_weight: CachePadded<AtomicU32>, // Weight * 1000
 }
 
@@ -66,14 +76,20 @@ pub struct AdaptiveLFUPolicy<K: CacheKey> {
 #[derive(Debug)]
 pub struct TwoQueuePolicy<K: CacheKey> {
     /// A1 queue (first access, small) - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - A1 queue used in two-queue algorithm
     a1_queue: DashMap<K, u64>, // Key -> timestamp
     /// Am queue (frequent access, large) - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - Am queue used in two-queue algorithm
     am_queue: DashMap<K, u64>, // Key -> timestamp
     /// A1out ghost list for tracking evicted entries - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - A1out ghost used in two-queue promotion tracking
     a1out_ghost: DashMap<K, u64>, // Key -> eviction timestamp
     /// Maximum sizes for queues
+    #[allow(dead_code)] // Traditional policies - A1 max size used in queue size management
     a1_max_size: usize,
+    #[allow(dead_code)] // Traditional policies - Am max size used in queue size management
     am_max_size: usize,
+    #[allow(dead_code)] // Traditional policies - ghost max size used in ghost list management
     ghost_max_size: usize,
 }
 
@@ -85,8 +101,10 @@ pub struct ARCPolicy<K: CacheKey> {
     /// T2 list (frequent cache entries) - lock-free concurrent access
     t2_list: DashMap<K, ()>,
     /// B1 ghost list (recent evictions) - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - B1 ghost used in ARC recency tracking
     b1_ghost: DashMap<K, ()>,
     /// B2 ghost list (frequent evictions) - lock-free concurrent access
+    #[allow(dead_code)] // Traditional policies - B2 ghost used in ARC frequency tracking
     b2_ghost: DashMap<K, ()>,
     /// Adaptive parameter for T1/T2 balance
     adaptation_parameter: CachePadded<AtomicU32>, // Parameter * 1000
@@ -147,6 +165,7 @@ impl<K: CacheKey> ReplacementPolicies<K> {
         self.arc_policy.select_victim(candidates)
     }
 
+    #[allow(dead_code)] // ML system - used in adaptive ML eviction victim selection
     pub fn select_ml_victim(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -337,6 +356,7 @@ impl<K: CacheKey> AdaptiveLRUPolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - record access used in LRU access pattern tracking
     fn record_access(&self, key: &K) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -356,6 +376,7 @@ impl<K: CacheKey> AdaptiveLRUPolicy<K> {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)] // Traditional policies - select victim used in LRU replacement decisions
     fn select_victim(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -404,6 +425,7 @@ impl<K: CacheKey> AdaptiveLFUPolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - record access used in LFU frequency tracking
     fn record_access(&self, key: &K) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -438,6 +460,7 @@ impl<K: CacheKey> AdaptiveLFUPolicy<K> {
             .store(timestamp, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)] // Traditional policies - select victim used in LFU replacement decisions
     fn select_victim(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -495,6 +518,7 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - record access used in two-queue algorithm tracking
     fn record_access(&self, key: &K) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -526,6 +550,7 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         self.maintain_a1_size();
     }
 
+    #[allow(dead_code)] // Traditional policies - maintain A1 size used in two-queue size management
     fn maintain_a1_size(&self) {
         while self.a1_queue.len() > self.a1_max_size {
             // Evict oldest from A1 to A1out ghost
@@ -546,6 +571,7 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - maintain Am size used in two-queue size management
     fn maintain_am_size(&self) {
         while self.am_queue.len() > self.am_max_size {
             // Evict oldest from Am (LRU within Am)
@@ -557,6 +583,7 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - maintain ghost size used in two-queue ghost management
     fn maintain_ghost_size(&self) {
         while self.a1out_ghost.len() > self.ghost_max_size {
             // Remove oldest from ghost list
@@ -568,6 +595,7 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - select victim used in two-queue replacement decisions
     fn select_victim(&self, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -614,6 +642,7 @@ impl<K: CacheKey> ARCPolicy<K> {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - record access used in ARC algorithm tracking
     fn record_access(&self, key: &K) {
         // ARC algorithm implementation
         let current_size = self.t1_list.len() + self.t2_list.len();
@@ -667,6 +696,7 @@ impl<K: CacheKey> ARCPolicy<K> {
         self.t1_list.insert(key.clone(), ());
     }
 
+    #[allow(dead_code)] // Traditional policies - replace if needed used in ARC replacement algorithm
     fn replace_if_needed(&self, target_t1_size: usize) {
         let t1_size = self.t1_list.len();
         let t2_size = self.t2_list.len();
@@ -762,6 +792,7 @@ impl PolicyMetrics {
         }
     }
 
+    #[allow(dead_code)] // Traditional policies - update metrics used in policy performance tracking
     fn update_metrics(&self, policy: PolicyType, hit_rate: f64, latency_ns: u64, efficiency: f64) {
         let index = policy as usize;
         self.hit_rates[index].store((hit_rate * 1000.0) as u32, Ordering::Relaxed);
@@ -769,10 +800,12 @@ impl PolicyMetrics {
         self.memory_efficiency[index].store((efficiency * 1000.0) as u32, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)] // Traditional policies - record policy switch used in adaptation frequency tracking
     fn record_policy_switch(&self) {
         self.switch_frequency.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)] // Traditional policies - evaluate best policy used in adaptive policy selection
     fn evaluate_best_policy(&self) -> Option<PolicyType> {
         let mut best_policy = PolicyType::AdaptiveLRU;
         let mut best_score = 0.0f64;

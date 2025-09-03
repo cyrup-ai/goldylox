@@ -290,6 +290,7 @@ impl SimdHasher {
     }
 
     /// Scalar fallback for batch hashing
+    
     fn hash_batch_keys_scalar<K: CacheKey>(&mut self, keys: &[K]) -> Vec<u64> {
         keys.iter().map(|key| self.hash_cache_key_scalar(key)).collect()
     }

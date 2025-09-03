@@ -15,6 +15,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 
 /// Error recovery message for worker routing
+#[allow(dead_code)] // Error recovery - message system used in distributed error recovery coordination
 #[derive(Debug)]
 pub enum ErrorRecoveryMessage<K: CacheKey, V: CacheValue> {
     ConfigurationReset {
@@ -38,12 +39,14 @@ pub enum ErrorRecoveryMessage<K: CacheKey, V: CacheValue> {
 }
 
 /// Trait for type-erased error recovery operations
+#[allow(dead_code)] // Error recovery - operations trait used in polymorphic error recovery systems
 trait ErrorRecoveryOperations: std::any::Any + Send + Sync {
     fn shutdown(&self);
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Handle for communicating with error recovery instance
+#[allow(dead_code)] // Error recovery - handle used in coordinated error recovery communication
 struct ErrorRecoveryHandle<K: CacheKey, V: CacheValue> {
     sender: Sender<ErrorRecoveryMessage<K, V>>,
     _phantom: std::marker::PhantomData<(K, V)>,
@@ -69,17 +72,21 @@ impl<K: CacheKey, V: CacheValue> ErrorRecoveryOperations for ErrorRecoveryHandle
 }
 
 /// Global error recovery coordinator for type-safe operations
+#[allow(dead_code)] // Error recovery - coordinator used in global error recovery management
 pub struct ErrorRecoveryCoordinator {
     /// Storage for different K,V type combinations using DashMap
     recovery_workers: DashMap<(TypeId, TypeId), Box<dyn ErrorRecoveryOperations>>,
     /// Instance counter for load balancing
+    
     instance_selector: AtomicUsize,
 }
 
+#[allow(dead_code)] // Error recovery - global coordinator instance used in system-wide error recovery
 static COORDINATOR: std::sync::OnceLock<ErrorRecoveryCoordinator> = std::sync::OnceLock::new();
 
 impl ErrorRecoveryCoordinator {
     /// Initialize the global coordinator
+    #[allow(dead_code)] // Error recovery - initialize used in error recovery system startup
     pub fn initialize() -> Result<(), CacheOperationError> {
         COORDINATOR.get_or_init(|| ErrorRecoveryCoordinator {
             recovery_workers: DashMap::new(),
@@ -89,6 +96,7 @@ impl ErrorRecoveryCoordinator {
     }
 
     /// Get the global coordinator instance
+    #[allow(dead_code)] // Error recovery - get used in error recovery system access
     fn get() -> Result<&'static ErrorRecoveryCoordinator, CacheOperationError> {
         COORDINATOR.get().ok_or_else(|| {
             CacheOperationError::invalid_state("ErrorRecoveryCoordinator not initialized")
@@ -96,6 +104,7 @@ impl ErrorRecoveryCoordinator {
     }
 
     /// Get or create an error recovery worker for the given K,V types
+    #[allow(dead_code)] // Error recovery - get_or_create_worker used in dynamic worker management
     fn get_or_create_worker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         &self,
     ) -> Result<ErrorRecoveryHandle<K, V>, CacheOperationError> {
@@ -153,6 +162,7 @@ impl ErrorRecoveryCoordinator {
     }
 
     /// Execute configuration reset with proper generic types
+    #[allow(dead_code)] // Error recovery - execute_configuration_reset_generic used in system configuration reset
     fn execute_configuration_reset_generic<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         error_recovery: &super::core::ErrorRecoverySystem<K, V>,
     ) -> Result<(), CacheOperationError> {
@@ -183,15 +193,16 @@ impl ErrorRecoveryCoordinator {
         }
         
         // 3. Reinitialize coherence protocol with PROPER GENERIC TYPES
-        let _coherence_controller = crate::cache::coherence::protocol::global_api::init_coherence_controller::<K, V>();
+        let _coherence_sender = crate::cache::coherence::protocol::global_api::init_coherence_system::<K, V>().map_err(|_| CacheOperationError::InternalError)?;
         
         // 4. Update circuit breaker state to closed after successful reset
-        error_recovery.circuit_breaker.reset_all();
+        error_recovery.circuit_breaker.reset();
         
         Ok(())
     }
 
     /// Execute system restart with proper crossbeam coordination
+    #[allow(dead_code)] // Error recovery - execute_system_restart_generic used in system restart operations
     fn execute_system_restart_generic<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         error_recovery: &mut super::core::ErrorRecoverySystem<K, V>,
     ) -> Result<(), CacheOperationError> {
@@ -207,8 +218,8 @@ impl ErrorRecoveryCoordinator {
         // The ColdTierCoordinator handles its own restart through message passing
         
         // 2. Reset error recovery system state
-        error_recovery.error_stats.reset_all();
-        error_recovery.circuit_breaker.reset_all();
+        error_recovery.error_stats.reset_statistics();
+        error_recovery.circuit_breaker.reset();
         error_recovery.recovery_strategies.reset_success_rates();
         
         // 3. Reinitialize with proper generic types
@@ -223,12 +234,13 @@ impl ErrorRecoveryCoordinator {
             .map_err(|e| CacheOperationError::io_failed(&format!("Cold tier restart failed: {}", e)))?;
         
         // 4. Reinitialize coherence protocol
-        let _coherence_controller = crate::cache::coherence::protocol::global_api::init_coherence_controller::<K, V>();
+        let _coherence_sender = crate::cache::coherence::protocol::global_api::init_coherence_system::<K, V>().map_err(|_| CacheOperationError::InternalError)?;
         
         Ok(())
     }
 
     /// Shutdown all error recovery workers
+    #[allow(dead_code)] // Error recovery - shutdown_all used in system shutdown and cleanup
     fn shutdown_all(&self) {
         for entry in self.recovery_workers.iter() {
             entry.value().shutdown();
@@ -238,11 +250,13 @@ impl ErrorRecoveryCoordinator {
 }
 
 /// Initialize error recovery coordinator system
+#[allow(dead_code)] // Error recovery - init_error_recovery_system used in system initialization
 pub fn init_error_recovery_system() -> Result<(), CacheOperationError> {
     ErrorRecoveryCoordinator::initialize()
 }
 
 /// Execute configuration reset via worker-based routing
+#[allow(dead_code)] // Error recovery - execute_configuration_reset used in configuration recovery operations
 pub fn execute_configuration_reset<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>() -> Result<(), CacheOperationError> {
     let coordinator = ErrorRecoveryCoordinator::get()?;
     let handle = coordinator.get_or_create_worker::<K, V>()?;
@@ -259,6 +273,7 @@ pub fn execute_configuration_reset<K: CacheKey + Default + bincode::Encode + bin
 }
 
 /// Execute system restart via worker-based routing
+#[allow(dead_code)] // Error recovery - execute_system_restart used in system restart operations
 pub fn execute_system_restart<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>() -> Result<(), CacheOperationError> {
     let coordinator = ErrorRecoveryCoordinator::get()?;
     let handle = coordinator.get_or_create_worker::<K, V>()?;
@@ -275,6 +290,7 @@ pub fn execute_system_restart<K: CacheKey + Default + bincode::Encode + bincode:
 }
 
 /// Reset circuit breaker for specific tier via worker-based routing
+#[allow(dead_code)] // Error recovery - reset_circuit_breaker used in circuit breaker recovery operations
 pub fn reset_circuit_breaker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(tier: u8) -> Result<(), CacheOperationError> {
     let coordinator = ErrorRecoveryCoordinator::get()?;
     let handle = coordinator.get_or_create_worker::<K, V>()?;
@@ -292,6 +308,7 @@ pub fn reset_circuit_breaker<K: CacheKey + Default + bincode::Encode + bincode::
 }
 
 /// Get system health report via worker-based routing
+#[allow(dead_code)] // Error recovery - get_system_health used in system health monitoring
 pub fn get_system_health<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>() -> Result<super::core::SystemHealthReport, CacheOperationError> {
     let coordinator = ErrorRecoveryCoordinator::get()?;
     let handle = coordinator.get_or_create_worker::<K, V>()?;
@@ -308,6 +325,7 @@ pub fn get_system_health<K: CacheKey + Default + bincode::Encode + bincode::Deco
 }
 
 /// Get error statistics via worker-based routing
+#[allow(dead_code)] // Error recovery - get_error_statistics used in error statistics collection
 pub fn get_error_statistics<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>() -> Result<super::statistics::ErrorStatistics, CacheOperationError> {
     let coordinator = ErrorRecoveryCoordinator::get()?;
     let handle = coordinator.get_or_create_worker::<K, V>()?;
@@ -324,6 +342,7 @@ pub fn get_error_statistics<K: CacheKey + Default + bincode::Encode + bincode::D
 }
 
 /// Shutdown error recovery system
+#[allow(dead_code)] // Error recovery - shutdown_error_recovery_system used in system shutdown
 pub fn shutdown_error_recovery_system() -> Result<(), CacheOperationError> {
     if let Some(coordinator) = COORDINATOR.get() {
         coordinator.shutdown_all();

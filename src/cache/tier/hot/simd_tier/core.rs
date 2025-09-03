@@ -67,7 +67,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
 
         Self {
             memory_pool: MemoryPool::new(&config),
-            lru_tracker: SimdLruTracker::new(),
+            lru_tracker: SimdLruTracker::new(config.max_entries.next_power_of_two() as usize),
             eviction_engine: EvictionEngine::<K, V>::new(eviction_config),
             prefetch_predictor: PrefetchPredictor::<K>::new(prefetch_config),
             hash_state: SimdHashState::new(),

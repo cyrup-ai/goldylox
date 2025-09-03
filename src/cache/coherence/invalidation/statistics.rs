@@ -3,6 +3,8 @@
 //! This module implements statistics tracking and metrics calculation for
 //! invalidation operations including success rates and performance metrics.
 
+ // Internal invalidation architecture - components may not be used in minimal API
+
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
 /// Statistics for invalidation operations
@@ -38,44 +40,4 @@ impl InvalidationStatistics {
     }
 }
 
-/// Snapshot of invalidation statistics for monitoring
-#[derive(Debug, Clone, Copy)]
-pub struct InvalidationStatisticsSnapshot {
-    pub total_requested: u64,
-    pub successful: u64,
-    pub failed: u64,
-    pub retried: u64,
-    pub timed_out: u64,
-    pub avg_processing_time_ns: u64,
-    pub peak_pending_count: u32,
-    pub current_pending_count: u32,
-}
 
-impl InvalidationStatisticsSnapshot {
-    /// Calculate success rate as percentage
-    pub fn success_rate(&self) -> f64 {
-        if self.total_requested == 0 {
-            0.0
-        } else {
-            (self.successful as f64 / self.total_requested as f64) * 100.0
-        }
-    }
-
-    /// Calculate failure rate as percentage
-    pub fn failure_rate(&self) -> f64 {
-        if self.total_requested == 0 {
-            0.0
-        } else {
-            (self.failed as f64 / self.total_requested as f64) * 100.0
-        }
-    }
-
-    /// Calculate retry rate as percentage
-    pub fn retry_rate(&self) -> f64 {
-        if self.total_requested == 0 {
-            0.0
-        } else {
-            (self.retried as f64 / self.total_requested as f64) * 100.0
-        }
-    }
-}

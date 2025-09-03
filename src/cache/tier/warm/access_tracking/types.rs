@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_utils::atomic::AtomicCell;
 
-pub use crate::cache::traits::{AccessType, TemporalPattern};
+pub(crate) use crate::cache::traits::{AccessType, TemporalPattern};
 pub use crate::cache::types::error_types::HitStatus; // Canonical location
 
 // AccessType moved to canonical location: crate::cache::traits::types_and_enums

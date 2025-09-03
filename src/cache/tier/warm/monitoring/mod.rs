@@ -25,7 +25,7 @@ use types::MemoryAlertSystem;
 // Re-export main types
 pub use memory_pressure::MemoryPressureMonitor;
 pub use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
-pub use types::{MemoryAlert, MonitoringTask, TierStatsSnapshot};
+pub use types::TierStatsSnapshot;
 
 /// Create new memory pressure monitor with default settings
 pub fn create_memory_monitor(memory_limit: u64) -> MemoryPressureMonitor {

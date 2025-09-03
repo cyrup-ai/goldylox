@@ -67,7 +67,6 @@ pub enum BatchOperation<K, V> {
 // BatchResult moved to canonical location: crate::cache::types::batch_operations::BatchResult
 // Use the enhanced canonical implementation with HashMap-based indexing, TimedResult wrapper,
 // comprehensive timing infrastructure, and production-ready batch operation analysis
-pub use crate::cache::types::batch_operations::BatchResult;
 
 // TierStatistics moved to canonical location: crate::cache::types::statistics::tier_stats::TierStatistics
 

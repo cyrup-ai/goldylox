@@ -3,6 +3,8 @@
 //! This module defines sophisticated eviction policies and access pattern recognition
 //! using advanced lifetime management for zero-cost abstractions.
 
+ // Internal policy traits - may not be used in minimal API
+
 use std::fmt::Debug;
 use std::time::Instant;
 

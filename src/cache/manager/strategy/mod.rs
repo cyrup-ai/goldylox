@@ -8,7 +8,7 @@ pub mod metrics;
 pub mod switcher;
 pub mod thresholds;
 
-pub use core::{CacheStrategy, CacheStrategySelector};
+pub use core::CacheStrategy;
 
 pub use metrics::StrategyMetrics;
 pub use switcher::StrategySwitcher;

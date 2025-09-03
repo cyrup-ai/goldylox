@@ -67,10 +67,16 @@ impl CoherenceStatistics {
         }
     }
 
+    /// Get the global statistics instance for recording events
+    pub fn global() -> &'static CoherenceStatistics {
+        GLOBAL_COHERENCE_STATS.get_or_init(|| CoherenceStatistics::new())
+    }
+
     /// Get or create the global coherence statistics instance
     pub fn get_global_instance() -> Result<&'static CoherenceStatistics, &'static str> {
         GLOBAL_COHERENCE_STATS.get_or_init(|| CoherenceStatistics::new());
-        Ok(GLOBAL_COHERENCE_STATS.get().unwrap())
+        GLOBAL_COHERENCE_STATS.get()
+            .ok_or("Failed to initialize global coherence stats")
     }
 
     /// Record a state transition

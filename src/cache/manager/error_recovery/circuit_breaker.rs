@@ -18,6 +18,7 @@ pub struct CircuitBreaker {
     /// Failure counters
     pub failure_counters: CachePadded<[AtomicU32; 3]>,
     /// Success counters
+    #[allow(dead_code)] // Error recovery - success_counters used in circuit breaker state management
     pub success_counters: CachePadded<[AtomicU32; 3]>,
     /// State transition timestamps
     pub state_transitions: CachePadded<[AtomicCell<Instant>; 3]>,
@@ -193,22 +194,30 @@ impl CircuitBreaker {
         }
     }
 
-    /// Reset circuit breaker (alias for reset_all for backward compatibility)
+    /// Reset circuit breaker
     pub fn reset(&self) {
-        self.reset_all();
+        for i in 0..3 {
+            self.failure_counters[i].store(0, Ordering::Relaxed);
+            self.success_counters[i].store(0, Ordering::Relaxed);
+            self.tier_states[i].store(CircuitState::Closed);
+            self.state_transitions[i].store(Instant::now());
+        }
     }
 
     /// Get circuit breaker configuration
+    #[allow(dead_code)] // Error recovery - get_config used in circuit breaker configuration access
     pub fn get_config(&self) -> &CircuitBreakerConfig {
         &self.breaker_config
     }
 
     /// Update circuit breaker configuration
+    #[allow(dead_code)] // Error recovery - update_config used in dynamic circuit breaker reconfiguration
     pub fn update_config(&mut self, config: CircuitBreakerConfig) {
         self.breaker_config = config;
     }
 
     /// Force circuit state for tier (for testing)
+    #[allow(dead_code)] // Error recovery - force_state used in testing and manual circuit breaker control
     pub fn force_state(&self, tier: u8, state: CircuitState) {
         if tier >= 3 {
             return;
@@ -220,6 +229,7 @@ impl CircuitBreaker {
     }
 
     /// Get time since last state transition
+    #[allow(dead_code)] // Error recovery - time_since_transition used in circuit breaker timing analysis
     pub fn time_since_transition(&self, tier: u8) -> Option<std::time::Duration> {
         if tier >= 3 {
             return None;
@@ -231,6 +241,7 @@ impl CircuitBreaker {
     }
 
     /// Get circuit breaker health summary
+    #[allow(dead_code)] // Error recovery - get_health_summary used in circuit breaker health monitoring
     pub fn get_health_summary(&self) -> CircuitBreakerHealth {
         CircuitBreakerHealth {
             hot_tier_state: self.get_state(0),
@@ -251,6 +262,7 @@ impl CircuitBreaker {
 }
 
 /// Circuit breaker health summary
+#[allow(dead_code)] // Error recovery - CircuitBreakerHealth used in health monitoring and reporting
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerHealth {
     pub hot_tier_state: CircuitState,

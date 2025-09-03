@@ -3,6 +3,8 @@
 //! This module defines the fundamental data structures used for cache invalidation
 //! including requests, priorities, and result types.
 
+ // Internal invalidation architecture - components may not be used in minimal API
+
 use std::time::Instant;
 
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, InvalidationReason};
@@ -30,7 +32,9 @@ pub struct InvalidationRequest<K: CacheKey> {
 }
 
 /// Priority levels for invalidation requests
+/// Internal invalidation API - variants used in priority-based processing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum InvalidationPriority {
     Low = 0,
     Normal = 1,
@@ -39,7 +43,9 @@ pub enum InvalidationPriority {
 }
 
 /// Result of invalidation processing
+/// Internal invalidation API - variants used in invalidation result handling
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum InvalidationResult {
     /// Invalidation completed successfully
     Success,

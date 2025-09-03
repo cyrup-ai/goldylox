@@ -204,7 +204,7 @@ impl StorageManager {
     }
 
     /// Calculate fragmentation ratio (simplified)
-    #[allow(dead_code)]
+    
     fn calculate_fragmentation_ratio<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
         &self, 
         cache: &crate::cache::tier::cold::storage::ColdTierCache<K, V>

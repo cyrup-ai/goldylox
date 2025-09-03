@@ -39,8 +39,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
             // Hardware prefetch hint
             crate::cache::tier::hot::prefetch::hardware::HardwarePrefetcher::prefetch_for_access(
                 &request.key,
-                &self.memory_pool.entries
-                    as &[crate::cache::tier::hot::memory_pool::types::CacheSlot<K, V>; 256],
+                &self.memory_pool.entries,
             );
             processed += 1;
 

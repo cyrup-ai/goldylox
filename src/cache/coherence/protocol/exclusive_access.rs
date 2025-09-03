@@ -3,17 +3,20 @@
 //! This module handles exclusive access requests and cache line invalidation
 //! operations to maintain coherence across cache tiers.
 
+ // Internal coherence architecture - components may not be used in minimal API
+
 use std::time::Instant;
 
 use crate::cache::coherence::communication::{CoherenceError, ExclusiveResponse};
 use crate::cache::coherence::data_structures::{CacheTier, CoherenceKey, MesiState};
-use crate::cache::coherence::invalidation::InvalidationPriority;
+use crate::cache::coherence::invalidation::types::InvalidationPriority;
 use crate::cache::coherence::state_management::{StateTransitionRequest, TransitionReason};
 use crate::cache::coherence::data_structures::CoherenceController;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned> CoherenceController<K, V> {
     /// Request exclusive access to a cache line
+    #[allow(dead_code)] // MESI coherence - used in protocol exclusive access management
     pub fn request_exclusive_access(
         &self,
         key: &K,
@@ -56,6 +59,7 @@ impl<K: CacheKey, V: CacheValue> CoherenceController<K, V> {
     }
 
     /// Invalidate cache line in specific tier
+    #[allow(dead_code)] // MESI coherence - used in protocol cache line invalidation operations
     pub fn invalidate_cache_line(
         &self,
         key: &K,

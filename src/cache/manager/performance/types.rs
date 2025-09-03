@@ -3,9 +3,13 @@
 //! This module contains all the core types, enums, and configuration
 //! structures used throughout the performance monitoring system.
 
+#![allow(dead_code)] // Performance monitoring - comprehensive metrics and alerting system
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::time::{Duration, Instant};
+
+// AlertThresholds import removed - not used in this module
 
 /// Performance snapshot containing key metrics
 #[derive(Debug, Clone)]
@@ -99,29 +103,7 @@ pub struct AlertEvent {
     pub event_type: AlertEventType,
 }
 
-/// Alert thresholds configuration
-#[derive(Debug)]
-pub struct AlertThresholds {
-    /// Critical hit rate threshold (stored as u64 with 6 decimal places)
-    pub critical_hit_rate: AtomicU64,
-    /// Warning hit rate threshold (stored as u64 with 6 decimal places)
-    pub warning_hit_rate: AtomicU64,
-    /// Maximum acceptable latency in nanoseconds
-    pub max_latency_ns: AtomicU64,
-    /// Memory warning threshold (stored as u64 with 6 decimal places)
-    pub memory_warning_threshold: AtomicU64,
-}
 
-impl Default for AlertThresholds {
-    fn default() -> Self {
-        Self {
-            critical_hit_rate: AtomicU64::new(500_000), // 0.5 stored as 500_000
-            warning_hit_rate: AtomicU64::new(700_000),  // 0.7 stored as 700_000
-            max_latency_ns: AtomicU64::new(10_000_000), // 10ms
-            memory_warning_threshold: AtomicU64::new(850_000), // 0.85 stored as 850_000
-        }
-    }
-}
 
 /// Alert configuration
 #[derive(Debug, Clone)]

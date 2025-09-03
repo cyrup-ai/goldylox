@@ -91,6 +91,7 @@ impl<K: CacheKey, V: CacheValue> RecoveryStrategies<K, V> {
     }
 
     /// Execute recovery strategy with operation closure
+    #[allow(dead_code)] // Error recovery - execute_recovery used in error recovery execution
     #[inline]
     pub fn execute_recovery<F>(&self, strategy: RecoveryStrategy, operation: F) -> bool
     where

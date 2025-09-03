@@ -16,10 +16,13 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 #[derive(Debug)]
 pub struct MemoryEfficiencyAnalyzer {
     /// Allocation pattern tracking
+    #[allow(dead_code)] // Memory management - allocation_patterns used in memory allocation pattern analysis
     allocation_patterns: AllocationPatternTracker,
     /// Latency measurement system
+    #[allow(dead_code)] // Memory management - latency_tracker used in memory operation latency tracking
     latency_tracker: LatencyTracker,
     /// Fragmentation analysis
+    #[allow(dead_code)] // Memory management - fragmentation_analyzer used in memory fragmentation analysis
     fragmentation_analyzer: FragmentationAnalyzer,
     /// Analysis result history
     analysis_history: std::cell::UnsafeCell<AnalysisHistoryBuffer>,
@@ -35,8 +38,10 @@ struct AllocationPatternTracker {
     /// Large allocation frequency
     large_alloc_frequency: CachePadded<AtomicU64>,
     /// Allocation size distribution
+    #[allow(dead_code)] // Memory management - size_distribution used in allocation pattern analysis
     size_distribution: [AtomicU64; 16], // Size buckets
     /// Temporal allocation patterns
+    
     temporal_patterns: ArrayVec<u64, 64>, // Recent allocation timestamps
 }
 
@@ -50,6 +55,7 @@ struct LatencyTracker {
     /// Peak allocation latency
     peak_allocation_latency: AtomicU64,
     /// Recent latency samples
+    
     recent_latencies: ArrayVec<u64, 128>,
 }
 
@@ -61,10 +67,12 @@ struct FragmentationAnalyzer {
     /// Internal fragmentation level (0-1000)
     internal_fragmentation: AtomicU32,
     /// Fragmentation trend (increasing/decreasing)
+    #[allow(dead_code)] // Memory management - fragmentation_trend used in fragmentation trend analysis
     fragmentation_trend: AtomicU32,
     /// Free block count
     free_block_count: AtomicUsize,
     /// Largest free block size
+    
     largest_free_block: AtomicUsize,
 }
 

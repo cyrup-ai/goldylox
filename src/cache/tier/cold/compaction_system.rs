@@ -48,6 +48,7 @@ impl CompactionSystem {
     }
 
     /// Get compaction progress (0.0 to 1.0)
+    #[allow(dead_code)] // Cold tier - compaction_progress used in compaction progress monitoring
     pub fn compaction_progress(&self) -> f32 {
         self.compaction_state.progress.load()
     }
@@ -267,6 +268,7 @@ impl SyncState {
     }
 
     /// Check if sync is needed
+    #[allow(dead_code)] // Cold tier - needs_sync used in compaction synchronization logic
     pub fn needs_sync(&self) -> bool {
         let pending = self.pending_writes.load(Ordering::Relaxed);
         let last_sync = self.last_sync_ns.load(Ordering::Relaxed);
@@ -307,6 +309,7 @@ impl RecoverySystem {
     }
 
     /// Write recovery log entry
+    #[allow(dead_code)] // Cold tier - log_operation used in compaction recovery logging
     pub fn log_operation(&mut self, operation: &str) -> io::Result<()> {
         if let Some(ref mut log) = self.recovery_log {
             use std::io::Write;
@@ -404,6 +407,7 @@ impl RecoverySystem {
 }
 
 /// Compaction error types
+#[allow(dead_code)] // Cold tier - CompactionError used in compaction error handling
 #[derive(Debug, Clone)]
 pub enum CompactionError {
     ChannelClosed,

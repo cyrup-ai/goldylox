@@ -4,6 +4,8 @@
 //! from performance_tracking, measurement, and cache/performance_tracking modules.
 //!
 //! Features:
+
+
 //! - Zero-contention performance monitoring with atomic operations
 //! - Advanced alert systems with pattern recognition
 //! - Comprehensive metrics collection and analysis
@@ -11,31 +13,27 @@
 //! - Memory-efficient data structures
 //! - Real-time performance history tracking
 
-// Import core types - use specific imports to avoid conflicts
-pub use crate::cache::types::core_types::{
-    timestamp_nanos, BatchOperation, BatchRequest, BatchResult, CacheResult,
-};
+// Import core types - use specific imports to avoid conflicts (crate private)
 
 // PrecisionTimer available from crate::cache::types::performance::timer::PrecisionTimer when needed
-// Import canonical CacheEntry from traits module
-pub use crate::cache::traits::cache_entry::CacheEntry;
+// Import canonical CacheEntry from traits module (crate private)
 
 
 // Module declarations for comprehensive telemetry functionality
 // REMOVED: pub mod alert_system; (canonicalized to cache::manager::performance::alert_system)
 // REMOVED: pub mod alerts; (canonicalized to cache::manager::performance::alert_system)
-pub mod cache;
-pub mod data_structures;
-pub mod history;
+pub(crate) mod cache;
+pub(crate) mod data_structures;
+pub(crate) mod history;
 // REMOVED: pub mod metrics; (canonicalized to cache::manager::performance::metrics_collector)
 // REMOVED: pub mod metrics_collector; (canonicalized to cache::manager::performance::metrics_collector)
-pub mod monitor;
-pub mod performance_history;
+pub(crate) mod monitor;
+pub(crate) mod performance_history;
 // REMOVED: pub mod statistics; (canonicalized to unified_stats.rs)
 // REMOVED: pub mod trend_analyzer; (file not found - canonicalized with trends.rs)
-pub mod trends;
-pub mod types;
-pub mod unified_stats;
+pub(crate) mod trends;
+pub(crate) mod types;
+pub(crate) mod unified_stats;
 
 // REMOVED: Compatibility re-exports that hide canonical API paths
 // These re-exports enabled broken code to compile by providing aliases

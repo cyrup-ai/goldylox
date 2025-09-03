@@ -32,8 +32,10 @@ pub struct CacheStrategySelector {
     /// Strategy performance metrics
     strategy_metrics: StrategyMetrics,
     /// Strategy threshold parameters
+    #[allow(dead_code)] // Strategy management - thresholds used in adaptive strategy selection
     strategy_thresholds: StrategyThresholds,
     /// Strategy switching logic
+    #[allow(dead_code)] // Strategy management - switcher used in performance-based strategy changes
     strategy_switcher: StrategySwitcher,
 }
 
@@ -51,6 +53,7 @@ impl CacheStrategy {
     }
 
     /// Get strategy name for debugging
+    #[allow(dead_code)] // Strategy management - name used in strategy identification and debugging
     #[inline(always)]
     pub const fn name(self) -> &'static str {
         match self {
@@ -99,6 +102,7 @@ impl CacheStrategySelector {
 
     /// Evaluate and potentially switch cache strategy
     #[inline]
+    #[allow(dead_code)] // Strategy management - strategy evaluation used in adaptive performance tuning
     pub fn evaluate_strategy_switch(&self) -> Option<CacheStrategy> {
         let current = self.current_strategy();
         self.strategy_switcher.evaluate_switch(
@@ -110,6 +114,7 @@ impl CacheStrategySelector {
 
     /// Switch to new cache strategy
     #[inline]
+    #[allow(dead_code)] // Strategy management - strategy switching used in performance optimization
     pub fn switch_strategy(&self, new_strategy: CacheStrategy) {
         self.current_strategy.store(new_strategy);
         self.strategy_metrics.reset_evaluation();
@@ -117,12 +122,14 @@ impl CacheStrategySelector {
 
     /// Get strategy performance metrics
     #[inline(always)]
+    #[allow(dead_code)] // Strategy management - metrics used in performance analysis
     pub fn get_metrics(&self) -> &StrategyMetrics {
         &self.strategy_metrics
     }
 
     /// Adapt strategy thresholds based on system conditions
     #[inline]
+    #[allow(dead_code)] // Strategy management - threshold adaptation used in dynamic tuning
     pub fn adapt_thresholds(&self, system_load: f32, stability_ratio: f32) {
         self.strategy_thresholds.adapt(system_load, stability_ratio);
     }

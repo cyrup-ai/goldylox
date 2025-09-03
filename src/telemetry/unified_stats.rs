@@ -42,7 +42,7 @@ pub struct UnifiedCacheStatistics {
 }
 
 /// Unified statistics result structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UnifiedStats {
     pub total_operations: u64,
     pub overall_hit_rate: f64,
@@ -85,7 +85,8 @@ impl UnifiedCacheStatistics {
     /// Get or create the global unified statistics instance
     pub fn get_global_instance() -> Result<&'static UnifiedCacheStatistics, &'static str> {
         GLOBAL_UNIFIED_STATS.get_or_init(|| UnifiedCacheStatistics::new());
-        Ok(GLOBAL_UNIFIED_STATS.get().unwrap())
+        GLOBAL_UNIFIED_STATS.get()
+            .ok_or("Failed to initialize global unified stats")
     }
 
     /// Record cache hit for specific tier with atomic update

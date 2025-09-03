@@ -10,10 +10,13 @@ use std::time::Duration;
 #[derive(Debug)]
 pub struct StrategyThresholds {
     /// Minimum hit rate improvement required for switch (x1000)
+    #[allow(dead_code)] // Strategy management - min_hit_rate_improvement used in strategy switching decisions
     min_hit_rate_improvement: AtomicU32,
     /// Maximum acceptable access time increase (nanoseconds)
+    
     max_access_time_increase: AtomicU64,
     /// Minimum evaluation period before strategy switch
+    
     min_evaluation_period: Duration,
     /// Strategy switching cooldown period
     switch_cooldown: Duration,

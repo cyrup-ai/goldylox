@@ -16,6 +16,7 @@ pub struct ErrorDetector {
     /// Error rate thresholds
     pub error_thresholds: ErrorThresholds,
     /// Error pattern recognition
+    #[allow(dead_code)] // Error recovery - pattern_detector used in error pattern detection and analysis
     pub pattern_detector: super::types::ErrorPatternDetector,
     /// Health check configuration
     pub health_check_config: HealthCheckConfig,

@@ -22,37 +22,15 @@ pub mod timing;
 
 // Re-export the main API for easy access
 // Re-export core types
-pub use core::{WarmCacheEntry, WarmCacheKey, WarmEntryMetadata};
 
 // Re-export access tracking types
-pub use access_tracking::{
-    AccessContext, AccessRecord, AccessType, ConcurrentAccessTracker, FrequencyEstimator,
-    PatternType, TemporalPatternClassifier,
-};
-pub use builder::WarmTierBuilder;
-pub use data_structures::{
-    AnalysisDepth, ConsistencyLevel, LockFreeWarmTier, MaintenanceTask,
-    ModelComplexity, OptimizationLevel, PerformanceMetrics,
-    SyncDirection, ValidationLevel,
-};
 // Import config types from correct location
-pub use config::{WarmTierConfig, BackgroundConfig, PerformanceConfig, PressureConfig, TrackingConfig};
-pub use error::{DegradationMode, RetryConfig, WarmTierInitError};
 // Re-export eviction types
-pub use eviction::{
-    ArcEvictionState, ConcurrentEvictionPolicy, ConcurrentLfuTracker, ConcurrentLruTracker,
-    EvictionPolicy, EvictionPolicyType, MachineLearningEvictionPolicy, PolicyPerformanceMetrics,
-};
 pub use global_api::{
-    check_warm_tier_alerts, cleanup_expired_entries, force_eviction, get_cache_size,
-    get_frequently_accessed_keys, get_idle_keys, get_memory_pressure, get_memory_usage,
-    get_warm_tier_keys, init_warm_tier, insert_demoted, insert_promoted, is_initialized,
-    process_background_maintenance, shutdown_warm_tier, warm_get, warm_put, warm_remove,
+    cleanup_expired_entries,
+    get_frequently_accessed_keys, get_idle_keys, init_warm_tier, init_warm_tier_system, insert_demoted, insert_promoted, warm_get, warm_put, warm_remove,
 };
 // Re-export monitoring types
-pub use monitoring::{
-    AtomicTierStats, MemoryAlert, MemoryPressureMonitor, MonitoringTask, TierStatsSnapshot,
-};
 
 
 

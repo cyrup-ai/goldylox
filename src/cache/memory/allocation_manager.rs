@@ -26,6 +26,7 @@ pub mod global_stats {
     use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
     use crossbeam_utils::CachePadded;
     
+    #[allow(dead_code)] // Memory management - GlobalAllocationStats used in memory allocation tracking
     pub struct GlobalAllocationStats {
         pub total_allocated: CachePadded<AtomicU64>,
         pub peak_allocation: CachePadded<AtomicU64>,
@@ -86,6 +87,7 @@ pub mod global_stats {
 }
 
 /// Advanced memory manager with atomic allocation tracking
+#[allow(dead_code)] // Memory management - used in pool allocation and cleanup coordination
 #[derive(Debug)]
 pub struct AllocationManager<K: CacheKey + Default, V: CacheValue> {
     /// Memory pool manager for efficient allocation
@@ -101,12 +103,14 @@ pub struct AllocationManager<K: CacheKey + Default, V: CacheValue> {
 }
 
 /// Efficiency analysis worker
+#[allow(dead_code)] // Memory management - used in pool allocation and cleanup coordination
 pub struct EfficiencyWorker {
     receiver: Receiver<EfficiencyRequest>,
     analyzer: MemoryEfficiencyAnalyzer,
 }
 
 impl EfficiencyWorker {
+    #[allow(dead_code)] // Memory management - used in pool allocation and cleanup coordination
     pub fn run(self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
@@ -137,6 +141,7 @@ impl EfficiencyWorker {
 }
 
 /// Maintenance scheduler worker
+#[allow(dead_code)] // Memory management - used in pool allocation and cleanup coordination
 pub struct MaintenanceWorker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     receiver: Receiver<MaintenanceRequest>,
     scheduler: MaintenanceScheduler<K, V>,
@@ -147,6 +152,7 @@ where
     K: Clone + 'static,
     V: Clone + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static,
 {
+    #[allow(dead_code)] // Memory management - used in pool allocation and cleanup coordination
     pub fn run(self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
@@ -182,6 +188,7 @@ pub struct PoolCleanupWorker {
 }
 
 impl PoolCleanupWorker {
+    #[allow(dead_code)] // Memory management - run used in pool cleanup worker execution
     pub fn run(self) {
         while let Ok(request) = self.receiver.recv() {
             match request {
@@ -211,6 +218,7 @@ impl PoolCleanupWorker {
 
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> AllocationManager<K, V> {
     /// Create new allocation manager with configuration
+    #[allow(dead_code)] // Memory management - new used in allocation manager initialization
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
         // Create channels for background services
         let (efficiency_sender, efficiency_receiver) = bounded(256);

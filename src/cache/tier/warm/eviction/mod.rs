@@ -13,7 +13,7 @@ pub use arc::ArcEvictionState;
 use crossbeam_utils::atomic::AtomicCell;
 pub use lfu::ConcurrentLfuTracker;
 pub use lru::ConcurrentLruTracker;
-pub use ml::{FeatureVector, MachineLearningEvictionPolicy};
+pub use ml::MachineLearningEvictionPolicy;
 pub use types::*;
 
 use super::core::WarmCacheKey;
@@ -220,6 +220,7 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
     }
 
     /// Train ML policy with feedback
+    #[allow(dead_code)] // ML system - used in machine learning policy training and adaptation
     pub fn train_ml_policy(&self, key: &WarmCacheKey<K>, was_correct: bool) {
         let cache_pressure = 0.5; // Default pressure - could be calculated
         self.ml_policy.train(key, cache_pressure, was_correct);

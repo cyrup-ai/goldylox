@@ -89,20 +89,17 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         let access_pattern = policy_engine.pattern_analyzer.analyze_access_pattern(key);
         let value_characteristics = self.analyze_value_characteristics(value);
         
-        // Use sophisticated complexity and access cost analysis
-        let rendering_complexity = self.calculate_rendering_complexity(value);
-        let access_cost = self.estimate_access_cost(value);
-
         // Intelligent tier selection based on multiple factors including ML analysis
+        // Use the calculated characteristics from analyze_value_characteristics
         let primary_tier = if value_characteristics.size < 1024 
             && access_pattern.frequency > 10.0 
-            && rendering_complexity < 0.5 
-            && access_cost < 0.3 {
+            && value_characteristics.complexity < 0.5 
+            && value_characteristics.access_cost < 0.3 {
             CacheTier::Hot // Small, frequently accessed, low complexity - optimal for SIMD processing
         } else if value_characteristics.size < 10240 
             && access_pattern.frequency > 1.0 
-            && rendering_complexity < 2.0 
-            && access_cost < 0.7 {
+            && value_characteristics.complexity < 2.0 
+            && value_characteristics.access_cost < 0.7 {
             CacheTier::Warm // Medium size, moderate access, moderate complexity - balanced performance
         } else {
             CacheTier::Cold // Large, infrequently accessed, or high complexity - persistent storage
@@ -316,6 +313,33 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         let locality_confidence = access_pattern.temporal_locality;
 
         (frequency_confidence + size_confidence + locality_confidence) / 3.0
+    }
+
+    /// Get value from cold tier directly
+    pub fn get_from_cold_tier(&self, key: &K) -> Option<V> {
+        crate::cache::tier::cold::cold_get::<K, V>(key).unwrap_or(None)
+    }
+
+    /// Compact hot tier to target size
+    pub fn compact_hot_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // Hot tier compaction - simplified implementation
+        // In a full implementation, this would use SIMD-optimized LRU eviction
+        log::info!("Hot tier compaction requested - simplified implementation");
+        Ok(0) // Return 0 bytes compacted for now
+    }
+
+    /// Compact warm tier to target size  
+    pub fn compact_warm_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // Warm tier compaction - simplified implementation
+        log::info!("Warm tier compaction requested - simplified implementation");
+        Ok(0) // Return 0 bytes compacted for now
+    }
+
+    /// Compact cold tier to target size
+    pub fn compact_cold_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
+        // Cold tier compaction - simplified implementation
+        log::info!("Cold tier compaction requested - simplified implementation");
+        Ok(0) // Return 0 bytes compacted for now
     }
 }
 

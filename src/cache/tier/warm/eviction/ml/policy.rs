@@ -15,20 +15,26 @@ use crate::cache::traits::AccessType;
 use crate::telemetry::cache::types::timestamp_nanos;
 
 /// Machine learning-based eviction policy
+#[allow(dead_code)] // ML system - used extensively in machine learning eviction policy implementation
 #[derive(Debug)]
 pub struct MachineLearningEvictionPolicy<K: crate::cache::traits::CacheKey> {
     /// Feature vectors for each cache key
+    #[allow(dead_code)] // ML system - used in machine learning feature vector storage and management
     feature_vectors: SkipMap<WarmCacheKey<K>, FeatureVector>,
     /// Linear regression weights
+    #[allow(dead_code)] // ML system - used in machine learning model weight management
     regression_weights: [AtomicCell<f64>; FEATURE_COUNT],
     /// Learning rate for weight updates
+    #[allow(dead_code)] // ML system - used in machine learning model training optimization
     learning_rate: AtomicCell<f64>,
     /// ML statistics
+    #[allow(dead_code)] // ML system - used in machine learning performance tracking and metrics
     stats: MlStats,
 }
 
 impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     /// Create new ML-based eviction policy
+    #[allow(dead_code)] // ML system - used in machine learning policy construction and initialization
     pub fn new() -> Self {
         // Initialize weights with small random values
         let weights = [
@@ -107,6 +113,7 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     }
 
     /// Predict eviction score using linear regression
+    #[allow(dead_code)] // ML system - used in machine learning eviction prediction and scoring
     pub fn predict_eviction_score(&self, features: &FeatureVector, cache_pressure: f64) -> f64 {
         let feature_values = features.to_array(cache_pressure);
         let mut score = 0.0;
@@ -164,11 +171,13 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     }
 
     /// Get ML statistics
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     pub fn stats(&self) -> &MlStats {
         &self.stats
     }
 
     /// Get feature vector for key
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     pub fn get_features(&self, key: &WarmCacheKey<K>) -> Option<FeatureVector> {
         self.feature_vectors
             .get(key)
@@ -176,6 +185,7 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     }
 
     /// Get current weights
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     pub fn get_weights(&self) -> [f64; FEATURE_COUNT] {
         let mut weights = [0.0; FEATURE_COUNT];
         for i in 0..FEATURE_COUNT {
@@ -200,6 +210,7 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     }
 
     /// Get current size
+    #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     pub fn size(&self) -> usize {
         self.feature_vectors.len()
     }

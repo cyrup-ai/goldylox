@@ -9,6 +9,5 @@ pub mod storage;
 pub mod types;
 pub mod utilities;
 
-// Re-export key types for backward compatibility
-pub use types::{timestamp_nanos, ColdTierStats};
+// Key types available at: types::{timestamp_nanos, ColdTierStats}
 // PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer

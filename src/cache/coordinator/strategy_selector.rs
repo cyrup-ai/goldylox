@@ -3,10 +3,12 @@
 //! This module implements intelligent cache strategy selection using atomic operations
 //! and adaptive thresholds to optimize cache performance across different workloads.
 
+ // Internal coordinator architecture - components may not be used in minimal API
+
 use crossbeam_utils::atomic::AtomicCell;
 
 use crate::cache::config::CacheConfig;
-use crate::cache::manager::{CacheStrategy, StrategyMetrics, StrategySwitcher, StrategyThresholds};
+use crate::cache::manager::strategy::{CacheStrategy, StrategyMetrics, StrategySwitcher, StrategyThresholds};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Cache strategy selector for optimal tier placement decisions
@@ -17,8 +19,10 @@ pub struct CacheStrategySelector {
     /// Strategy performance metrics with atomic counters
     strategy_metrics: StrategyMetrics,
     /// Strategy threshold parameters for switching decisions
+    #[allow(dead_code)] // Cache coordination - strategy_thresholds used in strategy switching decisions
     strategy_thresholds: StrategyThresholds,
     /// Strategy switching logic with adaptive thresholds
+    #[allow(dead_code)] // Cache coordination - strategy_switcher used in adaptive strategy switching
     strategy_switcher: StrategySwitcher,
 }
 
@@ -44,6 +48,7 @@ impl CacheStrategySelector {
     }
 
     /// Update strategy based on performance metrics
+    #[allow(dead_code)] // Cache coordination - update_strategy used in adaptive strategy management
     pub fn update_strategy(&self) -> Result<(), CacheOperationError> {
         let current = self.current_strategy();
         let metrics = &self.strategy_metrics;

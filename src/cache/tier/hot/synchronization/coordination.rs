@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 #[derive(Debug)]
 pub struct CoordinationState {
     /// Operation lock (0=free, 1=locked)
+    
     operation_lock: AtomicU32,
     /// Active readers count
     active_readers: AtomicU32,

@@ -20,6 +20,7 @@ use super::data_structures::{
 };
 
 /// Workload types for algorithm selection
+#[allow(dead_code)] // Cold tier - WorkloadType used in compression algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadType {
     /// Prioritize speed over compression ratio
@@ -48,6 +49,7 @@ impl CompressionEngine {
     }
 
     /// Set compression algorithm (updates current algorithm atomically)
+    #[allow(dead_code)] // Cold tier - set_algorithm used in dynamic compression algorithm switching
     pub fn set_algorithm(&self, algorithm: CompressionAlgorithm) {
         self.algorithm.store(algorithm);
     }
@@ -58,11 +60,10 @@ impl CompressionEngine {
     }
 
     /// Update compression thresholds for adaptive behavior
-    pub fn update_thresholds(&self, _min_size: u32, _max_ratio: f32, _speed_threshold: f64) {
-        // Note: AdaptiveThresholds fields are not mutable in this design
-        // This is a compatibility method - in production, would need mutable access
-        // or atomic versions of these fields. For now, this provides the expected API.
-        // The actual thresholds are set during construction.
+    pub fn update_thresholds(&self, min_size: u32, max_ratio: f32, speed_threshold: f64) {
+        self.adaptive_thresholds.min_compression_size.store(min_size, Ordering::Relaxed);
+        self.adaptive_thresholds.min_compression_ratio.store(max_ratio.to_bits(), Ordering::Relaxed);
+        self.adaptive_thresholds.speed_threshold.store(speed_threshold.to_bits(), Ordering::Relaxed);
     }
 
     /// Select optimal compression algorithm for given data
@@ -70,7 +71,7 @@ impl CompressionEngine {
         let data_size = data.len() as u32;
 
         // Skip compression for small data
-        if data_size < self.adaptive_thresholds.min_compression_size {
+        if data_size < self.adaptive_thresholds.min_compression_size.load(Ordering::Relaxed) {
             return CompressionAlgorithm::None;
         }
 
@@ -96,7 +97,7 @@ impl CompressionEngine {
         // For medium-sized data, balance speed and compression
         if data_size > 1024 {
             if let Some(lz4_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Lz4) {
-                if lz4_metrics.avg_compression_speed > self.adaptive_thresholds.speed_threshold {
+                if lz4_metrics.avg_compression_speed > f64::from_bits(self.adaptive_thresholds.speed_threshold.load(Ordering::Relaxed)) {
                     return CompressionAlgorithm::Lz4;
                 }
             }
@@ -399,7 +400,7 @@ impl CompressionEngine {
     /// Calculate algorithm performance score using existing sophisticated metrics
     fn calculate_algorithm_score(&self, metrics: &AlgorithmMetrics) -> f64 {
         // Use existing adaptive thresholds for decision-making
-        let speed_weight = if metrics.avg_compression_speed < self.adaptive_thresholds.speed_threshold {
+        let speed_weight = if metrics.avg_compression_speed < f64::from_bits(self.adaptive_thresholds.speed_threshold.load(Ordering::Relaxed)) {
             0.6 // Prioritize speed when below threshold
         } else {
             0.3 // De-emphasize speed when adequate
@@ -426,7 +427,7 @@ impl CompressionEngine {
     /// Connect to existing metrics for workload-aware selection
     pub fn select_algorithm_for_workload(&self, data: &[u8], workload_type: WorkloadType) -> CompressionAlgorithm {
         // Use existing size thresholds
-        if (data.len() as u32) < self.adaptive_thresholds.min_compression_size {
+        if (data.len() as u32) < self.adaptive_thresholds.min_compression_size.load(Ordering::Relaxed) {
             return CompressionAlgorithm::None;
         }
         
@@ -519,6 +520,7 @@ impl CompressionStats {
 }
 
 /// Compression statistics snapshot
+#[allow(dead_code)] // Cold tier - CompressionStatsSnapshot used in compression statistics reporting
 #[derive(Debug, Clone)]
 pub struct CompressionStatsSnapshot {
     pub total_compressed: u64,
@@ -546,12 +548,14 @@ impl CompressedData {
     }
 
     /// Check if compressed data is empty
+    #[allow(dead_code)] // Cold tier - is_empty used in compressed data validation
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 }
 
 /// Compression error types
+#[allow(dead_code)] // Cold tier - CompressionError used in compression error handling
 #[derive(Debug, Clone)]
 pub enum CompressionError {
     // Existing

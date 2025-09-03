@@ -51,7 +51,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Find best eviction candidate using SIMD-accelerated search
     pub fn find_eviction_candidate(
         &mut self,
-        metadata: &[SlotMetadata; 256],
+        metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
     ) -> Option<EvictionCandidate<K, V>> {

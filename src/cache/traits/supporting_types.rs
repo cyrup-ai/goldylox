@@ -3,6 +3,8 @@
 //! This module provides specialized traits that extend and support the core cache functionality
 //! with zero-cost abstractions for hashing, prioritization, serialization, and metadata.
 
+ // Internal supporting traits - may not be used in minimal API
+
 use std::fmt::Debug;
 use std::hash::Hash;
 

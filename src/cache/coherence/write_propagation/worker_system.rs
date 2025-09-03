@@ -30,8 +30,10 @@ pub struct WriteBackTask<K: CacheKey, V: CacheValue> {
     /// Request to be processed  
     pub request: WriteBackRequest<CoherenceKey<K>, V>, // Generic coherence key
     /// Submission timestamp
+    #[allow(dead_code)] // MESI coherence - used in background worker task scheduling and timeout management
     pub submitted_at: Instant,
     /// Maximum processing time
+    #[allow(dead_code)] // MESI coherence - used in background worker task scheduling and timeout management
     pub timeout_ns: u64,
 }
 
@@ -39,12 +41,14 @@ pub struct WriteBackTask<K: CacheKey, V: CacheValue> {
 #[derive(Debug, Clone)]
 pub struct WriteBackCompletion {
     /// Completed task ID
+    #[allow(dead_code)] // MESI coherence - used in background worker completion tracking and task correlation
     pub task_id: u64,
     /// Processing result
     pub result: WriteBackResult,
     /// Processing duration
     pub processing_time_ns: u64,
     /// Completion timestamp
+    #[allow(dead_code)] // MESI coherence - used in background worker completion tracking and performance analysis
     pub completed_at: Instant,
 }
 

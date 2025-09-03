@@ -172,8 +172,33 @@ where
                 
                 match CoherenceStatistics::get_global_instance() {
                     Ok(coherence_stats) => {
-                        // Get fresh snapshot to refresh internal calculations
-                        let _snapshot = coherence_stats.get_snapshot();
+                        // Get fresh snapshot and log comprehensive telemetry
+                        let snapshot = coherence_stats.get_snapshot();
+                        
+                        // Use CoherenceStatistics methods for real-time calculation
+                        let live_success_rate = coherence_stats.success_rate();
+                        let live_invalidation_efficiency = coherence_stats.invalidation_efficiency();
+                        
+                        // Log comprehensive coherence telemetry using all CoherenceStatisticsSnapshot fields
+                        log::info!("Coherence telemetry - Total ops: {}, Success rate: {:.1}%, Violations: {} ({:.1}%), Overhead: {}ns/op", 
+                            snapshot.total_operations(),
+                            snapshot.success_rate(),
+                            snapshot.protocol_violations,
+                            snapshot.violation_rate(),
+                            snapshot.avg_overhead_per_operation_ns()
+                        );
+                        log::debug!("Coherence details - Transitions: {}, Invalidations sent/rcv: {}/{}, Writebacks: {}, Avg latency: {}ns, Peak concurrent: {}", 
+                            snapshot.total_transitions,
+                            snapshot.invalidations_sent,
+                            snapshot.invalidations_received,
+                            snapshot.writebacks_performed,
+                            snapshot.avg_operation_latency_ns,
+                            snapshot.peak_concurrent_operations
+                        );
+                        log::debug!("Live coherence metrics - Success rate: {:.2}%, Invalidation efficiency: {:.2}%", 
+                            live_success_rate, 
+                            live_invalidation_efficiency
+                        );
                         log::debug!("Updated coherence statistics");
                     }
                     Err(_) => {

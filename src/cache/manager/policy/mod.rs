@@ -14,11 +14,3 @@ pub mod write_policies;
 // Re-export engine implementation
 
 // Re-export the feature-rich CachePolicyEngine
-pub use engine::CachePolicyEngine;
-pub use types::{
-    AccessType, AdaptivePolicyConfig, AlgorithmMetrics, BackgroundWriteCoordinator,
-    CoalescedWrite, CoordinatorStatus, DirtyEntry, LockFreeCircularBuffer, LockFreeQueue,
-    PrefetchPredictor, ReplacementAlgorithm,
-    ReplacementPolicies, TemporalAccess, ThroughputMetrics, WritePolicy, WritePolicyManager,
-    WriteScheduler,
-};

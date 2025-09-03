@@ -22,10 +22,12 @@ pub struct MemoryPool {
     /// Maximum pool capacity (objects)
     max_capacity: AtomicUsize,
     /// Current pool utilization (objects)
+    #[allow(dead_code)] // Memory management - current_utilization used in pool utilization tracking
     current_utilization: CachePadded<AtomicUsize>,
     /// Free list head (lock-free stack)
     free_list_head: AtomicPtr<PoolEntry>,
     /// Pool allocation statistics
+    #[allow(dead_code)] // Memory management - pool_allocation_stats used in individual pool statistics tracking
     pool_allocation_stats: PoolAllocationStats,
     /// Pool memory layout
     memory_layout: Layout,
@@ -37,6 +39,7 @@ struct PoolEntry {
     /// Pointer to next free entry
     next: AtomicPtr<PoolEntry>,
     /// Entry data (aligned to pool object size)
+    
     data: [u8; 0], // Flexible array member
 }
 impl MemoryPool {

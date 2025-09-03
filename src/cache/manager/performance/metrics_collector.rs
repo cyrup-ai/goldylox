@@ -27,6 +27,7 @@ pub struct MetricsCollector {
     /// Collection status
     collection_active: AtomicBool,
     /// Zero-allocation sample buffer (stack-allocated)
+    #[allow(dead_code)] // Performance monitoring - sample_buffer used in advanced performance sample collection
     sample_buffer: CachePadded<ArrayVec<PerformanceSample, 64>>,
     /// Atomic collection state for coordination
     collection_state: CollectionState,
@@ -49,6 +50,7 @@ impl MetricsCollector {
     }
 
     /// Create new metrics collector with configuration
+    #[allow(dead_code)] // Performance monitoring - new_with_config used in configurable metrics collection setup
     pub fn new_with_config(config: MonitorConfig) -> Result<Self, CacheOperationError> {
         let interval_ns = config.sample_interval_ms * 1_000_000; // Convert ms to ns
         Ok(Self {
@@ -445,6 +447,7 @@ impl MetricsCollector {
 }
 
 /// Statistics about the metrics buffer
+#[allow(dead_code)] // Performance monitoring - MetricsBufferStats used in buffer performance analysis
 #[derive(Debug, Clone)]
 pub struct MetricsBufferStats {
     pub hit_count: u64,

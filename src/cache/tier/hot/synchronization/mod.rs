@@ -11,11 +11,8 @@ pub mod simd_lru;
 pub mod timing;
 
 // Re-export main types for convenience
-pub use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 pub use coordination::{CoordinationState, ReadGuard, WriteGuard};
-pub use operation_result::OperationResult;
 pub use simd_hash::SimdHashState;
 pub use simd_lru::SimdLruTracker;
-pub use timing::timestamp as timing_timestamp;
 // PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer

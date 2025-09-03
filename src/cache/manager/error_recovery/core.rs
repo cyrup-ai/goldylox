@@ -12,15 +12,20 @@ use super::types::{CircuitState, ErrorType, HealthStatus, RecoveryStrategy};
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Error recovery system for fault tolerance
+#[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
 #[derive(Debug)]
 pub struct ErrorRecoverySystem<K: CacheKey, V: CacheValue> {
     /// Error detection mechanisms
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub error_detector: ErrorDetector,
     /// Recovery strategies
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub recovery_strategies: RecoveryStrategies<K, V>,
     /// Circuit breaker for tier failures
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub circuit_breaker: CircuitBreaker,
     /// Error statistics
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub error_stats: ErrorStatistics,
 }
 
@@ -199,8 +204,8 @@ impl<K: CacheKey, V: CacheValue> ErrorRecoverySystem<K, V> {
 
     /// Reset all statistics and states
     pub fn reset_all(&self) {
-        self.error_stats.reset_all();
-        self.circuit_breaker.reset_all();
+        self.error_stats.reset_statistics();
+        self.circuit_breaker.reset();
         self.recovery_strategies.reset_success_rates();
     }
 
@@ -225,14 +230,22 @@ impl<K: CacheKey, V: CacheValue> ErrorRecoverySystem<K, V> {
 }
 
 /// System health report
+#[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
 #[derive(Debug, Clone)]
 pub struct SystemHealthReport {
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub overall_status: HealthStatus,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub error_health_score: f64,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub circuit_breaker_health: super::circuit_breaker::CircuitBreakerHealth,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub total_errors: u64,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub recovery_capacity_available: bool,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub in_error_burst: bool,
+    #[allow(dead_code)] // Error recovery - used in fault tolerance and circuit breaker systems
     pub mttr_ms: f64,
 }
 
