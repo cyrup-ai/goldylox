@@ -43,7 +43,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         let eviction_config = crate::cache::tier::warm::config::EvictionConfig {
             primary_policy: crate::cache::tier::warm::eviction::types::EvictionPolicyType::Adaptive,
             fallback_policy: crate::cache::tier::warm::eviction::types::EvictionPolicyType::Lru,
-            ml_enabled: true,
+
             adaptive_switching: true,
             history_buffer_size: 1000,
             adaptation_interval_sec: 60,
@@ -56,7 +56,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         };
 
         let prefetch_config = crate::cache::tier::hot::prefetch::PrefetchConfig {
-            enabled: config.enable_prefetch,
+
             history_size: 1000,
             max_prefetch_distance: 5,
             min_confidence_threshold: 0.6,

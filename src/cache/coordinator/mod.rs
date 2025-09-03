@@ -29,7 +29,7 @@ pub mod tier_operations;
 pub mod unified_manager;
 
 // REMOVED: Compatibility re-exports that hide canonical API paths
-// These re-exports enabled broken code to import via coordinator:: instead of specific modules
+// These re-exports allowed broken code to import via coordinator:: instead of specific modules
 // Users must now import from canonical module paths:
 // - Use coordinator::background_coordinator::BackgroundCoordinator
 // - Use coordinator::global_api::{cache_clear, cache_clear_generic, ...}

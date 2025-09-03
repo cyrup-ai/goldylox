@@ -67,32 +67,31 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
 
     /// Record cache access for learning
     pub fn record_access(&mut self, key: K, slot_idx: usize, hit: bool, timestamp_ns: u64) {
-        if self.config.learning_enabled {
-            let event = AccessEvent {
-                event_id: EVENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-                key,
-                timestamp: timestamp_ns,
-                access_type: AccessType::Read,
-                tier: CacheTier::Hot,
-                hit,
-                slot_index: Some(slot_idx),
-                latency_ns: 0, // Will be updated by caller if needed
-                entry_size: 0, // Default size - will be updated by caller if needed
-            };
 
-            self.access_history.push(event);
+        let event = AccessEvent {
+            event_id: EVENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            key,
+            timestamp: timestamp_ns,
+            access_type: AccessType::Read,
+            tier: CacheTier::Hot,
+            hit,
+            slot_index: Some(slot_idx),
+            latency_ns: 0, // Will be updated by caller if needed
+            entry_size: 0, // Default size - will be updated by caller if needed
+        };
 
-            // Limit history size
-            if self.access_history.len() > self.config.history_size {
-                self.access_history.remove(0);
-            }
+        self.access_history.push(event);
 
-            // Update metrics
-            if hit {
-                self.performance_metrics.correct_evictions += 1;
-            } else {
-                self.performance_metrics.false_evictions += 1;
-            }
+        // Limit history size
+        if self.access_history.len() > self.config.history_size {
+            self.access_history.remove(0);
+        }
+
+        // Update metrics
+        if hit {
+            self.performance_metrics.correct_evictions += 1;
+        } else {
+            self.performance_metrics.false_evictions += 1;
         }
     }
 
@@ -132,7 +131,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             hit_rate,
             avg_eviction_time_ns: avg_eviction_time,
             feature_weights: self.feature_weights.clone(),
-            learning_enabled: self.config.learning_enabled,
+
         }
     }
 

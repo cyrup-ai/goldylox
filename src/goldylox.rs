@@ -219,11 +219,7 @@ where
         self
     }
     
-    /// Enable/disable hot tier
-    pub fn hot_tier_enabled(mut self, enabled: bool) -> Self {
-        self.config.hot_tier.enabled = enabled;
-        self
-    }
+
     
     /// Set hot tier memory limit in MB
     pub fn hot_tier_memory_limit_mb(mut self, limit_mb: u32) -> Self {
@@ -231,16 +227,7 @@ where
         self
     }
     
-    /// Enable/disable SIMD optimizations
-    pub fn enable_simd(mut self, enable: bool) -> Self {
-        self.config.hot_tier.enable_simd = enable;
-        self
-    }    
-    /// Enable/disable prefetching
-    pub fn enable_prefetch(mut self, enable: bool) -> Self {
-        self.config.hot_tier.enable_prefetch = enable;
-        self
-    }
+
     
     /// Set warm tier maximum entries
     pub fn warm_tier_max_entries(mut self, max_entries: usize) -> Self {
@@ -248,11 +235,7 @@ where
         self
     }
     
-    /// Enable/disable warm tier
-    pub fn warm_tier_enabled(mut self, enabled: bool) -> Self {
-        self.config.warm_tier.enabled = enabled;
-        self
-    }
+
     
     /// Set warm tier memory limit in bytes
     pub fn warm_tier_max_memory_bytes(mut self, max_bytes: u64) -> Self {
@@ -272,11 +255,7 @@ where
         }
         self
     }    
-    /// Enable/disable cold tier
-    pub fn cold_tier_enabled(mut self, enabled: bool) -> Self {
-        self.config.cold_tier.enabled = enabled;
-        self
-    }
+
     
     /// Set cold tier maximum size in bytes
     pub fn cold_tier_max_size_bytes(mut self, max_size_bytes: u64) -> Self {
@@ -290,11 +269,7 @@ where
         self
     }
     
-    /// Enable/disable background workers
-    pub fn enable_background_workers(mut self, enable: bool) -> Self {
-        self.config.worker.enabled = enable;
-        self
-    }
+
     
     /// Set number of background worker threads
     pub fn background_worker_threads(mut self, count: u8) -> Self {
@@ -302,11 +277,7 @@ where
         self
     }
     
-    /// Enable/disable telemetry
-    pub fn enable_telemetry(mut self, enable: bool) -> Self {
-        self.config.monitoring.enabled = enable;
-        self
-    }    
+    
     /// Build the cache with the configured settings
     /// 
     /// This initializes all cache tiers, crossbeam channels, workers, etc.

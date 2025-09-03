@@ -450,23 +450,23 @@ pub struct CachePerformanceMetrics {
 /// Statistics collection configuration - integrated from manager/statistics/types.rs
 #[derive(Debug, Clone)]
 pub struct StatisticsConfig {
-    /// Enable detailed per-tier statistics
-    pub enable_detailed_stats: bool,
+    /// Detailed per-tier statistics active
+    pub detailed_stats_active: bool,
     /// Statistics collection interval in nanoseconds
     pub collection_interval_ns: u64,
     /// Maximum statistics history to retain
     pub max_history_entries: usize,
-    /// Enable performance trend analysis
-    pub enable_trend_analysis: bool,
+    /// Performance trend analysis active
+    pub trend_analysis_active: bool,
 }
 
 impl Default for StatisticsConfig {
     fn default() -> Self {
         Self {
-            enable_detailed_stats: true,
+            detailed_stats_active: true,
             collection_interval_ns: 1_000_000_000, // 1 second
             max_history_entries: 1000,
-            enable_trend_analysis: true,
+            trend_analysis_active: true,
         }
     }
 }

@@ -134,19 +134,5 @@ impl ErrorDetector {
         self.detection_state.sensitivity.load()
     }
 
-    /// Check if health checks are enabled
-    #[inline(always)]
-    pub fn is_health_check_enabled(&self) -> bool {
-        self.health_check_config
-            .enabled
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
 
-    /// Enable or disable health checks
-    #[inline]
-    pub fn set_health_check_enabled(&self, enabled: bool) {
-        self.health_check_config
-            .enabled
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    }
 }

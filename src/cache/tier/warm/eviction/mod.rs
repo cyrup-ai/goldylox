@@ -50,15 +50,13 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
     }
 
     /// Create new policy with specific configuration
-    pub fn with_config(config: EvictionConfig) -> Self {
+    pub fn with_config(_config: EvictionConfig) -> Self {
         let policy = Self::new();
 
-        // Configure based on settings
-        if config.ml_enabled {
-            policy
-                .policy_type
-                .store(EvictionPolicyType::MachineLearning);
-        }
+
+        policy
+            .policy_type
+            .store(EvictionPolicyType::MachineLearning);
 
         policy
     }

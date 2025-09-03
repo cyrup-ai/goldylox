@@ -149,10 +149,8 @@ impl<K: CacheKey> PrefetchPredictor<K> {
 
     /// Record cache access for pattern learning
     pub fn record_access(&mut self, key: &K, timestamp_ns: u64, context_hash: u64) {
-        if !self.config.enabled {
-            return;
-        }
 
+        
         let access = AccessSequence {
             key: key.clone(),
             timestamp: timestamp_ns,
@@ -236,10 +234,8 @@ impl<K: CacheKey> PrefetchPredictor<K> {
 
     /// Generate prefetch predictions based on current access
     fn generate_predictions(&mut self, current_key: &K, timestamp_ns: u64, _context_hash: u64) {
-        if !self.config.enabled {
-            return;
-        }
 
+        
         // Generate predictions from patterns
         let predictions =
             self.prediction_engine
@@ -341,7 +337,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
         };
 
         PrefetchStats {
-            enabled: self.config.enabled,
+
             total_predictions: self.stats.total_predictions,
             accuracy,
             hit_rate,

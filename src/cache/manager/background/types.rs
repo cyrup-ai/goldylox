@@ -367,8 +367,8 @@ pub struct MaintenanceConfig {
     pub task_timeout_ns: u64,
     /// Maximum retry attempts for failed tasks
     pub max_task_retries: u8,
-    /// Work stealing enabled
-    pub enable_work_stealing: bool,
+    /// Work stealing configuration
+    pub work_stealing_active: bool,
 }
 
 impl Default for MaintenanceConfig {
@@ -379,7 +379,7 @@ impl Default for MaintenanceConfig {
             heartbeat_interval_ns: 1_000_000_000, // 1 second
             task_timeout_ns: 30_000_000_000,      // 30 seconds
             max_task_retries: 3,
-            enable_work_stealing: true,
+            work_stealing_active: true,
         }
     }
 }

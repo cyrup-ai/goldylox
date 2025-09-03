@@ -99,7 +99,6 @@ impl From<PatternDetectionError> for HotTierError {
 /// Prefetch configuration
 #[derive(Debug, Clone)]
 pub struct PrefetchConfig {
-    pub enabled: bool,
     pub history_size: usize,
     pub max_prefetch_distance: usize,
     pub min_confidence_threshold: f64,
@@ -111,7 +110,7 @@ pub struct PrefetchConfig {
 impl Default for PrefetchConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+
             history_size: 1000,
             max_prefetch_distance: 5,
             min_confidence_threshold: 0.6,
@@ -126,7 +125,6 @@ impl Default for PrefetchConfig {
 /// Combines comprehensive hot tier features with policy engine performance metrics
 #[derive(Debug, Clone)]
 pub struct PrefetchStats {
-    pub enabled: bool,
     pub total_predictions: u64,
     pub accuracy: f64,
     pub hit_rate: f64,
@@ -152,8 +150,7 @@ impl PrefetchStats {
 
     /// Merge statistics from another PrefetchStats
     pub fn merge(&mut self, other: PrefetchStats) {
-        // Keep enabled if either is enabled
-        self.enabled = self.enabled || other.enabled;
+
 
         // Sum total predictions
         self.total_predictions += other.total_predictions;
@@ -177,7 +174,7 @@ impl PrefetchStats {
 impl Default for PrefetchStats {
     fn default() -> Self {
         Self {
-            enabled: false,
+
             total_predictions: 0,
             accuracy: 0.0,
             hit_rate: 0.0,

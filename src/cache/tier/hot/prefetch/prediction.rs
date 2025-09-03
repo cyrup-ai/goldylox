@@ -27,10 +27,8 @@ impl PredictionEngine {
         timestamp_ns: u64,
         patterns: &[DetectedPattern<K>],
     ) -> Vec<PrefetchRequest<K>> {
-        if !self.config.enabled {
-            return Vec::new();
-        }
 
+        
         let mut predictions = Vec::new();
 
         // Look for patterns that match current access

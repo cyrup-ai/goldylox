@@ -22,7 +22,7 @@ impl Default for MeasurementCacheConfig {
 /// Configuration for pattern analyzer
 #[derive(Debug, Clone)]
 pub struct AnalyzerConfig {
-    pub enable_pattern_detection: bool,
+    pub pattern_detection_active: bool,
     pub max_pattern_history: usize,
     pub analysis_window_size: usize,
 }
@@ -30,7 +30,7 @@ pub struct AnalyzerConfig {
 impl Default for AnalyzerConfig {
     fn default() -> Self {
         Self {
-            enable_pattern_detection: true,
+            pattern_detection_active: true,
             max_pattern_history: 1000,
             analysis_window_size: 100,
         }

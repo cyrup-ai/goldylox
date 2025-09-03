@@ -15,8 +15,7 @@ pub struct TrendAnalysis {
     pub trend_direction: AtomicF64,
     /// Trend strength (0.0-1.0)
     pub trend_strength: AtomicF64,
-    /// Whether leak detection is enabled
-    pub leak_detection_enabled: bool,
+
     /// Rate of change (bytes per second)
     pub change_rate: AtomicF64,
     /// Predicted time to threshold breach
@@ -30,11 +29,11 @@ impl TrendAnalysis {
         Self::new_with_config(true)
     }
     
-    pub fn new_with_config(leak_detection_enabled: bool) -> Self {
+    pub fn new_with_config(_leak_detection_active: bool) -> Self {
         Self {
             trend_direction: AtomicF64::new(0.0),
             trend_strength: AtomicF64::new(0.0),
-            leak_detection_enabled,
+
             change_rate: AtomicF64::new(0.0),
             time_to_breach_sec: AtomicF64::new(f64::INFINITY),
             analysis_confidence: AtomicF64::new(0.0),

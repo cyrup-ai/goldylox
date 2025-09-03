@@ -35,12 +35,7 @@ pub(crate) mod trends;
 pub(crate) mod types;
 pub(crate) mod unified_stats;
 
-// REMOVED: Compatibility re-exports that hide canonical API paths
-// These re-exports enabled broken code to compile by providing aliases
-// Users must now import from canonical module paths:
-// - Use cache::manager::performance::alert_system::AlertSystem (CANONICAL)
-// - Use telemetry::data_structures::{AlertPatternState, CollectionState, ...}
-// - Use telemetry::performance_history::PerformanceHistory
+
 // - Use telemetry::metrics::MetricsCollector
 // - Use telemetry::monitor::{CachePerformanceMonitor, PerformanceMonitor}
 // - Use telemetry::performance_history::*

@@ -6,7 +6,7 @@
 //! Enhanced with SIMD-optimized performance features and pattern analysis capabilities.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 
@@ -55,8 +55,7 @@ pub struct AlertSystem {
     /// Alert configuration
     #[allow(dead_code)] // Performance monitoring - alert_config used in alert system configuration management
     alert_config: AlertConfig,
-    /// Notification status
-    notification_enabled: AtomicBool,
+
     /// Next alert ID
     next_alert_id: AtomicU64,
     /// Rate limiting state
@@ -75,7 +74,7 @@ impl AlertSystem {
             alert_history: VecDeque::new(),
             performance_alert_buffer: AlertHistoryBuffer::new(), // Use canonical implementation (128 capacity)
             alert_config: AlertConfig::default(),
-            notification_enabled: AtomicBool::new(true),
+
             next_alert_id: AtomicU64::new(1),
             rate_limits: AlertRateLimits::with_limits([
                 10, // HitRateDegradation
@@ -209,10 +208,8 @@ impl AlertSystem {
         };
         self.alert_history.push_back(event);
 
-        // Send notification if enabled
-        if self.notification_enabled.load(Ordering::Relaxed) {
-            self.send_notification(&alert);
-        }
+
+        self.send_notification(&alert);
 
         // Trim history if needed
         self.trim_alert_history();

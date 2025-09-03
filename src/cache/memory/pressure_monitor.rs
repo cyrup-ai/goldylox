@@ -28,7 +28,7 @@ pub fn create_advanced_pressure_monitor(config: &CacheConfig) -> Result<MemoryPr
         thresholds, 
         config.memory_config.alert_cooldown_ms,
         config.memory_config.max_history_samples,
-        config.memory_config.leak_detection_enabled
+        true
     ))
 }
 

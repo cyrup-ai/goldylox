@@ -78,8 +78,7 @@ pub struct EvictionStats {
     pub avg_eviction_time_ns: u64,
     #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
     pub feature_weights: FeatureWeights,
-    #[allow(dead_code)] // ML system - used in hot tier eviction policy statistics
-    pub learning_enabled: bool,
+
 }
 
 impl EvictionStats {
@@ -94,8 +93,7 @@ impl EvictionStats {
         // Average the eviction times
         self.avg_eviction_time_ns = (self.avg_eviction_time_ns + other.avg_eviction_time_ns) / 2;
 
-        // Keep learning enabled if either has it enabled
-        self.learning_enabled = self.learning_enabled || other.learning_enabled;
+
 
         // Feature weights remain from current (could be averaged in full implementation)
     }
@@ -157,7 +155,7 @@ impl Default for EvictionStats {
             hit_rate: 0.0,
             avg_eviction_time_ns: 0,
             feature_weights: FeatureWeights::default(),
-            learning_enabled: false,
+    
         }
     }
 }

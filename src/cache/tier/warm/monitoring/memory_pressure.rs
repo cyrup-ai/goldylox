@@ -56,14 +56,14 @@ impl MemoryPressureMonitor {
         thresholds: PressureThresholds,
         alert_cooldown_ms: u64,
         max_history_samples: usize,
-        leak_detection_enabled: bool,
+        _leak_detection_active: bool,
     ) -> Self {
         Self {
             current_usage: CachePadded::new(AtomicU64::new(0)),
             memory_limit,
             peak_usage: CachePadded::new(AtomicU64::new(0)),
             pressure_level: AtomicF64::new(0.0),
-            usage_history: MemoryUsageHistory::new_with_capacity(max_history_samples, leak_detection_enabled),
+            usage_history: MemoryUsageHistory::new_with_capacity(max_history_samples, true),
             thresholds,
             alert_system: MemoryAlertSystem::new(alert_cooldown_ms),
             stats: MemoryMonitoringStats::new(),
@@ -221,9 +221,7 @@ impl MemoryPressureMonitor {
     pub fn detect_memory_leaks(&self) -> Option<MemoryAlert> {
         let trend = self.usage_history.get_trend_analysis();
         
-        if !trend.leak_detection_enabled {
-            return None;
-        }
+
         
         let change_rate = trend.change_rate.load(Ordering::Relaxed);
         let trend_strength = trend.trend_strength.load(Ordering::Relaxed);

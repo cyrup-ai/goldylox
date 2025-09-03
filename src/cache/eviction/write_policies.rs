@@ -133,9 +133,7 @@ pub struct WriteBatchConfig {
     /// Maximum pending writes
     #[allow(dead_code)] // Write policies - max pending used in backpressure management
     max_pending: AtomicUsize,
-    /// Batching enabled flag
-    #[allow(dead_code)] // Write policies - batching enabled flag used in configuration
-    batching_enabled: AtomicCell<bool>,
+
 }
 
 /// Write operation statistics
@@ -842,8 +840,8 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Configure write batching
-    pub fn configure_batching(&self, enabled: bool, batch_size: usize, timeout_ns: u64) {
-        self.batch_config.batching_enabled.store(enabled);
+    pub fn configure_batching(&self, batch_size: usize, timeout_ns: u64) {
+
         self.batch_config
             .batch_size
             .store(batch_size, Ordering::Relaxed);
@@ -907,7 +905,7 @@ impl WriteBatchConfig {
             batch_size: AtomicUsize::new(64),
             batch_timeout: AtomicU64::new(1_000_000), // 1ms default
             max_pending: AtomicUsize::new(1024),
-            batching_enabled: AtomicCell::new(true),
+
         }
     }
 }

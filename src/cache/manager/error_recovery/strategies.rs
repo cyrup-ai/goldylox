@@ -322,7 +322,7 @@ impl<K: CacheKey, V: CacheValue> RecoveryStrategies<K, V> {
                         let _fallback_config = EvictionConfig {
                             primary_policy: EvictionPolicyType::Lru,
                             fallback_policy: EvictionPolicyType::Lru,
-                            ml_enabled: false, // Disable ML under degraded conditions
+
                             adaptive_switching: false,
                             ..Default::default()
                         };

@@ -112,10 +112,10 @@ pub struct AlertConfig {
     pub max_active_alerts: usize,
     /// Alert evaluation interval
     pub evaluation_interval: Duration,
-    /// Enable email notifications
-    pub enable_email_notifications: bool,
-    /// Enable console notifications
-    pub enable_console_notifications: bool,
+    /// Email notifications active
+    pub email_notifications_active: bool,
+    /// Console notifications active
+    pub console_notifications_active: bool,
 }
 
 impl Default for AlertConfig {
@@ -123,8 +123,8 @@ impl Default for AlertConfig {
         Self {
             max_active_alerts: 50,
             evaluation_interval: Duration::from_secs(30),
-            enable_email_notifications: false,
-            enable_console_notifications: true,
+            email_notifications_active: false,
+            console_notifications_active: true,
         }
     }
 }
@@ -132,8 +132,8 @@ impl Default for AlertConfig {
 /// History compression configuration
 #[derive(Debug, Clone)]
 pub struct HistoryCompressionConfig {
-    /// Enable compression of old data
-    pub enable_compression: bool,
+    /// Compression of old data active
+    pub compression_active: bool,
     /// Age threshold for compression
     pub compression_threshold: Duration,
     /// Compression ratio target
@@ -143,7 +143,7 @@ pub struct HistoryCompressionConfig {
 impl Default for HistoryCompressionConfig {
     fn default() -> Self {
         Self {
-            enable_compression: true,
+            compression_active: true,
             compression_threshold: Duration::from_hours(1),
             compression_ratio: 0.1,
         }

@@ -17,8 +17,8 @@ pub struct OptimizationConfig {
     pub min_fragmentation_ratio: f64,
     /// Maximum idle time before entry removal
     pub max_idle_duration: Duration,
-    /// Enable automatic optimization
-    pub enable_auto_optimization: bool,
+    /// Automatic optimization active
+    pub auto_optimization_active: bool,
     /// Optimization interval
     pub optimization_interval: Duration,
     /// Target storage efficiency (0.0-1.0)
@@ -69,7 +69,7 @@ impl Default for OptimizationConfig {
         Self {
             min_fragmentation_ratio: 0.3,
             max_idle_duration: Duration::from_secs(604800), // 1 week
-            enable_auto_optimization: true,
+            auto_optimization_active: true,
             optimization_interval: Duration::from_secs(86400), // 1 day
             target_efficiency: 0.85,
         }

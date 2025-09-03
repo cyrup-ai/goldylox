@@ -31,7 +31,7 @@ impl MemoryUsageHistory {
     }
     
     /// Create with specified capacity (up to 256)
-    pub fn new_with_capacity(capacity: usize, leak_detection_enabled: bool) -> Self {
+    pub fn new_with_capacity(capacity: usize, _leak_detection_active: bool) -> Self {
         let actual_capacity = capacity.min(256);
         
         // Initialize arrays directly - cannot fail
@@ -43,7 +43,7 @@ impl MemoryUsageHistory {
             actual_capacity,
             position: CachePadded::new(AtomicUsize::new(0)),
             timestamps,
-            trend_analysis: TrendAnalysis::new_with_config(leak_detection_enabled),
+            trend_analysis: TrendAnalysis::new_with_config(true),
         }
     }
 

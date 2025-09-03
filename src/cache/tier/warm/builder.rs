@@ -82,7 +82,7 @@ impl WarmTierBuilder {
                     }
                 }
                 Err(e) => {
-                    // Exhausted retries, try graceful degradation if enabled
+                    // Exhausted retries, try graceful degradation
                     return match self.degradation_mode {
                         DegradationMode::MonitorlessMode => {
                             LockFreeWarmTier::new(self.config)

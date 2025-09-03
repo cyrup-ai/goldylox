@@ -336,17 +336,15 @@ pub fn init_cold_tier<K: CacheKey + Default + bincode::Encode + bincode::Decode<
     use arrayvec::ArrayString;
 
     let config = ColdTierConfig {
-        enabled: true,
         storage_path: ArrayString::from(storage_path)
             .map_err(|_| CacheOperationError::invalid_state("Storage path too long"))?,
         max_size_bytes: 1024 * 1024 * 1024, // 1GB
         max_file_size: 100 * 1024 * 1024,   // 100MB
         compression_level: 6,
-        auto_compact: true,
         compact_interval_ns: 3_600_000_000_000, // 1 hour
         mmap_size: 1024 * 1024 * 1024,
         write_buffer_size: 64 * 1024,
-        _padding: [0; 2],
+        _padding: [0; 3],
     };
 
     let tier = PersistentColdTier::<K, V>::new(config).map_err(|e| {

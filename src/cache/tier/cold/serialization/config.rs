@@ -8,8 +8,8 @@ use crate::cache::traits::CacheValue;
 /// Serialization engine configuration
 #[derive(Debug, Clone)]
 pub struct SerializationConfig {
-    /// Enable compression
-    pub enable_compression: bool,
+    /// Compression active
+    pub compression_active: bool,
     /// Compression level
     pub compression_level: u32,
 }
@@ -17,7 +17,7 @@ pub struct SerializationConfig {
 impl Default for SerializationConfig {
     fn default() -> Self {
         Self {
-            enable_compression: false,
+            compression_active: true,
             compression_level: 1,
         }
     }

@@ -207,8 +207,7 @@ pub struct SyncState {
     pub last_sync_ns: AtomicU64,
     /// Sync frequency
     pub sync_interval_ns: u64,
-    /// Auto-sync enabled
-    pub auto_sync_enabled: AtomicBool,
+
 }
 
 /// Recovery system for crash resilience

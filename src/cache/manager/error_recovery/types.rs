@@ -87,8 +87,7 @@ pub struct HealthCheckConfig {
     pub check_timeout: Duration,
     /// Consecutive failure threshold
     pub failure_threshold: u32,
-    /// Health check enabled flag
-    pub enabled: AtomicBool,
+
 }
 
 /// Detection state tracking
@@ -253,7 +252,7 @@ impl Default for HealthCheckConfig {
             check_interval: Duration::from_secs(30),
             check_timeout: Duration::from_secs(5),
             failure_threshold: 3,
-            enabled: AtomicBool::new(true),
+
         }
     }
 }

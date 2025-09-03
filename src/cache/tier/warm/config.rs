@@ -19,8 +19,6 @@ pub struct SkipMapConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(align(64))]
 pub struct WarmTierConfig {
-    /// Enable/disable the warm tier
-    pub enabled: bool,
     /// Maximum memory usage in bytes
     pub max_memory_bytes: u64,
     /// Maximum number of entries
@@ -75,8 +73,7 @@ pub struct EvictionConfig {
     // Adaptive Intelligence (from Warm tier)
     /// Enable adaptive policy switching based on performance
     pub adaptive_switching: bool,
-    /// Enable machine learning-based policy optimization
-    pub ml_enabled: bool,
+    /// Machine learning policy optimization
     /// Policy evaluation interval in seconds
     pub evaluation_interval_sec: u64,
     /// Performance analysis window size
@@ -134,8 +131,8 @@ pub struct TrackingConfig {
     pub frequency_estimation: FrequencyConfig,
     /// Pattern classification sensitivity
     pub pattern_sensitivity: f64,
-    /// Enable predictive prefetching
-    pub enable_prefetching: bool,
+    /// Predictive prefetching
+    pub prefetching_active: bool,
 }
 
 /// Frequency estimation configuration
@@ -154,8 +151,8 @@ pub struct FrequencyConfig {
 /// Background task processing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundConfig {
-    /// Enable background processing
-    pub enable_background_tasks: bool,
+    /// Background processing
+    pub background_tasks_active: bool,
     /// Task processing interval in milliseconds
     pub task_interval_ms: u64,
     /// Maximum tasks per processing cycle
@@ -169,14 +166,14 @@ pub struct BackgroundConfig {
 /// Performance tuning configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceConfig {
-    /// Enable SIMD optimization where available
-    pub enable_simd: bool,
+    /// SIMD optimization where available
+    pub simd_active: bool,
     /// Cache line alignment for atomic structures
     pub cache_line_alignment: usize,
     /// Skiplist layer probability
     pub skiplist_probability: f64,
     /// Memory prefetch hints
-    pub enable_prefetch_hints: bool,
+    pub prefetch_hints_active: bool,
     /// Batch operation sizes
     pub batch_sizes: BatchSizeConfig,
     /// Concurrency limits
@@ -227,7 +224,6 @@ impl Default for WarmTierConfig {
     #[inline]
     fn default() -> Self {
         Self {
-            enabled: true,
             max_memory_bytes: 256 * 1024 * 1024, // 256MB
             max_entries: 10_000,
             default_ttl_sec: 3600, // 1 hour
@@ -276,7 +272,7 @@ impl EvictionConfig {
             primary_policy: EvictionPolicyType::Adaptive,
             fallback_policy: EvictionPolicyType::Lru,
             adaptive_switching: true,
-            ml_enabled: true,
+
             evaluation_interval_sec: 60,
             performance_window_size: 1000,
             switch_confidence_threshold: 0.8,
@@ -305,7 +301,7 @@ impl EvictionConfig {
             policy: self.hot_tier_overrides.as_ref()
                 .and_then(|o| o.force_policy)
                 .unwrap_or(self.primary_policy),
-            learning_enabled: self.ml_enabled,
+
             history_size: self.history_buffer_size,
             adaptation_interval_sec: self.adaptation_interval_sec,
             performance_threshold: self.performance_threshold,
@@ -320,7 +316,7 @@ impl EvictionConfig {
         WarmTierEvictionConfig {
             primary_policy: self.primary_policy,
             adaptive_switching: self.adaptive_switching,
-            ml_enabled: self.ml_enabled,
+
             evaluation_interval_sec: self.evaluation_interval_sec,
             performance_window_size: self.warm_tier_overrides.as_ref()
                 .and_then(|o| o.extended_window_size)
@@ -337,7 +333,7 @@ impl EvictionConfig {
 #[derive(Debug, Clone)]
 pub struct HotTierEvictionConfig {
     pub policy: EvictionPolicyType,
-    pub learning_enabled: bool,
+
     pub history_size: usize,
     pub adaptation_interval_sec: u64,
     pub performance_threshold: f64,
@@ -349,7 +345,7 @@ pub struct HotTierEvictionConfig {
 pub struct WarmTierEvictionConfig {
     pub primary_policy: EvictionPolicyType,
     pub adaptive_switching: bool,
-    pub ml_enabled: bool,
+
     pub evaluation_interval_sec: u64,
     pub performance_window_size: usize,
     pub switch_confidence_threshold: f64,
@@ -364,7 +360,7 @@ impl Default for TrackingConfig {
             pattern_analysis_interval_sec: 30,
             frequency_estimation: FrequencyConfig::default(),
             pattern_sensitivity: 0.7,
-            enable_prefetching: true,
+            prefetching_active: true,
         }
     }
 }
@@ -385,7 +381,7 @@ impl Default for BackgroundConfig {
     #[inline]
     fn default() -> Self {
         Self {
-            enable_background_tasks: true,
+            background_tasks_active: true,
             task_interval_ms: 100,
             max_tasks_per_cycle: 10,
             thread_pool_size: 2,
@@ -398,10 +394,10 @@ impl Default for PerformanceConfig {
     #[inline]
     fn default() -> Self {
         Self {
-            enable_simd: true,
+            simd_active: true,
             cache_line_alignment: 64,
             skiplist_probability: 0.5,
-            enable_prefetch_hints: true,
+            prefetch_hints_active: true,
             batch_sizes: BatchSizeConfig::default(),
             concurrency_limits: ConcurrencyConfig::default(),
         }

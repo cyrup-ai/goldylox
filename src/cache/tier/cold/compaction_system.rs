@@ -240,19 +240,18 @@ impl SyncState {
             pending_writes: AtomicU32::new(0),
             last_sync_ns: AtomicU64::new(0),
             sync_interval_ns,
-            auto_sync_enabled: AtomicBool::new(true),
+
         }
     }
 
     /// Schedule a sync operation
     pub fn schedule_sync(&self) {
-        if self.auto_sync_enabled.load(Ordering::Relaxed) {
-            let pending = self.pending_writes.fetch_add(1, Ordering::Relaxed);
 
-            // Trigger sync if we have many pending writes
-            if pending > 100 {
-                self.trigger_sync();
-            }
+        let pending = self.pending_writes.fetch_add(1, Ordering::Relaxed);
+
+        // Trigger sync if we have many pending writes
+        if pending > 100 {
+            self.trigger_sync();
         }
     }
 
@@ -280,10 +279,7 @@ impl SyncState {
         pending > 0 && (now_ns - last_sync) > self.sync_interval_ns
     }
 
-    /// Enable or disable auto-sync
-    pub fn set_auto_sync(&self, enabled: bool) {
-        self.auto_sync_enabled.store(enabled, Ordering::Relaxed);
-    }
+
 
     /// Get pending write count
     pub fn pending_writes(&self) -> u32 {

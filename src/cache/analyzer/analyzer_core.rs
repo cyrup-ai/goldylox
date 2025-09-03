@@ -47,7 +47,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
 
         // HIGHLANDER: Convert AnalyzerConfig to PrefetchConfig for canonical detector
         let prefetch_config = PrefetchConfig {
-            enabled: true,
+
             history_size: config.max_tracked_keys.min(1000),
             max_prefetch_distance: 5, // Reasonable default
             min_confidence_threshold: 0.7,

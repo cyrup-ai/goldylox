@@ -38,7 +38,7 @@ impl AdaptivePolicyConfig {
     #[allow(dead_code)] // Policy management - new used in adaptive policy configuration initialization
     pub fn new() -> Self {
         Self {
-            enable_ml_prediction: AtomicBool::new(true),
+            ml_prediction_active: AtomicBool::new(true),
             adaptation_interval: Duration::from_secs(30),
             performance_threshold: AtomicU32::new(800), // 80% threshold
             learning_rate: AtomicCell::new(0.01),

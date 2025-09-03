@@ -61,7 +61,7 @@ pub use crate::telemetry::data_structures::PerformanceSample;
 pub struct MonitorConfig {
     pub sample_interval: Duration,
     pub history_size: usize,
-    pub enable_adaptive_thresholds: bool,
+    pub adaptive_thresholds_active: bool,
     pub sample_interval_ms: u64,
 }
 
@@ -70,7 +70,7 @@ impl Default for MonitorConfig {
         Self {
             sample_interval: Duration::from_millis(100),
             history_size: 1000,
-            enable_adaptive_thresholds: true,
+            adaptive_thresholds_active: true,
             sample_interval_ms: 100,
         }
     }

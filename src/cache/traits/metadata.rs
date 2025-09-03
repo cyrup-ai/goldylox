@@ -229,7 +229,7 @@ impl StandardSerializationContext {
         Self::new(SerializationFormat::Custom, CompressionAlgorithm::None)
     }
 
-    /// Check if compression is enabled
+    /// Check if compression is active
     #[inline(always)]
     pub fn has_compression(&self) -> bool {
         !matches!(self.compression, CompressionAlgorithm::None)

@@ -54,13 +54,10 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         // Initialize all cache tiers with SIMD optimization
         let hot_tier_config = crate::cache::config::types::HotTierConfig {
             max_entries: config.hot_tier.max_entries,
-            enabled: config.hot_tier.enabled,
             hash_function: config.hot_tier.hash_function,
             eviction_policy: config.hot_tier.eviction_policy,
             cache_line_size: config.hot_tier.cache_line_size,
             prefetch_distance: config.hot_tier.prefetch_distance,
-            enable_simd: config.hot_tier.enable_simd,
-            enable_prefetch: config.hot_tier.enable_prefetch,
             lru_threshold_secs: config.hot_tier.lru_threshold_secs,
             memory_limit_mb: config.hot_tier.memory_limit_mb,
             _padding: config.hot_tier._padding,
@@ -161,32 +158,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                 // Record successful operation for circuit breaker
                 self.error_recovery.record_success(0);
                 
-                // Execute ML-based access pattern analysis and prefetch prediction
-                let access_pattern = self.policy_engine.analyze_access_pattern(key);
-                if access_pattern.frequency > 3.0 && access_pattern.temporal_locality > 0.7 {
-                    // Generate prefetch predictions for frequently accessed keys
-                    let access_event = crate::cache::eviction::types::AccessEvent {
-                        key: key.clone(),
-                        timestamp: std::time::Instant::now(),
-                        access_type: crate::cache::eviction::types::AccessType::Read,
-                        event_id: elapsed_ns,
-                    };
-                    let predictions = self.policy_engine.generate_prefetch_predictions(key, &[access_event]);
-                    if !predictions.is_empty() {
-                        // Execute top prediction to warm the cache
-                        for prediction in predictions.into_iter().take(2) {
-                            if let Some(predicted_value) = self.tier_operations.try_warm_tier_get(&prediction.key, &mut access_path) {
-                                // Promote predicted value to hot tier if not already there
-                                let _ = self.tier_operations.put_with_replication(
-                                    prediction.key,
-                                    predicted_value,
-                                    crate::cache::coherence::CacheTier::Hot,
-                                    vec![]
-                                );
-                            }
-                        }
-                    }
-                }
+                // ML-based access pattern analysis is handled by the policy engine internally
                 
                 return Some(value);
             }
@@ -595,25 +567,19 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                 Ok(())
             }
             CacheCommand::Compact { tier, target_size, .. } => {
-                // Compact operations are complex - for now just clear and rebuild for the specified tier
-                // This is a simplified implementation that maintains functionality
-                match tier {
-                    crate::cache::types::CacheTier::Hot => {
-                        // Hot tier compaction would involve SIMD optimization - simplified for now
-                        log::info!("Hot tier compaction requested for target size: {}", target_size);
-                        Ok(())
-                    }
-                    crate::cache::types::CacheTier::Warm => {
-                        // Warm tier compaction would involve eviction policy optimization
-                        log::info!("Warm tier compaction requested for target size: {}", target_size);
-                        Ok(())
-                    }
-                    crate::cache::types::CacheTier::Cold => {
-                        // Cold tier compaction would involve storage optimization
-                        log::info!("Cold tier compaction requested for target size: {}", target_size);
-                        Ok(())
-                    }
-                }
+                use crate::cache::tier::cold::compaction_system::{CompactionSystem, CompactionTask};
+                
+                // Use the existing sophisticated compaction system
+                let compaction_system = CompactionSystem::new(target_size as u64)
+                    .map_err(|e| CacheOperationError::io_failed(&format!("Compaction system init failed: {}", e)))?;
+                let task = match tier {
+                    crate::cache::types::CacheTier::Cold => CompactionTask::CompactData,
+                    _ => CompactionTask::OptimizeCompression, // Hot/Warm use compression optimization
+                };
+                
+                compaction_system.schedule_compaction(task)
+                    .map_err(|_| CacheOperationError::InternalError)?;
+                Ok(())
             }
         }
     }
@@ -628,279 +594,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         self.task_coordinator.get_active_tasks()
     }
 
-    /// Batch put operations - process multiple entries immediately
-    pub fn batch_put(&self, entries: Vec<(K, V)>, _target_tier: crate::cache::types::CacheTier) -> Result<(), CacheOperationError> {
-        // Process entries directly through the cache operations
-        for (key, value) in entries {
-            self.put(key, value)?;
-        }
-        Ok(())
-    }
-
-    /// Batch remove operations - process multiple removals immediately  
-    pub fn batch_remove(&self, keys: Vec<K>, _tier: crate::cache::types::CacheTier) -> Result<(), CacheOperationError> {
-        // Process removals directly through the cache operations
-        for key in keys {
-            let _ = self.remove(&key); // Ignore individual failures, return overall success
-        }
-        Ok(())
-    }
-
-    /// Schedule tier migration for multiple entries
-    pub fn batch_migrate(&self, keys: Vec<K>, from_tier: crate::cache::types::CacheTier, to_tier: crate::cache::types::CacheTier) -> Result<(), CacheOperationError> {
-        // Process migrations through the tier promotion system
-        for key in keys {
-            let from_coherence_tier = match from_tier {
-                crate::cache::types::CacheTier::Hot => crate::cache::coherence::CacheTier::Hot,
-                crate::cache::types::CacheTier::Warm => crate::cache::coherence::CacheTier::Warm,
-                crate::cache::types::CacheTier::Cold => crate::cache::coherence::CacheTier::Cold,
-            };
-            let to_coherence_tier = match to_tier {
-                crate::cache::types::CacheTier::Hot => crate::cache::coherence::CacheTier::Hot,
-                crate::cache::types::CacheTier::Warm => crate::cache::coherence::CacheTier::Warm,
-                crate::cache::types::CacheTier::Cold => crate::cache::coherence::CacheTier::Cold,
-            };
-            let _ = self.tier_manager.schedule_promotion(key, from_coherence_tier, to_coherence_tier, 5);
-        }
-        Ok(())
-    }
-
-    /// Update access metadata for multiple keys
-    pub fn batch_update_metadata(&self, key_access_pairs: Vec<(K, u64)>, _tier: crate::cache::types::CacheTier) -> Result<(), CacheOperationError> {
-        // Process metadata updates through the pattern analyzer
-        for (key, _access_count) in key_access_pairs {
-            let _ = self.policy_engine.pattern_analyzer.record_access(&key);
-        }
-        Ok(())
-    }
-
-    /// Check error recovery health status
-    pub fn get_error_recovery_health(&self) -> crate::cache::manager::error_recovery::types::HealthStatus {
-        self.error_recovery.check_health()
-    }
-
-    /// Get detailed error recovery statistics
-    pub fn get_error_recovery_stats(&self) -> &crate::cache::manager::error_recovery::statistics::ErrorStatistics {
-        self.error_recovery.get_error_stats()
-    }
-
-    /// Force error recovery for a specific tier
-    pub fn force_error_recovery(&self, tier: u8, error_type: crate::cache::manager::error_recovery::types::ErrorType) -> bool {
-        self.error_recovery.execute_recovery(error_type, tier)
-    }
-
-    /// Reset all error recovery states
-    pub fn reset_error_recovery(&self) {
-        self.error_recovery.reset_all();
-    }
-
-    /// Get circuit breaker states for all tiers
-    pub fn get_circuit_breaker_states(&self) -> Vec<crate::cache::manager::error_recovery::types::CircuitState> {
-        (0..3).map(|tier| self.error_recovery.get_circuit_state(tier)).collect()
-    }
-
-    /// Get current active eviction policy
-    pub fn get_current_eviction_policy(&self) -> crate::cache::eviction::types::PolicyType {
-        self.policy_engine.current_policy()
-    }
-
-    /// Analyze access pattern for specific key using ML algorithms
-    pub fn analyze_key_access_pattern(&self, key: &K) -> crate::cache::analyzer::types::AccessPattern {
-        self.policy_engine.analyze_access_pattern(key)
-    }
-
-    /// Select eviction candidates using current policy
-    pub fn select_eviction_candidates(&self, tier: crate::cache::coherence::CacheTier, candidates: Vec<K>) -> Option<K> {
-        self.policy_engine.select_replacement_candidate(tier, &candidates)
-    }
-
-    /// Get detailed policy performance statistics
-    pub fn get_policy_performance_stats(&self) -> crate::cache::eviction::PolicyStats {
-        self.policy_engine.get_policy_stats()
-    }
-
-    /// Update policy performance metrics manually
-    pub fn update_policy_performance(&self, policy: crate::cache::eviction::types::PolicyType, hit_rate: f64, latency_ns: u64, memory_efficiency: f64) {
-        self.policy_engine.update_performance_metrics(policy, hit_rate, latency_ns, memory_efficiency);
-    }
-
-    /// Force policy adaptation based on current performance
-    pub fn force_policy_adaptation(&self) -> Result<Option<crate::cache::eviction::types::PolicyType>, CacheOperationError> {
-        if let Some(new_policy) = self.policy_engine.should_adapt_policy() {
-            self.policy_engine.adapt_policy(new_policy.clone())?;
-            Ok(Some(new_policy))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Process write operation with intelligent policy selection
-    pub fn process_write_with_policy(&self, key: &K, tier: crate::cache::coherence::CacheTier) -> Result<crate::cache::eviction::policy_engine::WriteResult, CacheOperationError> {
-        self.policy_engine.process_write_operation(key, tier)
-    }
-
-    /// Get write operation statistics
-    pub fn get_write_policy_stats(&self) -> crate::cache::eviction::policy_engine::WriteStats {
-        self.policy_engine.get_write_stats()
-    }
-
-    /// Generate prefetch predictions based on access patterns
-    pub fn generate_prefetch_predictions(&mut self, key: &K, access_history: &[crate::cache::eviction::types::AccessEvent<K>]) -> Vec<crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>> {
-        self.policy_engine.generate_prefetch_predictions(key, access_history)
-    }
-
-    /// Execute prefetch operations using policy engine
-    pub fn execute_prefetch_operations(&mut self, requests: &[crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>]) -> crate::cache::eviction::policy_engine::PrefetchResult {
-        self.policy_engine.execute_prefetch(requests)
-    }
-
-    /// Analyze whether entry should be promoted with SIMD-accelerated scoring
-    pub fn should_promote_entry(&self, key: &K, value: &V, from_tier: crate::cache::coherence::CacheTier, to_tier: crate::cache::coherence::CacheTier, access_path: &AccessPath) -> crate::cache::tier::manager::PromotionDecision {
-        self.tier_manager.should_promote(key, value, from_tier, to_tier, access_path)
-    }
-
-    /// Schedule tier promotion with priority queue
-    pub fn schedule_tier_promotion(&self, key: K, from_tier: crate::cache::coherence::CacheTier, to_tier: crate::cache::coherence::CacheTier, priority: u8) -> Result<(), CacheOperationError> {
-        self.tier_manager.schedule_promotion(key, from_tier, to_tier, priority)
-    }
-
-    /// Process next promotion task from queue
-    pub fn process_next_tier_promotion(&self, key: &K) -> Result<Option<crate::cache::tier::queue::PromotionTask<K>>, CacheOperationError> {
-        // The process_next_promotion method requires explicit type parameters
-        self.tier_manager.process_next_promotion::<V>(key)
-    }
-
-    /// Check if entry should be demoted from current tier
-    pub fn should_demote_entry(&self, key: &K, value: &V, current_tier: crate::cache::coherence::CacheTier, idle_time_ns: u64, memory_pressure_percent: u32) -> bool {
-        self.tier_manager.should_demote(key, value, current_tier, idle_time_ns, memory_pressure_percent)
-    }
-
-    /// Get tier promotion statistics
-    pub fn get_tier_promotion_stats(&self) -> &crate::cache::tier::statistics::PromotionStatistics {
-        self.tier_manager.get_statistics()
-    }
-
-    /// Trigger comprehensive tier optimization
-    pub fn optimize_tier_distribution(&self) -> Result<(usize, usize), CacheOperationError> {
-        let expired_cleaned = self.tier_manager.cleanup_expired_tasks();
-        let (hot_queue, warm_queue, cold_queue) = self.tier_manager.get_queue_status();
-        let total_queued = hot_queue + warm_queue + cold_queue;
-        
-        log::info!("Tier optimization - Cleaned expired: {}, Total queued: {}", expired_cleaned, total_queued);
-        
-        Ok((expired_cleaned, total_queued))
-    }
-
     /// Cancel a specific task
     pub fn cancel_task(&self, task_id: u64) -> Result<bool, CacheOperationError> {
         self.task_coordinator.cancel_task(task_id)
-    }
-
-    // Advanced API methods to integrate sophisticated features
-
-    /// Submit background maintenance task
-    pub fn submit_maintenance_task(&self, task_type: String, _description: String) -> Result<(), CacheOperationError> {
-        use crate::cache::manager::background::types::{BackgroundTask, MaintenanceTask, CanonicalMaintenanceTask};
-        
-        // Create a canonical maintenance task based on the type
-        let canonical_task = match task_type.as_str() {
-            "cleanup" => CanonicalMaintenanceTask::CleanupExpired {
-                ttl: std::time::Duration::from_secs(3600), // 1 hour TTL
-                batch_size: 100,
-            },
-            "eviction" => CanonicalMaintenanceTask::PerformEviction {
-                target_pressure: 0.8,
-                max_evictions: 1000,
-            },
-            "statistics" => CanonicalMaintenanceTask::UpdateStatistics {
-                include_detailed_analysis: true,
-            },
-            _ => CanonicalMaintenanceTask::OptimizeStructure {
-                optimization_level: crate::cache::tier::warm::maintenance::OptimizationLevel::Aggressive,
-            },
-        };
-
-        let maintenance_task = MaintenanceTask::new(canonical_task);
-        let background_task = BackgroundTask::Maintenance(maintenance_task);
-        self.background_coordinator.submit_task(background_task)
-    }
-
-    /// Get comprehensive cache statistics
-    pub fn get_comprehensive_stats(&self) -> (crate::cache::eviction::PolicyStats, crate::cache::analyzer::types::AnalyzerStatistics) {
-        self.policy_engine.get_comprehensive_stats()
-    }
-
-    /// Get background processing status
-    pub fn get_background_status(&self) -> (f64, bool) {
-        let utilization = self.background_coordinator.task_queue_utilization();
-        let healthy = self.background_coordinator.is_healthy();
-        (utilization, healthy)
-    }
-
-    /// Trigger manual tier promotion analysis
-    pub fn analyze_tier_promotions(&self) -> Result<usize, CacheOperationError> {
-        let (hot_count, warm_count, cold_count) = self.tier_manager.get_queue_status();
-        let processed = self.tier_manager.cleanup_expired_tasks();
-        log::info!("Tier promotion analysis - queues: hot={}, warm={}, cold={}, cleaned={}", 
-                  hot_count, warm_count, cold_count, processed);
-        Ok(processed)
-    }
-
-    /// Force eviction policy adaptation
-    pub fn adapt_eviction_policy(&self) -> Result<(), CacheOperationError> {
-        if let Some(new_policy) = self.policy_engine.should_adapt_policy() {
-            self.policy_engine.adapt_policy(new_policy)?;
-            log::info!("Adapted eviction policy to: {:?}", new_policy);
-        }
-        Ok(())
-    }
-
-    /// Get error recovery status
-    pub fn get_error_recovery_status(&self) -> (bool, bool, bool) {
-        let hot_available = self.error_recovery.is_tier_available(0);
-        let warm_available = self.error_recovery.is_tier_available(1);
-        let cold_available = self.error_recovery.is_tier_available(2);
-        (hot_available, warm_available, cold_available)
-    }
-
-    /// Trigger performance monitoring collection
-    pub fn collect_performance_metrics(&self) -> crate::cache::manager::performance::types::PerformanceSnapshot {
-        self.performance_monitor.force_metrics_collection()
-    }
-
-    /// Get task coordinator queue status
-    pub fn get_task_queue_status(&self) -> crate::cache::worker::task_coordination::CoordinatorStatsSnapshot {
-        self.task_coordinator.get_stats()
-    }
-
-    /// Schedule background tier optimization
-    pub fn schedule_tier_optimization(&self) -> Result<(), CacheOperationError> {
-        // Submit a maintenance task for tier optimization instead
-        self.submit_maintenance_task(
-            "optimization".to_string(),
-            "Tier distribution optimization".to_string()
-        )
-    }
-
-    /// Enable/disable performance monitoring
-    pub fn set_performance_monitoring(&self, enabled: bool) {
-        self.performance_monitor.set_collection_active(enabled);
-        if enabled {
-            log::info!("Performance monitoring enabled");
-        } else {
-            log::info!("Performance monitoring disabled");
-        }
-    }
-
-    /// Graceful shutdown of all subsystems
-    pub fn shutdown(mut self) -> Result<(), CacheOperationError> {
-        // Shutdown all subsystems in proper order
-        self.background_coordinator.shutdown_gracefully()?;
-        self.policy_engine.shutdown()?;
-        self.performance_monitor.reset_all();
-        
-        log::info!("UnifiedCacheManager shutdown completed");
-        Ok(())
     }
 }
 

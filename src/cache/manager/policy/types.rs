@@ -124,7 +124,7 @@ pub struct WriteScheduler<K: crate::cache::traits::CacheKey> {
 /// Adaptive policy configuration
 #[derive(Debug)]
 pub struct AdaptivePolicyConfig {
-    pub enable_ml_prediction: AtomicBool,
+    pub ml_prediction_active: AtomicBool,
     pub adaptation_interval: Duration,
     pub performance_threshold: AtomicU32,
     pub learning_rate: AtomicCell<f32>,

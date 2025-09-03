@@ -5,7 +5,7 @@
 
 #![allow(dead_code)] // Telemetry system - comprehensive monitoring infrastructure
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 use arrayvec::ArrayVec;
@@ -268,9 +268,7 @@ pub struct ThresholdAdaptationState {
     /// Adaptation factor for sensitivity tuning (factor * 1000)
     #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
     pub adaptation_factor: AtomicU32,
-    /// Enable/disable adaptive behavior
-    #[allow(dead_code)] // ML system - used in adaptive threshold tuning and machine learning feedback loops
-    pub adaptive_enabled: AtomicBool,
+
 }
 
 impl ThresholdAdaptationState {
@@ -281,7 +279,7 @@ impl ThresholdAdaptationState {
             last_adaptations: [const { AtomicU64::new(0) }; 5],
             baseline_values: [const { AtomicU32::new(0) }; 5], // No baseline initially
             adaptation_factor: AtomicU32::new(1000), // 1.0 * 1000
-            adaptive_enabled: AtomicBool::new(true),
+
         }
     }
 
@@ -327,17 +325,7 @@ impl ThresholdAdaptationState {
         self.learning_rate.store((rate * 10000.0) as u32, Ordering::Relaxed);
     }
 
-    /// Enable/disable adaptive behavior
-    #[inline]
-    pub fn set_adaptive_enabled(&self, enabled: bool) {
-        self.adaptive_enabled.store(enabled, Ordering::Relaxed);
-    }
 
-    /// Check if adaptive behavior is enabled
-    #[inline]
-    pub fn is_adaptive_enabled(&self) -> bool {
-        self.adaptive_enabled.load(Ordering::Relaxed)
-    }
 }
 
 /// Performance history retention policy

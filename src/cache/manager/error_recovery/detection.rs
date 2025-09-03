@@ -106,17 +106,7 @@ impl ErrorDetector {
         self.detection_state.sensitivity.load()
     }
 
-    /// Enable/disable health checks
-    pub fn set_health_check_enabled(&self, enabled: bool) {
-        self.health_check_config
-            .enabled
-            .store(enabled, Ordering::Relaxed);
-    }
 
-    /// Check if health checks are enabled
-    pub fn is_health_check_enabled(&self) -> bool {
-        self.health_check_config.enabled.load(Ordering::Relaxed)
-    }
 
     fn evaluate_system_health(&self) -> HealthStatus {
         // Use detection sensitivity and active rules for comprehensive health evaluation

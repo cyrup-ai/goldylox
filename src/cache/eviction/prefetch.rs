@@ -71,7 +71,7 @@ impl EvictionPrefetchAdapter {
     pub fn get_metrics<K: CacheKey>(predictor: &PrefetchPredictor<K>) -> PrefetchStats {
         let stats = predictor.get_stats();
         PrefetchStats {
-            enabled: stats.enabled,
+
             total_predictions: stats.total_predictions,
             accuracy: stats.accuracy,
             hit_rate: stats.hit_rate,

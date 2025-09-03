@@ -20,15 +20,7 @@ use std::thread;
 use rand::prelude::*;
 use tokio::time::sleep;
 
-mod workload_simulator;
-mod metrics_dashboard;
-mod coherence_demo;
-mod ml_visualization;
-
-use workload_simulator::*;
-use metrics_dashboard::*;
-use coherence_demo::*;
-use ml_visualization::*;
+// Support modules removed - example now self-contained
 
 /// Product in e-commerce catalog - designed for realistic caching patterns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Default, bincode::Encode, bincode::Decode)]
@@ -133,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("✅ 3 cache nodes deployed:");
     for node in &simulation.nodes {
-        println!("   📍 {} ({}) - Ready with ML and coherence enabled", node.node_id, node.location);
+        println!("   📍 {} ({}) - Ready with ML and coherence", node.node_id, node.location);
     }
 
     // Pre-populate with realistic e-commerce data
@@ -242,53 +234,29 @@ async fn create_cache_node(node_id: &str, location: &str) -> Result<CacheNode, B
     
     // Product cache: Hot tier optimized for frequent lookups
     let product_cache = Goldylox::<String, Product>::builder()
-        .hot_tier_enabled(true)
         .hot_tier_max_entries(5_000)        // Keep top 5K products hot
         .hot_tier_memory_limit_mb(128)
-        .enable_simd(true)                  // SIMD for fast product lookups
-        .enable_prefetch(true)              // Predict related products
-        .warm_tier_enabled(true)
         .warm_tier_max_entries(50_000)      // 50K products in warm tier
         .warm_tier_max_memory_bytes(512 * 1024 * 1024) // 512MB
-        .cold_tier_enabled(true)
         .cold_tier_storage_path(&format!("/tmp/goldylox_products_{}", node_id))
         .cold_tier_max_size_bytes(5 * 1024 * 1024 * 1024) // 5GB for full catalog
         .compression_level(6)               // Balanced compression
-        .enable_background_workers(true)
         .background_worker_threads(2)
-        .enable_telemetry(true)
-        .ml_eviction_enabled(true)          // Enable ML learning
-        .coherence_enabled(true)            // Enable cross-node coherence
-        .node_id(node_id.to_string())
         .build()?;
 
     // Session cache: Warm tier optimized for user sessions  
     let session_cache = Goldylox::<String, UserSession>::builder()
-        .hot_tier_enabled(true)
         .hot_tier_max_entries(1_000)        // Active sessions
         .hot_tier_memory_limit_mb(64)
-        .warm_tier_enabled(true)
         .warm_tier_max_entries(10_000)      // Recent sessions
         .warm_tier_max_memory_bytes(256 * 1024 * 1024) // 256MB
-        .cold_tier_enabled(false)           // Sessions don't need cold storage
-        .enable_simd(true)
-        .enable_telemetry(true)
-        .ml_eviction_enabled(true)
-        .coherence_enabled(true)
-        .node_id(node_id.to_string())
         .build()?;
 
     // Analytics cache: Cold tier optimized for large, infrequent data
     let analytics_cache = Goldylox::<String, AnalyticsEvent>::builder()
-        .hot_tier_enabled(false)            // Analytics rarely accessed frequently
-        .warm_tier_enabled(false)           
-        .cold_tier_enabled(true)
         .cold_tier_storage_path(&format!("/tmp/goldylox_analytics_{}", node_id))
         .cold_tier_max_size_bytes(20 * 1024 * 1024 * 1024) // 20GB for analytics
         .compression_level(9)               // Maximum compression for analytics
-        .enable_telemetry(true)
-        .coherence_enabled(true)            // Analytics need consistency too
-        .node_id(node_id.to_string())
         .build()?;
 
     Ok(CacheNode {

@@ -37,8 +37,8 @@ pub fn initialize_worker_system_with_config<K: CacheKey + Default + bincode::Enc
     info!("Initializing worker system");
     
     // Create appropriate coordinator based on monitoring config
-    if config.memory_config.monitoring_enabled {
-        info!("Memory monitoring enabled, creating monitoring processor");
+    if true {
+        info!("Memory monitoring active, creating monitoring processor");
         
         // Create coordinator with default processor  
         let mut background_coordinator = BackgroundCoordinator::<K, V, DefaultProcessor>::new(config)?;

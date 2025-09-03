@@ -84,8 +84,8 @@ pub struct SyncConfig {
     pub cleanup_interval_sec: u64,
     /// Maximum entry age before cleanup in seconds
     pub max_entry_age_sec: u64,
-    /// Enable automatic background operations
-    pub enable_auto_operations: bool,
+    /// Automatic background operations active
+    pub auto_operations_active: bool,
 }
 
 impl Default for SyncConfig {
@@ -94,7 +94,7 @@ impl Default for SyncConfig {
             auto_sync_interval_sec: 300, // 5 minutes
             cleanup_interval_sec: 3600,  // 1 hour
             max_entry_age_sec: 604800,   // 1 week
-            enable_auto_operations: true,
+            auto_operations_active: true,
         }
     }
 }

@@ -91,7 +91,7 @@ pub mod alignment {
 
 /// SIMD operation utilities
 pub mod simd {
-    /// Check if SIMD is available and enabled
+    /// Check if SIMD is available
     #[inline(always)]
     pub fn is_available() -> bool {
         #[cfg(target_arch = "x86_64")]

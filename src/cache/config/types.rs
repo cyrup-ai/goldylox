@@ -44,77 +44,65 @@ pub enum HashFunction {
 // EvictionPolicy moved to canonical location: crate::cache::tier::warm::eviction::types::EvictionPolicyType
 // Use the comprehensive "best of best" implementation for all eviction policy needs
 
-/// Hot tier configuration (cache-aligned, 64 bytes) - Unified canonical version
+/// Hot tier configuration (cache-aligned, 64 bytes) - Always-on sophisticated version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(align(64))]
 pub struct HotTierConfig {
     pub max_entries: u32,
-    pub enabled: bool,
     pub hash_function: HashFunction,
     pub eviction_policy: EvictionPolicyType,
     pub cache_line_size: u8,
     pub prefetch_distance: u8,
-    /// Enable SIMD optimizations (from tier-specific version)
-    pub enable_simd: bool,
-    /// Enable prefetching (from tier-specific version)  
-    pub enable_prefetch: bool,
-    /// LRU eviction threshold in seconds (from tier-specific version)
+    /// LRU eviction threshold in seconds
     pub lru_threshold_secs: u32,
-    /// Memory limit in megabytes (from tier-specific version)
+    /// Memory limit in megabytes
     pub memory_limit_mb: u32,
     #[serde(skip)]
-    pub _padding: [u8; 1],
+    pub _padding: [u8; 4],
 }
 
 // Removed re-export to eliminate type identity conflicts  
 // Use direct imports: crate::cache::tier::warm::config::{WarmTierConfig, SkipMapConfig}
 
-/// Cold tier configuration with persistent storage
+/// Cold tier configuration with persistent storage - Always-on sophisticated version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(align(64))]
 pub struct ColdTierConfig {
-    pub enabled: bool,
     #[serde(with = "arraystring_serde")]
     pub storage_path: ArrayString<256>,
     pub max_size_bytes: u64,
     pub max_file_size: u64,
     pub compression_level: u8,
-    pub auto_compact: bool,
     pub compact_interval_ns: u64,
     pub mmap_size: u64,
     pub write_buffer_size: u32,
     #[serde(skip)]
-    pub _padding: [u8; 2],
+    pub _padding: [u8; 3],
 }
 
 
 
-/// Monitoring configuration
+/// Monitoring configuration - Always-on sophisticated version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonitoringConfig {
-    pub enabled: bool,
     pub sample_interval_ns: u64,
     pub max_history_samples: u32,
-    pub enable_alerts: bool,
-    pub enable_tracing: bool,
     pub metrics_frequency_hz: u16,
     #[serde(skip)]
-    pub _padding: [u8; 4],
+    pub _padding: [u8; 6],
 }
 
-/// Worker configuration for background tasks
+/// Worker configuration for background tasks - Always-on sophisticated version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
-    pub enabled: bool,
     pub thread_pool_size: u8,
     pub task_queue_capacity: u32,
     pub maintenance_interval_ns: u64,
-    pub auto_tier_management: bool,
     pub cpu_affinity_mask: u64,
     pub priority_level: u8,
     pub batch_size: u16,
     #[serde(skip)]
-    pub _padding: [u8; 4],
+    pub _padding: [u8; 5],
 }
 
 /// Configuration for access pattern analysis
@@ -138,13 +126,11 @@ pub struct AnalyzerConfig {
     pub pattern_analysis_window: usize,
 }
 
-/// Memory pressure monitoring configuration
+/// Memory pressure monitoring configuration - Always-on sophisticated version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
     /// Maximum memory usage limit in bytes (None = auto-detect)
     pub max_memory_usage: Option<u64>,
-    /// Memory pressure monitoring enabled
-    pub monitoring_enabled: bool,
     /// Low pressure threshold (0.0-1.0)
     pub low_pressure_threshold: f64,
     /// Medium pressure threshold (0.0-1.0)
@@ -153,8 +139,6 @@ pub struct MemoryConfig {
     pub high_pressure_threshold: f64,
     /// Critical pressure threshold (0.0-1.0)
     pub critical_pressure_threshold: f64,
-    /// Memory leak detection enabled
-    pub leak_detection_enabled: bool,
     /// Alert cooldown period in milliseconds
     pub alert_cooldown_ms: u64,
     /// Sample collection interval in milliseconds
@@ -271,16 +255,13 @@ impl Default for HotTierConfig {
     fn default() -> Self {
         Self {
             max_entries: 128,
-            enabled: true,
             hash_function: HashFunction::AHash,
             eviction_policy: EvictionPolicyType::Lru,
             cache_line_size: 64,
             prefetch_distance: 2,
-            enable_simd: cfg!(target_arch = "x86_64"),
-            enable_prefetch: true,
             lru_threshold_secs: 300, // 5 minutes
             memory_limit_mb: 64,     // 64MB
-            _padding: [0; 1],
+            _padding: [0; 4],
         }
     }
 }
@@ -290,16 +271,14 @@ impl Default for HotTierConfig {
 impl Default for ColdTierConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             storage_path: ArrayString::new(),
             max_size_bytes: 1024 * 1024 * 1024, // 1GB for cold tier
             max_file_size: 100 * 1024 * 1024,
             compression_level: 6,
-            auto_compact: true,
             compact_interval_ns: 3_600_000_000_000,
             mmap_size: 1024 * 1024 * 1024,
             write_buffer_size: 64 * 1024,
-            _padding: [0; 2],
+            _padding: [0; 3],
         }
     }
 }
@@ -309,13 +288,10 @@ impl Default for ColdTierConfig {
 impl Default for MonitoringConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             sample_interval_ns: 10_000_000_000,
             max_history_samples: 1024,
-            enable_alerts: true,
-            enable_tracing: false,
             metrics_frequency_hz: 100,
-            _padding: [0; 4],
+            _padding: [0; 6],
         }
     }
 }
@@ -323,15 +299,13 @@ impl Default for MonitoringConfig {
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             thread_pool_size: 2,
             task_queue_capacity: 1024,
             maintenance_interval_ns: 60_000_000_000,
-            auto_tier_management: true,
             cpu_affinity_mask: 0,
             priority_level: 10,
             batch_size: 32,
-            _padding: [0; 4],
+            _padding: [0; 5],
         }
     }
 }
@@ -355,12 +329,10 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             max_memory_usage: None, // Auto-detect system memory
-            monitoring_enabled: true,
             low_pressure_threshold: 0.6,
             medium_pressure_threshold: 0.75,
             high_pressure_threshold: 0.9,
             critical_pressure_threshold: 0.98,
-            leak_detection_enabled: true,
             alert_cooldown_ms: 30000,     // 30 seconds
             sample_interval_ms: 1000,     // 1 second  
             max_history_samples: 256,     // ~4 minutes of history
@@ -497,16 +469,13 @@ impl CacheConfig {
         Self {
             hot_tier: HotTierConfig {
                 max_entries: 1024,
-                enabled: true,
                 hash_function: HashFunction::XxHash,
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 64,
                 prefetch_distance: 8,
-                enable_simd: true,
-                enable_prefetch: true,
                 lru_threshold_secs: 180, // 3 minutes for high performance
                 memory_limit_mb: 128,    // 128MB for high performance
-                _padding: [0; 1],
+                _padding: [0; 4],
             },
             warm_tier: WarmTierConfig::default(),
             cold_tier: ColdTierConfig::default(),
@@ -518,22 +487,19 @@ impl CacheConfig {
         }
     }
 
-    /// Create low-memory configuration
+    /// Create low-memory configuration - Still uses all sophisticated features
     #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn low_memory() -> Self {
         Self {
             hot_tier: HotTierConfig {
                 max_entries: 64,
-                enabled: true,
                 hash_function: HashFunction::XxHash,
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 32,
                 prefetch_distance: 2,
-                enable_simd: false,       // Disabled for low memory
-                enable_prefetch: false,   // Disabled for low memory
                 lru_threshold_secs: 600,  // 10 minutes for low memory
                 memory_limit_mb: 16,      // 16MB for low memory
-                _padding: [0; 1],
+                _padding: [0; 4],
             },
             warm_tier: WarmTierConfig::default(),
             cold_tier: ColdTierConfig::default(),
