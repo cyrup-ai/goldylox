@@ -185,6 +185,90 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         Ok(())
     }
 
+    /// Atomically put value only if key is not present, returns previous value if present
+    pub fn put_if_absent_atomic(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        // Try hot tier first (most frequent access)
+        match self.put_if_absent_hot_tier(key.clone(), value.clone()) {
+            Ok(Some(existing)) => return Ok(Some(existing)),
+            Ok(None) => return Ok(None), // Successfully inserted in hot tier
+            Err(_) => {}, // Hot tier failed, try warm tier
+        }
+
+        // Try warm tier with DashMap atomic entry API
+        match self.put_if_absent_warm_tier(key.clone(), value.clone()) {
+            Ok(Some(existing)) => Ok(Some(existing)),
+            Ok(None) => Ok(None), // Successfully inserted in warm tier
+            Err(_) => {
+                // Fall back to cold tier
+                self.put_if_absent_cold_tier(key, value)
+            }
+        }
+    }
+
+    /// Atomically replace existing value, returns old value if key existed
+    pub fn replace_atomic(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        // Try hot tier first
+        match self.replace_hot_tier(key.clone(), value.clone()) {
+            Ok(old_value) => return Ok(old_value),
+            Err(_) => {}, // Hot tier failed, try warm tier
+        }
+
+        // Try warm tier with DashMap atomic operations
+        match self.replace_warm_tier(key.clone(), value.clone()) {
+            Ok(old_value) => Ok(old_value),
+            Err(_) => {
+                // Fall back to cold tier
+                self.replace_cold_tier(key, value)
+            }
+        }
+    }
+
+    /// Atomically compare and swap value if current equals expected
+    pub fn compare_and_swap_atomic(&self, key: K, expected: V, new_value: V) -> Result<bool, CacheOperationError>
+    where 
+        V: PartialEq
+    {
+        // Try hot tier first
+        match self.compare_and_swap_hot_tier(key.clone(), expected.clone(), new_value.clone()) {
+            Ok(swapped) => return Ok(swapped),
+            Err(_) => {}, // Hot tier failed, try warm tier
+        }
+
+        // Try warm tier with DashMap atomic operations
+        match self.compare_and_swap_warm_tier(key.clone(), expected.clone(), new_value.clone()) {
+            Ok(swapped) => Ok(swapped),
+            Err(_) => {
+                // Fall back to cold tier
+                self.compare_and_swap_cold_tier(key, expected, new_value)
+            }
+        }
+    }
+
+    /// Atomically get value or insert using factory if key is absent
+    pub fn get_or_insert_atomic<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
+    where 
+        F: FnOnce() -> V
+    {
+        // Try to get existing value first (fast path)
+        let mut access_path = AccessPath::new();
+        if let Some(existing) = self.try_hot_tier_get(&key, &mut access_path) {
+            return Ok(existing);
+        }
+        if let Some(existing) = self.try_warm_tier_get(&key, &mut access_path) {
+            return Ok(existing);
+        }
+        if let Some(existing) = self.try_cold_tier_get(&key, &mut access_path) {
+            return Ok(existing);
+        }
+
+        // Key doesn't exist, create value and try atomic insert
+        let new_value = factory();
+        match self.put_if_absent_atomic(key, new_value.clone())? {
+            Some(existing) => Ok(existing), // Another thread inserted first
+            None => Ok(new_value), // We successfully inserted
+        }
+    }
+
     /// Put value in specific tier
     fn put_in_tier(
         &self,
@@ -315,32 +399,56 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         (frequency_confidence + size_confidence + locality_confidence) / 3.0
     }
 
-    /// Get value from cold tier directly
-    pub fn get_from_cold_tier(&self, key: &K) -> Option<V> {
-        crate::cache::tier::cold::cold_get::<K, V>(key).unwrap_or(None)
+    // Hot tier atomic operations using service messages
+    fn put_if_absent_hot_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        // Use hot tier service message for atomic operation
+        crate::cache::tier::hot::put_if_absent_atomic::<K, V>(key, value)
     }
 
-    /// Compact hot tier to target size
-    pub fn compact_hot_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
-        // Hot tier compaction - simplified implementation
-        // In a full implementation, this would use SIMD-optimized LRU eviction
-        log::info!("Hot tier compaction requested - simplified implementation");
-        Ok(0) // Return 0 bytes compacted for now
+    fn replace_hot_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        crate::cache::tier::hot::replace_atomic::<K, V>(key, value)
     }
 
-    /// Compact warm tier to target size  
-    pub fn compact_warm_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
-        // Warm tier compaction - simplified implementation
-        log::info!("Warm tier compaction requested - simplified implementation");
-        Ok(0) // Return 0 bytes compacted for now
+    fn compare_and_swap_hot_tier(&self, key: K, expected: V, new_value: V) -> Result<bool, CacheOperationError>
+    where 
+        V: PartialEq
+    {
+        crate::cache::tier::hot::compare_and_swap_atomic::<K, V>(key, expected, new_value)
     }
 
-    /// Compact cold tier to target size
-    pub fn compact_cold_tier(&self, _target_size: usize) -> Result<usize, crate::cache::traits::types_and_enums::CacheOperationError> {
-        // Cold tier compaction - simplified implementation
-        log::info!("Cold tier compaction requested - simplified implementation");
-        Ok(0) // Return 0 bytes compacted for now
+    // Warm tier atomic operations using DashMap entry API
+    fn put_if_absent_warm_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        crate::cache::tier::warm::put_if_absent_atomic::<K, V>(key, value)
     }
+
+    fn replace_warm_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        crate::cache::tier::warm::replace_atomic::<K, V>(key, value)
+    }
+
+    fn compare_and_swap_warm_tier(&self, key: K, expected: V, new_value: V) -> Result<bool, CacheOperationError>
+    where 
+        V: PartialEq
+    {
+        crate::cache::tier::warm::compare_and_swap_atomic::<K, V>(key, expected, new_value)
+    }
+
+    // Cold tier atomic operations (simple synchronization for disk operations)
+    fn put_if_absent_cold_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        crate::cache::tier::cold::put_if_absent_atomic::<K, V>(key, value)
+    }
+
+    fn replace_cold_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        crate::cache::tier::cold::replace_atomic::<K, V>(key, value)
+    }
+
+    fn compare_and_swap_cold_tier(&self, key: K, expected: V, new_value: V) -> Result<bool, CacheOperationError>
+    where 
+        V: PartialEq
+    {
+        crate::cache::tier::cold::compare_and_swap_atomic::<K, V>(key, expected, new_value)
+    }
+
+
 }
 
 /// Value characteristics for placement analysis

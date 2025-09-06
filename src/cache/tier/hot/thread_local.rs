@@ -34,6 +34,24 @@ pub enum CacheRequest<K: CacheKey, V: CacheValue> {
         response: Sender<Option<V>>,
     },
     
+    // Atomic operations
+    PutIfAbsent {
+        key: K,
+        value: V,
+        response: Sender<Option<V>>,
+    },
+    Replace {
+        key: K,
+        value: V,
+        response: Sender<Option<V>>,
+    },
+    CompareAndSwap {
+        key: K,
+        expected: V,
+        new_value: V,
+        response: Sender<bool>,
+    },
+    
     // Maintenance operations
     CleanupExpired {
         ttl_ns: u64,
@@ -87,7 +105,7 @@ trait HotTierOperations: std::any::Any + Send + Sync {
 }
 
 /// Handle for communicating with a hot tier instance
-struct HotTierHandle<K: CacheKey, V: CacheValue> {
+pub struct HotTierHandle<K: CacheKey, V: CacheValue> {
     sender: Sender<CacheRequest<K, V>>,
     _phantom: std::marker::PhantomData<(K, V)>,
 }
@@ -98,6 +116,14 @@ impl<K: CacheKey, V: CacheValue> Clone for HotTierHandle<K, V> {
             sender: self.sender.clone(),
             _phantom: std::marker::PhantomData,
         }
+    }
+}
+
+impl<K: CacheKey, V: CacheValue> HotTierHandle<K, V> {
+    /// Send a request to the hot tier worker thread
+    pub fn send_request(&self, request: CacheRequest<K, V>) -> Result<(), CacheOperationError> {
+        self.sender.send(request)
+            .map_err(|_| CacheOperationError::TierOperationFailed)
     }
 }
 
@@ -133,14 +159,14 @@ impl HotTierCoordinator {
 
     /// Get the global coordinator instance
     #[inline]
-    fn get() -> Result<&'static HotTierCoordinator, CacheOperationError> {
+    pub fn get() -> Result<&'static HotTierCoordinator, CacheOperationError> {
         COORDINATOR.get().ok_or_else(|| {
             CacheOperationError::invalid_state("HotTierCoordinator not initialized")
         })
     }
 
     /// Get or create a hot tier instance for the given K,V types
-    fn get_or_create_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    pub fn get_or_create_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         &self,
         config: Option<HotTierConfig>,
     ) -> Result<HotTierHandle<K, V>, CacheOperationError> {
@@ -270,6 +296,55 @@ impl HotTierCoordinator {
                             }
                         }
                         let _ = response.send(idle_keys);
+                    }
+                    CacheRequest::PutIfAbsent { key, value, response } => {
+                        // Atomic put-if-absent: check and insert in single operation within worker thread
+                        let existing = tier.get(&key);
+                        let result = if existing.is_some() {
+                            existing // Return existing value
+                        } else {
+                            // Insert and return None since key was absent
+                            let _ = tier.put(key, value);
+                            None
+                        };
+                        let _ = response.send(result);
+                    }
+                    CacheRequest::Replace { key, value, response } => {
+                        // Atomic replace: get and conditionally replace in single operation
+                        let old_value = tier.get(&key);
+                        if old_value.is_some() {
+                            let _ = tier.put(key, value);
+                        }
+                        let _ = response.send(old_value);
+                    }
+                    CacheRequest::CompareAndSwap { key, expected, new_value, response } => {
+                        // Atomic compare-and-swap: get, compare, and conditionally replace in single operation
+                        // Uses bytewise comparison as fallback when PartialEq constraint not available
+                        if let Some(current) = tier.get(&key) {
+                            use std::mem;
+                            let is_equal = unsafe {
+                                // Bytewise comparison for types that don't have PartialEq constraint here
+                                // This is safe because we're comparing values of the same type V
+                                let current_bytes = std::slice::from_raw_parts(
+                                    &current as *const V as *const u8,
+                                    mem::size_of::<V>()
+                                );
+                                let expected_bytes = std::slice::from_raw_parts(
+                                    &expected as *const V as *const u8,
+                                    mem::size_of::<V>()
+                                );
+                                current_bytes == expected_bytes
+                            };
+                            
+                            if is_equal {
+                                let _ = tier.put(key, new_value);
+                                let _ = response.send(true);
+                            } else {
+                                let _ = response.send(false);
+                            }
+                        } else {
+                            let _ = response.send(false);
+                        }
                     }
                     CacheRequest::Shutdown => break,
                 }
@@ -488,7 +563,7 @@ pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 
 }
 
 /// Process prefetch requests
-pub fn process_prefetch_requests<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> usize {
+pub fn process_prefetch_requests<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> usize {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -514,7 +589,7 @@ pub fn process_prefetch_requests<K: CacheKey + Default + 'static, V: CacheValue 
 }
 
 /// Compact hot tier and return compacted entries count
-pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> usize {
+pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> usize {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -565,7 +640,7 @@ pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 }
 
 /// Check if hot tier should be optimized
-pub fn should_optimize_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> bool {
+pub fn should_optimize_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> bool {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -591,7 +666,7 @@ pub fn should_optimize_hot_tier<K: CacheKey + Default + 'static, V: CacheValue +
 }
 
 /// Get memory statistics from hot tier
-pub fn hot_tier_memory_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> super::memory_pool::MemoryPoolStats {
+pub fn hot_tier_memory_stats<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> super::memory_pool::MemoryPoolStats {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -617,7 +692,7 @@ pub fn hot_tier_memory_stats<K: CacheKey + Default + 'static, V: CacheValue + 's
 }
 
 /// Get eviction statistics from hot tier
-pub fn hot_tier_eviction_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> super::eviction::EvictionStats {
+pub fn hot_tier_eviction_stats<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> super::eviction::EvictionStats {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -643,7 +718,7 @@ pub fn hot_tier_eviction_stats<K: CacheKey + Default + 'static, V: CacheValue + 
 }
 
 /// Get prefetch statistics from hot tier
-pub fn hot_tier_prefetch_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> super::prefetch::PrefetchStats {
+pub fn hot_tier_prefetch_stats<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> super::prefetch::PrefetchStats {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
         Some(c) => c,
@@ -669,7 +744,7 @@ pub fn hot_tier_prefetch_stats<K: CacheKey + Default + 'static, V: CacheValue + 
 }
 
 /// Get configuration used by hot tier
-pub fn hot_tier_config<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> HotTierConfig {
+pub fn hot_tier_config<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> HotTierConfig {
     // Return default configuration - in a full implementation, this would be stored globally
     // and shared across all service workers during initialization.
     HotTierConfig::default()

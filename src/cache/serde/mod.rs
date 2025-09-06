@@ -29,25 +29,27 @@ where
 
 impl<T> bincode::Encode for SerdeCacheKey<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + 'static,
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
 {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        self.0.encode(encoder)
+        // Use bincode's serde integration
+        bincode::serde::Compat(&self.0).encode(encoder)
     }
 }
 
 impl<T> bincode::Decode<()> for SerdeCacheKey<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Decode<()> + 'static,
+    T: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
 {
     fn decode<D: bincode::de::Decoder<Context = ()>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        let inner = T::decode(decoder)?;
-        Ok(SerdeCacheKey(inner))
+        // Use bincode's serde integration
+        let compat = bincode::serde::Compat::<T>::decode(decoder)?;
+        Ok(SerdeCacheKey(compat.0))
     }
 }
 
@@ -87,7 +89,7 @@ where
 }
 
 /// Wrapper type that makes any serde type work as a CacheValue
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SerdeCacheValue<T>(pub T)
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static;
@@ -103,25 +105,27 @@ where
 
 impl<T> bincode::Encode for SerdeCacheValue<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
 {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        self.0.encode(encoder)
+        // Use bincode's serde integration
+        bincode::serde::Compat(&self.0).encode(encoder)
     }
 }
 
 impl<T> bincode::Decode<()> for SerdeCacheValue<T>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Decode<()> + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
 {
     fn decode<D: bincode::de::Decoder<Context = ()>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        let inner = T::decode(decoder)?;
-        Ok(SerdeCacheValue(inner))
+        // Use bincode's serde integration
+        let compat = bincode::serde::Compat::<T>::decode(decoder)?;
+        Ok(SerdeCacheValue(compat.0))
     }
 }
 

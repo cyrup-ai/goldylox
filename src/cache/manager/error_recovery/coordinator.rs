@@ -188,7 +188,7 @@ impl ErrorRecoveryCoordinator {
         }
         
         // Cold tier reinitialization with PROPER GENERIC TYPES
-        if let Err(e) = crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.storage_path.as_str()) {
+        if let Err(e) = crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.base_dir.as_str(), &default_config.cache_id) {
             return Err(CacheOperationError::io_failed(&format!("Cold tier init failed during config reset: {}", e)));
         }
         
@@ -230,7 +230,7 @@ impl ErrorRecoveryCoordinator {
         // Reinitialize with proper generic types
         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
         crate::cache::tier::warm::init_warm_tier::<K, V>(default_config.warm_tier.clone())?;
-        crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.storage_path.as_str())
+        crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.base_dir.as_str(), &default_config.cache_id)
             .map_err(|e| CacheOperationError::io_failed(&format!("Cold tier restart failed: {}", e)))?;
         
         // 4. Reinitialize coherence protocol

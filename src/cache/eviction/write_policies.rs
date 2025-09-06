@@ -262,7 +262,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         let handle = std::thread::spawn(move || {
             // Worker OWNS the storage resources - no sharing!
             let mut cold_storage = match crate::cache::tier::cold::storage::ColdTierCache::new(
-                &config.cold_tier.storage_path,
+                &config.cold_tier.base_dir,
                 crate::cache::traits::CompressionAlgorithm::Lz4, // Default algorithm
             ) {
                 Ok(storage) => storage,
@@ -272,10 +272,10 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                 }
             };
             
-            // Create data and index paths from storage_path
-            let storage_path = PathBuf::from(config.cold_tier.storage_path.as_str());
-            let data_path = storage_path.join("data.cold");
-            let index_path = storage_path.join("index.cold");
+            // Create data and index paths from base_dir
+            let base_dir = PathBuf::from(config.cold_tier.base_dir.as_str());
+            let data_path = base_dir.join("data.cold");
+            let index_path = base_dir.join("index.cold");
             
             let storage_manager = match crate::cache::tier::cold::data_structures::StorageManager::new(
                 data_path,
@@ -596,7 +596,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         Ok(())
     }
 
-    /// Write to backing store - MESSAGE-BASED, NO STUBS
+    /// Write to backing store
     fn write_to_backing_store(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
         let key_bytes = serde_json::to_vec(key).unwrap_or_else(|_| format!("{:?}", key).into_bytes());
         
@@ -712,7 +712,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         Ok(())
     }
 
-    /// Flush individual dirty entry - MESSAGE-BASED, NO STUBS
+    /// Flush individual dirty entry
     fn flush_dirty_entry(&self, dirty_entry: &DirtyEntry<K>) -> Result<(), CacheOperationError> {
         let (response_tx, response_rx) = bounded(1);
         self.backing_store_sender.send(BackingStoreOperation::FlushDirtyEntry {
@@ -755,7 +755,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         Ok(processed_count)
     }
 
-    /// Execute pending write operation - MESSAGE-BASED, NO STUBS
+    /// Execute pending write operation
     fn execute_pending_write(
         &self,
         pending_write: &PendingWrite<K>,

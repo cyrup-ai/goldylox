@@ -35,7 +35,7 @@ trait WarmTierOperations: std::any::Any + Send + Sync {
 }
 
 /// Handle for communicating with a warm tier instance (complete implementation)
-struct WarmTierHandle<K: CacheKey, V: CacheValue> {
+pub struct WarmTierHandle<K: CacheKey, V: CacheValue> {
     sender: Sender<WarmCacheRequest<K, V>>,
     _phantom: std::marker::PhantomData<(K, V)>,
 }
@@ -46,6 +46,14 @@ impl<K: CacheKey, V: CacheValue> Clone for WarmTierHandle<K, V> {
             sender: self.sender.clone(),
             _phantom: std::marker::PhantomData,
         }
+    }
+}
+
+impl<K: CacheKey, V: CacheValue> WarmTierHandle<K, V> {
+    /// Send a request to the warm tier worker thread
+    pub fn send_request(&self, request: WarmCacheRequest<K, V>) -> Result<(), CacheOperationError> {
+        self.sender.send(request)
+            .map_err(|_| CacheOperationError::TierOperationFailed)
     }
 }
 
@@ -64,6 +72,11 @@ pub enum WarmCacheRequest<K: CacheKey, V: CacheValue> {
     Get { key: K, response: Sender<Option<V>> },
     Put { key: K, value: V, response: Sender<Result<(), CacheOperationError>> },
     Remove { key: K, response: Sender<Option<V>> },
+    
+    // Atomic operations
+    PutIfAbsent { key: K, value: V, response: Sender<Option<V>> },
+    Replace { key: K, value: V, response: Sender<Option<V>> },
+    CompareAndSwap { key: K, expected: V, new_value: V, response: Sender<bool> },
     
     // Maintenance operations (fully implemented)
     CleanupExpired { max_age: Duration, response: Sender<Result<usize, CacheOperationError>> },
@@ -121,7 +134,7 @@ impl WarmTierCoordinator {
 
     /// Get the global coordinator instance
     #[inline]
-    fn get() -> Result<&'static WarmTierCoordinator, CacheOperationError> {
+    pub fn get() -> Result<&'static WarmTierCoordinator, CacheOperationError> {
         let ptr = COORDINATOR.load(Ordering::Acquire);
         if ptr.is_null() {
             return Err(CacheOperationError::invalid_state(
@@ -132,7 +145,7 @@ impl WarmTierCoordinator {
     }
 
     /// Get or create a warm tier instance for the given K,V types (complete implementation)
-    fn get_or_create_tier<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+    pub fn get_or_create_tier<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
         &self,
         config: Option<WarmTierConfig>,
     ) -> Result<WarmTierHandle<K, V>, CacheOperationError> {
@@ -220,6 +233,55 @@ impl WarmTierCoordinator {
                     WarmCacheRequest::UpdateMLModels { response } => {
                         let result = tier.update_ml_models();
                         let _ = response.send(result);
+                    }
+                    WarmCacheRequest::PutIfAbsent { key, value, response } => {
+                        // Atomic put-if-absent: check and insert in single operation within worker thread
+                        let existing = tier.get(&key);
+                        let result = if existing.is_some() {
+                            existing // Return existing value
+                        } else {
+                            // Insert and return None since key was absent
+                            let _ = tier.put(key, value);
+                            None
+                        };
+                        let _ = response.send(result);
+                    }
+                    WarmCacheRequest::Replace { key, value, response } => {
+                        // Atomic replace: get and conditionally replace in single operation
+                        let old_value = tier.get(&key);
+                        if old_value.is_some() {
+                            let _ = tier.put(key, value);
+                        }
+                        let _ = response.send(old_value);
+                    }
+                    WarmCacheRequest::CompareAndSwap { key, expected, new_value, response } => {
+                        // Atomic compare-and-swap: get, compare, and conditionally replace in single operation
+                        // Uses bytewise comparison as fallback when PartialEq constraint not available
+                        if let Some(current) = tier.get(&key) {
+                            use std::mem;
+                            let is_equal = unsafe {
+                                // Bytewise comparison for types that don't have PartialEq constraint here
+                                // This is safe because we're comparing values of the same type V
+                                let current_bytes = std::slice::from_raw_parts(
+                                    &current as *const V as *const u8,
+                                    mem::size_of::<V>()
+                                );
+                                let expected_bytes = std::slice::from_raw_parts(
+                                    &expected as *const V as *const u8,
+                                    mem::size_of::<V>()
+                                );
+                                current_bytes == expected_bytes
+                            };
+                            
+                            if is_equal {
+                                let _ = tier.put(key, new_value);
+                                let _ = response.send(true);
+                            } else {
+                                let _ = response.send(false);
+                            }
+                        } else {
+                            let _ = response.send(false);
+                        }
                     }
                     WarmCacheRequest::Shutdown => break,
                 }

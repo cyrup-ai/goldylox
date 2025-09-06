@@ -18,16 +18,7 @@ static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<Box<dyn std::any::Any + Send + 
 // - Create UnifiedCacheManager::<K, V>::new(config) directly with their chosen types
 // - No global manager - use explicit manager instances for type safety
 
-// REMOVED: cache_clear_generic() compatibility alias
-// Users must call cache_clear() directly
 
-// REMOVED: Broken cache_get(), cache_put(), cache_remove() functions
-// These functions pretended to be generic but were non-functional stubs
-// Users must now use UnifiedCacheManager::<K, V> instances directly:
-// - manager.cache_get(&key) instead of cache_get(&key)
-// - manager.cache_put(key, value) instead of cache_put(key, value)
-// - manager.cache_remove(&key) instead of cache_remove(&key)
-// This forces proper type safety and eliminates global state dependencies
 
 // REMOVED: All global cache functions (cache_clear, cache_stats, is_cache_initialized, with_cache_manager)
 // These functions depended on broken global manager with hardcoded String types

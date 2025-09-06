@@ -5,6 +5,7 @@
 
 pub mod access_tracking;
 pub mod atomic_float;
+pub mod atomic_ops;
 pub mod builder;
 pub mod config;
 pub mod coordination;
@@ -26,6 +27,7 @@ pub mod timing;
 // Re-export access tracking types
 // Import config types from correct location
 // Re-export eviction types
+pub use atomic_ops::{put_if_absent_atomic, replace_atomic, compare_and_swap_atomic};
 pub use global_api::{
     cleanup_expired_entries,
     get_frequently_accessed_keys, get_idle_keys, init_warm_tier, init_warm_tier_system, insert_demoted, insert_promoted, warm_get, warm_put, warm_remove,

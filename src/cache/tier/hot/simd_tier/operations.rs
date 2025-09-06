@@ -144,6 +144,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
             &self.memory_pool.metadata,
             &self.lru_tracker,
             current_time,
+            &self.memory_pool,
         ) {
             // Evict the candidate
             let slot_idx = candidate.slot_index().unwrap_or(0); // Get slot index or use 0 as fallback

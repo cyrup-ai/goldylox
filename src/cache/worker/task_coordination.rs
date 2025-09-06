@@ -14,8 +14,7 @@ use dashmap::DashMap;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
-use crate::cache::coordinator::background_coordinator::{BackgroundCoordinator, DefaultProcessor};
-use crate::cache::manager::background::types::{BackgroundTask, TaskProcessor};
+// Task coordination is handled directly through MaintenanceScheduler
 
 /// Command queue for safe cache mutations from async contexts
 #[derive(Debug)]
@@ -104,9 +103,7 @@ impl Clone for CommandQueueStats {
 
 /// Task coordinator for managing cache operations
 #[derive(Debug)]
-pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static, P: TaskProcessor = DefaultProcessor> {
-    /// Background coordinator for task processing
-    background_coordinator: BackgroundCoordinator<K, V, P>,
+pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     /// Command queue for safe mutations
     command_queue: CacheCommandQueue<K, V>,
     /// Active task tracking
@@ -325,13 +322,12 @@ impl<K: CacheKey, V: CacheValue> Clone for CacheCommandQueue<K, V> {
     }
 }
 
-impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static, P: TaskProcessor + 'static> TaskCoordinator<K, V, P> {
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> TaskCoordinator<K, V> {
     /// Create new task coordinator
-    pub fn new(background_coordinator: BackgroundCoordinator<K, V, P>, max_command_queue_size: usize) -> Self {
+    pub fn new_direct(max_command_queue_size: usize) -> Self {
         let command_queue = CacheCommandQueue::new(max_command_queue_size);
 
         Self {
-            background_coordinator,
             command_queue,
             active_tasks: DashMap::new(),
             next_task_id: AtomicU64::new(1),
@@ -401,13 +397,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             result
         };
 
-        // Submit background task using BackgroundCoordinator
-        let background_task = BackgroundTask::Statistics {
-            stats_type: 1,
-            interval_ms: 100,
-        };
-        self.background_coordinator.submit_task(background_task)?;
-
+        // Task coordination complete - no dummy task needed
+        // Real work goes through CacheCommandQueue directly
+        
         self.stats.total_tasks.fetch_add(1, Ordering::Relaxed);
 
         Ok(task_id)

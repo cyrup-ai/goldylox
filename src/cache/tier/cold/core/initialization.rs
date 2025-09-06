@@ -15,17 +15,20 @@ use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> PersistentColdTier<K, V> {
     /// Create new persistent cold tier cache
-    pub fn new(config: ColdTierConfig) -> io::Result<Self> {
-        let storage_path = Path::new(config.storage_path.as_str());
-
-        // Create storage directory if it doesn't exist
-        if let Some(parent) = storage_path.parent() {
-            std::fs::create_dir_all(parent)?;
+    pub fn new(config: ColdTierConfig, cache_id: &str) -> io::Result<Self> {
+        let base_dir = Path::new(config.base_dir.as_str());
+        
+        // Create full cache directory path: {base_dir}/{cache_id}/
+        let cache_dir = base_dir.join(cache_id);
+        
+        // Create the full directory structure if it doesn't exist
+        if !config.base_dir.is_empty() {
+            std::fs::create_dir_all(&cache_dir)?;
         }
 
-        let data_path = storage_path.with_extension("data");
-        let index_path = storage_path.with_extension("idx");
-        let log_path = storage_path.with_extension("log");
+        let data_path = cache_dir.join("lox.data");
+        let index_path = cache_dir.join("lox.idx");
+        let log_path = cache_dir.join("lox.log");
 
         let storage_manager = StorageManager::new(
             data_path.clone(),

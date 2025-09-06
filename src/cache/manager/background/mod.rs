@@ -9,9 +9,7 @@ pub mod types;
 pub mod worker;
 pub mod worker_state;
 
-// Re-export main types and structs
-// Re-export coordinator implementation
-
-pub use types::{
-    BackgroundWorkerState, MaintenanceConfig, MaintenanceScheduler,
-};
+// NO RE-EXPORTS - Use canonical imports only:
+// - Use crate::cache::manager::background::types::MaintenanceScheduler
+// - Use crate::cache::manager::background::types::MaintenanceConfig  
+// - Use crate::cache::manager::background::types::BackgroundWorkerState

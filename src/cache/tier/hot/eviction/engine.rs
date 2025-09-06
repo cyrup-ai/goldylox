@@ -3,7 +3,7 @@
 //! This module implements the adaptive eviction engine with machine learning
 //! capabilities and policy management.
 
-use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::memory_pool::{self, SlotMetadata, MemoryPool};
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
@@ -54,13 +54,14 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
+        memory_pool: &MemoryPool<K, V>,
     ) -> Option<EvictionCandidate<K, V>> {
         match self.policy {
-            EvictionPolicy::Lru => self.find_lru_candidate(metadata, lru_tracker),
-            EvictionPolicy::Lfu => self.find_lfu_candidate(metadata),
-            EvictionPolicy::Arc => self.find_arc_candidate(metadata, lru_tracker, current_time_ns),
+            EvictionPolicy::Lru => self.find_lru_candidate(metadata, lru_tracker, memory_pool),
+            EvictionPolicy::Lfu => self.find_lfu_candidate(metadata, memory_pool),
+            EvictionPolicy::Arc => self.find_arc_candidate(metadata, lru_tracker, current_time_ns, memory_pool),
             EvictionPolicy::MachineLearning => {
-                self.find_ml_candidate(metadata, lru_tracker, current_time_ns)
+                self.find_ml_candidate(metadata, lru_tracker, current_time_ns, memory_pool)
             }
         }
     }

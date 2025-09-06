@@ -40,29 +40,27 @@ where
 
         let _stats = MaintenanceStats::new();
 
-        // Spawn worker threads
-        let mut worker_threads = Vec::with_capacity(config.worker_count as usize);
-
-        for worker_id in 0..config.worker_count {
-            let task_receiver = task_queue.clone();
-            let shutdown_receiver = shutdown_signal.clone();
+        // Spawn coordinator thread that owns worker management via crossbeam messaging
+        let coordinator_handle = {
+            let scaling_receiver = scaling_request_receiver.clone();
+            let task_queue_clone = task_queue.clone();
+            let shutdown_clone = shutdown_signal.clone();
             let config_clone = config.clone();
-
-            let handle = std::thread::Builder::new()
-                .name(format!("maintenance-worker-{}", worker_id))
+            
+            std::thread::Builder::new()
+                .name("maintenance-coordinator".to_string())
                 .spawn(move || {
-                    Self::worker_loop(
-                        worker_id,
-                        task_receiver,
-                        shutdown_receiver,
-                        &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
+                    Self::coordinator_loop(
                         config_clone,
+                        scaling_receiver,
+                        task_queue_clone,
+                        shutdown_clone
                     );
                 })
-                .map_err(|_e| CacheOperationError::InitializationFailed)?;
+                .map_err(|_| CacheOperationError::InitializationFailed)?
+        };
 
-            worker_threads.push(handle);
-        }
+        log::info!("MaintenanceScheduler coordinator thread spawned with {} initial workers", config.worker_count);
 
         Ok(Self {
             maintenance_interval_ns: config.heartbeat_interval_ns,
@@ -71,7 +69,7 @@ where
             scheduled_operations: Vec::new(),
             task_queue,
             task_sender,
-            worker_threads,
+            coordinator_handle: Some(coordinator_handle),
             config,
             stats: MaintenanceStats::default(),
             shutdown_signal,
@@ -143,26 +141,119 @@ where
         active_count <= max_healthy_tasks
     }
 
-    /// Process pending scaling requests (should be called periodically)
+    /// Process pending scaling requests by triggering coordinator evaluation
     pub fn process_scaling_requests(&self) -> Result<(), CacheOperationError> {
-        while let Ok(scaling_request) = self.scaling_request_receiver.try_recv() {
-            let result = self.handle_scaling_request(&scaling_request);
-            
-            // Send response back to requester
-            if let Err(e) = scaling_request.response_sender.try_send(result.clone()) {
-                log::warn!("Failed to send scaling response: {:?}", e);
+        // Create a scaling request to trigger coordinator evaluation
+        // Use 1.0 capacity factor to maintain current worker count while processing any pending requests
+        let (response_sender, response_receiver) = crossbeam_channel::bounded::<Result<(), String>>(1);
+        
+        let scaling_request = super::types::ScalingRequest {
+            capacity_factor: 1.0, // Neutral scaling to trigger processing
+            response_sender,
+        };
+        
+        // Send scaling request through crossbeam channel
+        self.scaling_request_sender.try_send(scaling_request).map_err(|e| {
+            CacheOperationError::ResourceExhausted(format!("Failed to send scaling request: {:?}", e))
+        })?;
+        
+        // Wait for coordinator response with timeout
+        match response_receiver.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(result) => result.map_err(|e| CacheOperationError::resource_exhausted(&e)),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                Err(CacheOperationError::resource_exhausted("Scaling request timed out"))
             }
-            
-            if let Err(ref error_msg) = result {
-                log::error!("Scaling request failed: {}", error_msg);
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                Err(CacheOperationError::InternalError)
             }
         }
-        Ok(())
     }
 
-    /// Handle individual scaling request
-    fn handle_scaling_request(&self, request: &super::types::ScalingRequest) -> Result<(), String> {
-        let current_worker_count = self.config.worker_count;
+    /// Coordinator thread loop that owns worker threads and processes scaling requests
+    fn coordinator_loop(
+        mut config: MaintenanceConfig,
+        scaling_receiver: crossbeam_channel::Receiver<super::types::ScalingRequest>,
+        task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
+        shutdown_signal: crossbeam_channel::Receiver<()>,
+    ) {
+        use std::time::Duration;
+        let mut worker_threads: Vec<(std::thread::JoinHandle<()>, crossbeam_channel::Sender<()>)> = Vec::with_capacity(config.worker_count as usize);
+        
+        // Spawn initial worker threads
+        for worker_id in 0..config.worker_count {
+            let task_receiver = task_queue.clone();
+            let global_shutdown_receiver = shutdown_signal.clone();
+            let config_clone = config.clone();
+            
+            // Create individual shutdown channel for this worker
+            let (worker_shutdown_sender, _worker_shutdown_receiver) = crossbeam_channel::bounded(1);
+
+            match std::thread::Builder::new()
+                .name(format!("maintenance-worker-{}", worker_id))
+                .spawn(move || {
+                    Self::worker_loop(
+                        worker_id,
+                        task_receiver,
+                        global_shutdown_receiver,
+                        &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
+                        config_clone,
+                    );
+                }) {
+                Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
+                Err(e) => log::error!("Failed to spawn initial worker {}: {:?}", worker_id, e),
+            }
+        }
+        
+        log::info!("Coordinator started with {} workers", worker_threads.len());
+        
+        // Main coordinator loop
+        loop {
+            // Process scaling requests with owned data
+            while let Ok(scaling_request) = scaling_receiver.try_recv() {
+                let result = Self::handle_scaling_with_ownership(
+                    &mut worker_threads,
+                    &mut config,
+                    &scaling_request,
+                    &task_queue,
+                    &shutdown_signal
+                );
+                let _ = scaling_request.response_sender.try_send(result);
+            }
+            
+            // Check for shutdown signal
+            if shutdown_signal.try_recv().is_ok() {
+                log::info!("Coordinator shutting down, joining {} worker threads", worker_threads.len());
+                
+                // Signal all workers to shutdown first
+                for (_, worker_shutdown_sender) in &worker_threads {
+                    let _ = worker_shutdown_sender.try_send(());
+                }
+                
+                // Then join all worker threads
+                for (handle, _) in worker_threads.drain(..) {
+                    if let Err(e) = handle.join() {
+                        log::warn!("Worker thread panicked during shutdown: {:?}", e);
+                    }
+                }
+                break;
+            }
+            
+            // Brief sleep to avoid busy waiting
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        
+        log::info!("Coordinator thread exiting");
+    }
+
+    /// Handle scaling request with owned worker threads and config
+    fn handle_scaling_with_ownership(
+        worker_threads: &mut Vec<(std::thread::JoinHandle<()>, crossbeam_channel::Sender<()>)>,
+        config: &mut MaintenanceConfig,
+        request: &super::types::ScalingRequest,
+        task_queue: &crossbeam_channel::Receiver<MaintenanceTask>,
+        shutdown_signal: &crossbeam_channel::Receiver<()>,
+    ) -> Result<(), String> {
+        let current_worker_count = config.worker_count;
         let target_worker_count = ((current_worker_count as f64) * request.capacity_factor).round() as u32;
         
         // Validate target worker count
@@ -182,27 +273,64 @@ where
         log::info!("Scaling workers from {} to {} (factor: {})", 
                    current_worker_count, target_worker_count, request.capacity_factor);
         
-        // For now, we simulate scaling by logging the request
-        // In a production implementation, this would:
-        // 1. Spawn new worker threads if scaling up
-        // 2. Gracefully shutdown excess threads if scaling down  
-        // 3. Update the config.worker_count
-        // 4. Coordinate with existing worker pool management
+        if target_worker_count > current_worker_count {
+            // Scale up: spawn additional worker threads
+            for worker_id in current_worker_count..target_worker_count {
+                let task_receiver = task_queue.clone();
+                let global_shutdown_receiver = shutdown_signal.clone();
+                let config_clone = config.clone();
+                
+                // Create individual shutdown channel for new worker
+                let (worker_shutdown_sender, _worker_shutdown_receiver) = crossbeam_channel::bounded(1);
+                
+                match std::thread::Builder::new()
+                    .name(format!("maintenance-worker-{}", worker_id))
+                    .spawn(move || {
+                        Self::worker_loop(
+                            worker_id,
+                            task_receiver,
+                            global_shutdown_receiver,
+                            &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
+                            config_clone,
+                        );
+                    }) {
+                    Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
+                    Err(_) => return Err("Failed to spawn worker thread".to_string()),
+                }
+            }
+        } else {
+            // Scale down: gracefully shutdown excess worker threads
+            let threads_to_remove = current_worker_count - target_worker_count;
+            for _ in 0..threads_to_remove {
+                if let Some((handle, worker_shutdown_sender)) = worker_threads.pop() {
+                    // Send shutdown signal to specific worker first
+                    if let Err(e) = worker_shutdown_sender.send(()) {
+                        log::warn!("Failed to send shutdown signal to worker: {:?}", e);
+                    }
+                    
+                    // Now safe to join the worker thread
+                    if let Err(e) = handle.join() {
+                        log::warn!("Worker thread panicked during scale-down: {:?}", e);
+                    }
+                }
+            }
+        }
         
-        // This is a functional implementation that satisfies the error recovery system
-        // without disrupting the existing thread pool infrastructure
+        // Update worker count in config
+        config.worker_count = target_worker_count;
+        log::info!("Worker scaling completed: now have {} workers", target_worker_count);
         Ok(())
     }
 
     /// Shutdown maintenance scheduler
-    pub fn shutdown(self) -> Result<(), CacheOperationError> {
-        // Signal shutdown to all workers
+    pub fn shutdown(mut self) -> Result<(), CacheOperationError> {
+        // Signal shutdown to coordinator (which will shutdown all workers)
         let _ = self.shutdown_sender.send(());
 
-        // Wait for all worker threads to complete
-        for handle in self.worker_threads.into_iter() {
-            if let Err(e) = handle.join() {
-                log::error!("Worker thread panicked: {:?}", e);
+        // Wait for coordinator thread to complete
+        if let Some(coordinator_handle) = self.coordinator_handle.take() {
+            if let Err(e) = coordinator_handle.join() {
+                log::error!("Coordinator thread panicked: {:?}", e);
             }
         }
 

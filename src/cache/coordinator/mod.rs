@@ -8,7 +8,6 @@
 //! The cache coordinator is decomposed into focused modules:
 //! - `unified_manager`: Core UnifiedCacheManager struct and main operations
 //! - `strategy_selector`: Cache strategy selection and adaptive optimization
-//! - `background_coordinator`: Background task processing and maintenance
 //! - `tier_operations`: Low-level tier access and placement analysis
 //! - `global_api`: Global interface functions and static management
 //!
@@ -22,7 +21,6 @@
 //! - **Background processing**: Work-stealing task queue for maintenance operations
 
 // Module declarations
-pub mod background_coordinator;
 pub mod global_api;
 pub mod strategy_selector;
 pub mod tier_operations;
@@ -31,7 +29,6 @@ pub mod unified_manager;
 // REMOVED: Compatibility re-exports that hide canonical API paths
 // These re-exports allowed broken code to import via coordinator:: instead of specific modules
 // Users must now import from canonical module paths:
-// - Use coordinator::background_coordinator::BackgroundCoordinator
 // - Use coordinator::global_api::{cache_clear, cache_clear_generic, ...}
 // - Use coordinator::strategy_selector::CacheStrategySelector
 // - Use coordinator::tier_operations::TierOperations

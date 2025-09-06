@@ -289,9 +289,9 @@ pub struct MaintenanceScheduler<K: CacheKey + Default, V: CacheValue + Default +
     /// Task sender for submitting maintenance tasks
     #[allow(dead_code)] // Background workers - used in async task processing and worker coordination
     pub task_sender: crossbeam_channel::Sender<MaintenanceTask>,
-    /// Worker thread handles for maintenance operations
+    /// Coordinator thread handle (owns worker threads via crossbeam messaging)
     #[allow(dead_code)] // Background workers - used in async task processing and worker coordination
-    pub worker_threads: Vec<std::thread::JoinHandle<()>>,
+    pub coordinator_handle: Option<std::thread::JoinHandle<()>>,
     /// Scheduler configuration
     #[allow(dead_code)] // Background workers - used in async task processing and worker coordination
     pub config: MaintenanceConfig,

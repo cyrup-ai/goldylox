@@ -56,7 +56,7 @@ impl BackgroundWorkerState {
 
     /// Shutdown workers
     #[inline(always)]
-    pub fn shutdown_workers<K: crate::cache::traits::CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: crate::cache::traits::CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(&self, scheduler: &crate::cache::manager::MaintenanceScheduler<K, V>) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
+    pub fn shutdown_workers<K: crate::cache::traits::CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: crate::cache::traits::CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(&self, scheduler: &crate::cache::manager::background::types::MaintenanceScheduler<K, V>) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Update local status to shutdown
         self.status.store(WorkerStatus::Shutdown);
         

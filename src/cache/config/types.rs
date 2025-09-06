@@ -4,7 +4,10 @@
 //! the cache configuration system, including tier configs and alert thresholds.
 
 use arrayvec::ArrayString;
+use log;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::path::Path;
+use uuid::Uuid;
 
 // Import canonical types directly to avoid type identity conflicts
 use crate::cache::tier::warm::config::WarmTierConfig;
@@ -69,7 +72,7 @@ pub struct HotTierConfig {
 #[repr(align(64))]
 pub struct ColdTierConfig {
     #[serde(with = "arraystring_serde")]
-    pub storage_path: ArrayString<256>,
+    pub base_dir: ArrayString<256>,
     pub max_size_bytes: u64,
     pub max_file_size: u64,
     pub compression_level: u8,
@@ -150,6 +153,7 @@ pub struct MemoryConfig {
 /// Main cache configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
+    pub cache_id: String,
     pub hot_tier: HotTierConfig,
     pub warm_tier: WarmTierConfig,
     pub cold_tier: ColdTierConfig,
@@ -271,7 +275,7 @@ impl Default for HotTierConfig {
 impl Default for ColdTierConfig {
     fn default() -> Self {
         Self {
-            storage_path: ArrayString::new(),
+            base_dir: ArrayString::new(),
             max_size_bytes: 1024 * 1024 * 1024, // 1GB for cold tier
             max_file_size: 100 * 1024 * 1024,
             compression_level: 6,
@@ -342,16 +346,101 @@ impl Default for MemoryConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
+        let cache_id = Uuid::new_v4().to_string();
+        let mut cold_tier_config = ColdTierConfig::default();
+        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        
         Self {
+            cache_id,
             hot_tier: HotTierConfig::default(),
             warm_tier: WarmTierConfig::default(),
-            cold_tier: ColdTierConfig::default(),
+            cold_tier: cold_tier_config,
             monitoring: MonitoringConfig::default(),
             worker: WorkerConfig::default(),
             analyzer: AnalyzerConfig::default(),
             memory_config: MemoryConfig::default(),
             version: 1,
         }
+    }
+}
+
+/// Sanitize cache ID for filesystem safety
+pub fn sanitize_cache_id(cache_id: &str) -> String {
+    let sanitized = cache_id
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .to_string();
+    
+    // Prevent empty string after sanitization
+    if sanitized.is_empty() {
+        "cache".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Generate platform-appropriate default cache storage path using standard environment variables
+/// User can still override this by calling .cold_tier_storage_path() on the builder
+pub fn generate_storage_path(cache_id: &str) -> ArrayString<256> {
+    let sanitized_id = sanitize_cache_id(cache_id);
+    
+    // Use std::path for proper cross-platform path handling
+    let base_path = if cfg!(target_os = "linux") {
+        // Linux: Use XDG_CACHE_HOME if set, otherwise default to ~/.cache
+        std::env::var("XDG_CACHE_HOME")
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|home| Path::new(&home).join(".cache").to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string())
+            })
+    } else if cfg!(target_os = "macos") {
+        // macOS: Use XDG_CACHE_HOME if set (developer preference), otherwise ~/Library/Caches
+        std::env::var("XDG_CACHE_HOME")
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|home| Path::new(&home).join("Library").join("Caches").to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string())
+            })
+    } else if cfg!(target_os = "windows") {
+        // Windows: Use LOCALAPPDATA environment variable
+        std::env::var("LOCALAPPDATA")
+            .unwrap_or_else(|_| ".".to_string())
+    } else {
+        // Default fallback for other platforms - current directory
+        ".".to_string()
+    };
+    
+    let path = Path::new(&base_path)
+        .join("goldylox")
+        .join(&sanitized_id)
+        .to_string_lossy()
+        .to_string();
+    
+    // Handle path length gracefully - truncate intelligently if too long
+    if path.len() <= 256 {
+        ArrayString::from(&path).unwrap_or_else(|_| {
+            log::warn!("Failed to create ArrayString from valid path: {}", path);
+            ArrayString::from(Path::new(".").join("goldylox").join("fallback").to_string_lossy().as_ref()).unwrap_or_default()
+        })
+    } else {
+        log::warn!("Generated path too long ({}), truncating: {}", path.len(), path);
+        // Try shorter cache ID (first 8 UTF-8 characters, not bytes)
+        let short_cache_id: String = sanitized_id.chars().take(8).collect();
+        let fallback_path = Path::new(".")
+            .join("goldylox")
+            .join(&short_cache_id)
+            .to_string_lossy()
+            .to_string();
+        ArrayString::from(&fallback_path).unwrap_or_else(|_| {
+            log::error!("Even fallback path failed, using minimal path");
+            ArrayString::from(Path::new(".").join("goldylox").to_string_lossy().as_ref()).unwrap_or_default()
+        })
     }
 }
 
@@ -466,7 +555,12 @@ impl CacheConfig {
     /// Create high-performance configuration
     #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn high_performance() -> Self {
+        let cache_id = Uuid::new_v4().to_string();
+        let mut cold_tier_config = ColdTierConfig::default();
+        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        
         Self {
+            cache_id,
             hot_tier: HotTierConfig {
                 max_entries: 1024,
                 hash_function: HashFunction::XxHash,
@@ -478,7 +572,7 @@ impl CacheConfig {
                 _padding: [0; 4],
             },
             warm_tier: WarmTierConfig::default(),
-            cold_tier: ColdTierConfig::default(),
+            cold_tier: cold_tier_config,
             monitoring: MonitoringConfig::default(),
             worker: WorkerConfig::default(),
             analyzer: AnalyzerConfig::default(),
@@ -490,7 +584,12 @@ impl CacheConfig {
     /// Create low-memory configuration - Still uses all sophisticated features
     #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn low_memory() -> Self {
+        let cache_id = Uuid::new_v4().to_string();
+        let mut cold_tier_config = ColdTierConfig::default();
+        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        
         Self {
+            cache_id,
             hot_tier: HotTierConfig {
                 max_entries: 64,
                 hash_function: HashFunction::XxHash,
@@ -502,7 +601,7 @@ impl CacheConfig {
                 _padding: [0; 4],
             },
             warm_tier: WarmTierConfig::default(),
-            cold_tier: ColdTierConfig::default(),
+            cold_tier: cold_tier_config,
             monitoring: MonitoringConfig::default(),
             worker: WorkerConfig::default(),
             analyzer: AnalyzerConfig::default(),

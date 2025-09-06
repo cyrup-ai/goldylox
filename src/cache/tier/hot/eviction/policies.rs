@@ -6,7 +6,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::memory_pool::{SlotMetadata, MemoryPool};
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
@@ -19,6 +19,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         &self,
         metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
+        memory_pool: &MemoryPool<K, V>,
     ) -> Option<EvictionCandidate<K, V>> {
         #[cfg(target_arch = "x86_64")]
         {
@@ -57,12 +58,16 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             }
 
             if oldest_time != u64::MAX {
-                Some(EvictionCandidate::from_slot_index(
-                    oldest_slot,
-                    K::default(), // Placeholder key - actual key will be provided by caller
-                    1.0 / (oldest_time as f64 + 1.0),
-                    SelectionReason::LeastRecentlyUsed,
-                ))
+                if let Some(slot) = memory_pool.get_slot(oldest_slot) {
+                    Some(EvictionCandidate::from_slot_index(
+                        oldest_slot,
+                        slot.key.clone(),
+                        1.0 / (oldest_time as f64 + 1.0),
+                        SelectionReason::LeastRecentlyUsed,
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -85,12 +90,16 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             }
 
             if oldest_time != u64::MAX {
-                Some(EvictionCandidate::from_slot_index(
-                    oldest_slot,
-                    K::default(), // Placeholder key - actual key will be provided by caller
-                    1.0 / (oldest_time as f64 + 1.0),
-                    SelectionReason::LeastRecentlyUsed,
-                ))
+                if let Some(slot) = memory_pool.get_slot(oldest_slot) {
+                    Some(EvictionCandidate::from_slot_index(
+                        oldest_slot,
+                        slot.key.clone(),
+                        1.0 / (oldest_time as f64 + 1.0),
+                        SelectionReason::LeastRecentlyUsed,
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -98,7 +107,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     }
 
     /// Find LFU eviction candidate
-    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata]) -> Option<EvictionCandidate<K, V>> {
+    pub fn find_lfu_candidate(&self, metadata: &[SlotMetadata], memory_pool: &MemoryPool<K, V>) -> Option<EvictionCandidate<K, V>> {
         let mut lowest_count = u8::MAX;
         let mut lowest_slot = 0;
 
@@ -110,13 +119,16 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         }
 
         if lowest_count != u8::MAX {
-            // Use existing EvictionCandidate from_slot_index constructor for hot tier compatibility
-            Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
-                lowest_slot,
-                K::default(), // Placeholder key - actual key will be provided by caller
-                lowest_count as f64, // LFU score based on access count
-                crate::cache::traits::types_and_enums::SelectionReason::LeastFrequentlyUsed,
-            ))
+            if let Some(slot) = memory_pool.get_slot(lowest_slot) {
+                Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
+                    lowest_slot,
+                    slot.key.clone(),
+                    lowest_count as f64, // LFU score based on access count
+                    crate::cache::traits::types_and_enums::SelectionReason::LeastFrequentlyUsed,
+                ))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -128,6 +140,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
+        memory_pool: &MemoryPool<K, V>,
     ) -> Option<EvictionCandidate<K, V>> {
         let mut best_candidate: Option<EvictionCandidate<K, V>> = None;
         let mut best_score = f64::NEG_INFINITY;
@@ -151,13 +164,14 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
 
                 if score > best_score {
                     best_score = score;
-                    // Use existing EvictionCandidate from_slot_index constructor for hot tier compatibility
-                    best_candidate = Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
-                        slot_idx,
-                        K::default(), // Placeholder key - actual key will be provided by caller
-                        score,
-                        crate::cache::traits::types_and_enums::SelectionReason::AdaptiveReplacementCache,
-                    ));
+                    if let Some(slot) = memory_pool.get_slot(slot_idx) {
+                        best_candidate = Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
+                            slot_idx,
+                            slot.key.clone(),
+                            score,
+                            crate::cache::traits::types_and_enums::SelectionReason::AdaptiveReplacementCache,
+                        ));
+                    }
                 }
             }
         }

@@ -13,7 +13,11 @@ use std::hash::Hash;
 use crate::cache::coordinator::unified_manager::UnifiedCacheManager;
 use crate::cache::serde::{SerdeCacheKey, SerdeCacheValue};
 use crate::cache::config::CacheConfig;
+use crate::cache::config::types::generate_storage_path;
 use crate::cache::traits::types_and_enums::CacheOperationError;
+
+
+
 
 /// Simple, user-friendly cache interface with homogeneous key-value storage
 /// 
@@ -21,8 +25,8 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 /// to all sophisticated cache features: ML eviction, SIMD optimization, coherence protocols.
 pub struct Goldylox<K, V> 
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
 {
     // Direct connection to sophisticated UnifiedCacheManager with all advanced features
     manager: UnifiedCacheManager<SerdeCacheKey<K>, SerdeCacheValue<V>>,
@@ -30,8 +34,8 @@ where
 
 impl<K, V> Goldylox<K, V> 
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
 {
     /// Create new cache builder with fluent configuration
     pub fn builder() -> GoldyloxBuilder<K, V> {
@@ -105,29 +109,21 @@ where
     /// Store value only if key is not already present
     /// Returns the previous value if key was present, None if key was absent
     pub fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
-        // Check if key already exists by attempting to get it
-        if let Some(existing_value) = self.get(&key) {
-            // Key exists, return the existing value
-            return Ok(Some(existing_value));
-        }
+        let cache_key = SerdeCacheKey(key);
+        let cache_value = SerdeCacheValue(value);
         
-        // Key doesn't exist, store the value
-        self.put(key, value)?;
-        Ok(None)
+        self.manager.put_if_absent(cache_key, cache_value)
+            .map(|opt| opt.map(|cache_value| cache_value.0))
     }
     
     /// Replace existing value with new value, returning the old value
     /// Returns None if key was not present
     pub fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
-        // Get old value first
-        let old_value = self.get(&key);
+        let cache_key = SerdeCacheKey(key);
+        let cache_value = SerdeCacheValue(value);
         
-        if old_value.is_some() {
-            // Key exists, replace with new value
-            self.put(key, value)?;
-        }
-        
-        Ok(old_value)
+        self.manager.replace(cache_key, cache_value)
+            .map(|opt| opt.map(|cache_value| cache_value.0))
     }
     
     /// Atomically replace value only if current value equals expected value
@@ -136,17 +132,11 @@ where
     where 
         V: PartialEq
     {
-        // Get current value
-        if let Some(current_value) = self.get(&key) {
-            if current_value == expected {
-                // Values match, perform the swap
-                self.put(key, new_value)?;
-                return Ok(true);
-            }
-        }
+        let cache_key = SerdeCacheKey(key);
+        let expected_cache_value = SerdeCacheValue(expected);
+        let new_cache_value = SerdeCacheValue(new_value);
         
-        // Key doesn't exist or values don't match
-        Ok(false)
+        self.manager.compare_and_swap(cache_key, expected_cache_value, new_cache_value)
     }
     
     /// Get value or insert using factory function if key is absent
@@ -155,15 +145,12 @@ where
     where 
         F: FnOnce() -> V
     {
-        // Try to get existing value
-        if let Some(existing_value) = self.get(&key) {
-            return Ok(existing_value);
-        }
-        
-        // Key doesn't exist, create and store new value
-        let new_value = factory();
-        self.put(key, new_value.clone())?;
-        Ok(new_value)
+        // Use atomic get-or-insert to avoid race conditions
+        let cache_key = SerdeCacheKey(key);
+        let result = self.manager.get_or_insert_atomic(cache_key, || {
+            SerdeCacheValue(factory())
+        })?;
+        Ok(result.0)
     }
     
     /// Get value or insert using fallible factory function if key is absent
@@ -173,28 +160,46 @@ where
         F: FnOnce() -> Result<V, E>,
         E: Into<CacheOperationError>
     {
-        // Try to get existing value
+        // First check if key exists (fast path)
         if let Some(existing_value) = self.get(&key) {
             return Ok(existing_value);
         }
-        
-        // Key doesn't exist, create and store new value
+
+        // Key doesn't exist, create value and use atomic insert
         let new_value = factory().map_err(|e| e.into())?;
-        self.put(key, new_value.clone())?;
-        Ok(new_value)
+        let cache_key = SerdeCacheKey(key);
+        let cache_value = SerdeCacheValue(new_value.clone());
+        
+        match self.manager.put_if_absent(cache_key, cache_value)? {
+            Some(existing) => Ok(existing.0), // Another thread inserted first
+            None => Ok(new_value), // We successfully inserted
+        }
     }
     
     /// Check if key exists in cache without retrieving the value
     pub fn contains_key(&self, key: &K) -> bool {
-        self.get(key).is_some()
+        let cache_key = SerdeCacheKey(key.clone());
+        self.manager.contains_key(&cache_key)
+    }
+}
+
+impl<K, V> std::fmt::Debug for Goldylox<K, V> 
+where 
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Goldylox")
+            .field("cache_id", &"<cache>")
+            .finish()
     }
 }
 
 /// Fluent builder for Goldylox configuration
 pub struct GoldyloxBuilder<K, V> 
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
 {
     config: CacheConfig,
     _phantom: std::marker::PhantomData<(K, V)>,
@@ -202,8 +207,8 @@ where
 
 impl<K, V> GoldyloxBuilder<K, V>
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
 {
     /// Create new builder with default configuration
     pub fn new() -> Self {
@@ -243,14 +248,14 @@ where
         self
     }
     
-    /// Set cold tier storage path
-    pub fn cold_tier_storage_path<P: AsRef<str>>(mut self, path: P) -> Self {
+    /// Set cold tier base directory
+    pub fn cold_tier_base_dir<P: AsRef<str>>(mut self, path: P) -> Self {
         let path_str = path.as_ref();
         if path_str.len() <= 256 {
             // ArrayString<256> requires manual construction
-            self.config.cold_tier.storage_path.clear();
+            self.config.cold_tier.base_dir.clear();
             for ch in path_str.chars() {
-                let _ = self.config.cold_tier.storage_path.try_push(ch);
+                let _ = self.config.cold_tier.base_dir.try_push(ch);
             }
         }
         self
@@ -269,7 +274,13 @@ where
         self
     }
     
-
+    /// Set cache ID (defaults to UUID if not specified)
+    pub fn cache_id<S: Into<String>>(mut self, id: S) -> Self {
+        self.config.cache_id = id.into();
+        // Update base dir to use the new cache ID
+        self.config.cold_tier.base_dir = generate_storage_path(&self.config.cache_id);
+        self
+    }
     
     /// Set number of background worker threads
     pub fn background_worker_threads(mut self, count: u8) -> Self {
@@ -294,8 +305,8 @@ where
 
 impl<K, V> Default for GoldyloxBuilder<K, V>
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + bincode::Encode + bincode::Decode<()> + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
 {
     fn default() -> Self {
         Self::new()

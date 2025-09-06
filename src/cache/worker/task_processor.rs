@@ -88,9 +88,26 @@ pub fn perform_periodic_maintenance(stat_sender: &Sender<StatUpdate>) {
     let _ = stat_sender.send(StatUpdate::SetLastMaintenance(now_ns));
 }
 
-/// Compact cold tier storage
-fn compact_cold_tier(_stat_sender: &Sender<StatUpdate>) {
-    // Cold tier compaction handled internally
+/// Compact cold tier storage using real ColdTierCoordinator
+fn compact_cold_tier(stat_sender: &Sender<StatUpdate>) {
+    use crate::cache::tier::cold::{ColdTierCoordinator, MaintenanceOperation};
+    
+    match ColdTierCoordinator::get() {
+        Ok(coordinator) => {
+            match coordinator.execute_maintenance(MaintenanceOperation::Compact) {
+                Ok(compacted_bytes) => {
+                    let _ = stat_sender.send(StatUpdate::Cleanup);
+                    log::info!("Cold tier compaction completed: {} bytes compacted", compacted_bytes);
+                }
+                Err(e) => {
+                    log::error!("Cold tier compaction failed: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to get ColdTierCoordinator for compaction: {}", e);
+        }
+    }
 }
 
 /// Optimize cache layout for better performance

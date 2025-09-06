@@ -15,6 +15,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 // Module declarations  
+pub mod atomic_ops;
 pub mod compaction_system;
 pub mod compression;
 pub mod compression_engine;
@@ -331,13 +332,14 @@ impl ColdTierCoordinator {
 
 /// Initialize cold tier for specific key-value types
 pub fn init_cold_tier<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
-    storage_path: &str,
+    base_dir: &str,
+    cache_id: &str,
 ) -> Result<(), CacheOperationError> {
     use arrayvec::ArrayString;
 
     let config = ColdTierConfig {
-        storage_path: ArrayString::from(storage_path)
-            .map_err(|_| CacheOperationError::invalid_state("Storage path too long"))?,
+        base_dir: ArrayString::from(base_dir)
+            .map_err(|_| CacheOperationError::invalid_state("Base directory path too long"))?,
         max_size_bytes: 1024 * 1024 * 1024, // 1GB
         max_file_size: 100 * 1024 * 1024,   // 100MB
         compression_level: 6,
@@ -347,7 +349,7 @@ pub fn init_cold_tier<K: CacheKey + Default + bincode::Encode + bincode::Decode<
         _padding: [0; 3],
     };
 
-    let tier = PersistentColdTier::<K, V>::new(config).map_err(|e| {
+    let tier = PersistentColdTier::<K, V>::new(config, cache_id).map_err(|e| {
         CacheOperationError::io_failed(format!("Failed to initialize cold tier: {}", e))
     })?;
 
@@ -433,3 +435,6 @@ pub fn remove_entry<K: CacheKey + Default + bincode::Encode + bincode::Decode<()
     let key = key.clone(); // Clone to avoid lifetime issues
     coordinator.execute_operation::<K, V, bool, _>(move |tier| Ok(tier.remove(&key)))
 }
+
+// Re-export atomic operations
+pub use atomic_ops::{put_if_absent_atomic, replace_atomic, compare_and_swap_atomic};

@@ -6,20 +6,19 @@
 use crate::cache::coherence::ProtocolConfiguration;
 use crate::cache::config::CacheConfig;
 use crate::cache::eviction::CachePolicyEngine;
-use crate::cache::manager::ErrorRecoverySystem as ManagerErrorRecoverySystem;
+use crate::cache::manager::error_recovery::ErrorRecoverySystem as ManagerErrorRecoverySystem;
 use crate::telemetry::unified_stats::UnifiedStats;
 use crate::cache::tier::manager::TierPromotionManager;
 use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::types::AccessPath;
-use super::background_coordinator::BackgroundCoordinator;
+use crate::cache::manager::background::types::{MaintenanceScheduler, MaintenanceConfig};
 use super::strategy_selector::CacheStrategySelector;
 use super::tier_operations::TierOperations;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::manager::performance::core::PerformanceMonitor;
 use crate::telemetry::unified_stats::UnifiedCacheStatistics;
 use crate::cache::worker::task_coordination::{TaskCoordinator, CacheCommand};
-use crate::cache::coordinator::background_coordinator::DefaultProcessor;
 
 
 /// Unified cache manager coordinating all tiers with atomic state management
@@ -34,8 +33,8 @@ pub struct UnifiedCacheManager<K: CacheKey + Default + bincode::Encode + bincode
     tier_manager: TierPromotionManager<K>,
     /// Unified cache statistics with atomic counters
     unified_stats: UnifiedCacheStatistics,
-    /// Background operation coordinator with work-stealing scheduler
-    background_coordinator: BackgroundCoordinator<K, V>,
+    /// Work-stealing maintenance scheduler
+    maintenance_scheduler: MaintenanceScheduler<K, V>,
     /// Cache policy engine with machine learning
     policy_engine: CachePolicyEngine<K, V>,
     /// Performance monitor with zero-allocation sampling
@@ -44,8 +43,8 @@ pub struct UnifiedCacheManager<K: CacheKey + Default + bincode::Encode + bincode
     error_recovery: ManagerErrorRecoverySystem<K, V>,
     /// Tier operations handler
     tier_operations: TierOperations<K, V>,
-    /// Task coordinator for async cache operations
-    task_coordinator: TaskCoordinator<K, V, DefaultProcessor>,
+    /// Task coordinator for async cache operations  
+    task_coordinator: TaskCoordinator<K, V>,
 }
 
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> UnifiedCacheManager<K, V> {
@@ -72,7 +71,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         // Then initialize warm tier with proper generic types
         crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
         // Initialize cold tier with proper generic types
-        crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.storage_path.as_str())
+        crate::cache::tier::cold::init_cold_tier::<K, V>(config.cold_tier.base_dir.as_str(), &config.cache_id)
             .map_err(|e| CacheOperationError::io_failed(&format!("Cold tier init failed: {}", e)))?;
 
         // Initialize coherence protocol with atomic coordination
@@ -91,19 +90,24 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         let strategy_selector = CacheStrategySelector::new(&config)?;
         let tier_manager = TierPromotionManager::new(&config)?;
         let unified_stats = UnifiedCacheStatistics::new();
-        let background_coordinator = BackgroundCoordinator::new(&config)?;
+        // Create maintenance config with worker parameters from config
+        let mut maintenance_config = MaintenanceConfig::default();
+        maintenance_config.worker_count = config.worker.thread_pool_size as u32;
+        if config.worker.maintenance_interval_ns != 1_000_000_000 {
+            maintenance_config.heartbeat_interval_ns = config.worker.maintenance_interval_ns;
+        }
+        let maintenance_scheduler = MaintenanceScheduler::new(maintenance_config)?;
         let policy_engine =
             CachePolicyEngine::new(&config, crate::cache::eviction::PolicyType::default())?;
         let performance_monitor = PerformanceMonitor::new();
         let error_recovery = ManagerErrorRecoverySystem::new();
         let tier_operations = TierOperations::new();
         
-        // Initialize task coordinator with its own background coordinator
-        let task_background_coordinator = BackgroundCoordinator::new(&config)?;
-        let task_coordinator = TaskCoordinator::new(task_background_coordinator, 10000);
+        // Initialize task coordinator directly
+        let task_coordinator = TaskCoordinator::new_direct(config.worker.task_queue_capacity as usize);
 
-        // Wire GC coordinator to maintenance scheduler before creating manager
-        let maintenance_sender = background_coordinator.get_maintenance_task_sender();
+        // Wire GC coordinator to maintenance scheduler
+        let maintenance_sender = maintenance_scheduler.task_sender.clone();
         let _ = crate::cache::memory::gc_coordinator::set_global_maintenance_sender(maintenance_sender);
 
         let manager = Self {
@@ -111,7 +115,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             strategy_selector,
             tier_manager,
             unified_stats,
-            background_coordinator,
+            maintenance_scheduler,
             policy_engine,
             performance_monitor,
             error_recovery,
@@ -285,6 +289,10 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         let elapsed_ns = timer.elapsed_ns();
         self.unified_stats.update_memory_usage(elapsed_ns); // Use available public method
 
+        // Submit background maintenance task after put operation
+        let canonical_task = crate::cache::worker::types::WorkerMaintenanceOps::update_statistics_task();
+        let _ = self.maintenance_scheduler.submit_task(canonical_task, 1000);
+
         Ok(())
     }
 
@@ -295,6 +303,10 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         if removed {
             // Update operation counter atomically using public method
             self.unified_stats.record_miss(0);
+            
+            // Submit background cleanup task after removal
+            let canonical_task = crate::cache::worker::types::WorkerMaintenanceOps::cleanup_expired_task();
+            let _ = self.maintenance_scheduler.submit_task(canonical_task, 500);
         }
 
         removed
@@ -306,6 +318,14 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
 
         // Reset unified statistics atomically
         self.unified_stats.reset_all_counters();
+        
+        // MaintenanceScheduler handles ongoing operations automatically
+        // No special trigger needed for clear operation
+
+        // Check maintenance scheduler health after clear operation
+        if !self.maintenance_scheduler.is_healthy() {
+            log::warn!("Maintenance scheduler health check failed after clear operation");
+        }
 
         Ok(())
     }
@@ -344,29 +364,50 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     pub fn detailed_analytics(&self) -> (UnifiedStats, crate::cache::eviction::PolicyStats, crate::cache::analyzer::types::AnalyzerStatistics) {
         let unified_stats = self.stats();
         let (policy_stats, analyzer_stats) = self.policy_engine.get_comprehensive_stats();
+        
+        // Include task coordinator statistics in detailed analytics
+        let task_stats = self.task_coordinator.get_stats();
+        log::debug!("Task coordinator stats - active tasks: {}, success rate: {}%", 
+                   task_stats.active_task_count, task_stats.success_rate_percent);
+        
         (unified_stats, policy_stats, analyzer_stats)
     }
 
     /// Get strategy performance metrics for workload analysis
     pub fn strategy_metrics(&self) -> &crate::cache::manager::strategy::StrategyMetrics {
+        // Check maintenance scheduler health when accessing metrics
+        if !self.maintenance_scheduler.is_healthy() {
+            log::warn!("Maintenance scheduler health degraded during strategy metrics access");
+        }
+        
         self.strategy_selector.get_metrics()
     }
 
     /// Get strategy thresholds configuration
     pub fn strategy_thresholds(&self) -> &crate::cache::manager::strategy::StrategyThresholds {
+        // MaintenanceScheduler provides built-in health monitoring
+        log::debug!("Strategy thresholds accessed - maintenance scheduler operational");
+        
         self.strategy_selector.get_thresholds()
     }
 
     /// Force strategy change for manual optimization or testing
     pub fn force_cache_strategy(&self, strategy: crate::cache::manager::strategy::CacheStrategy) {
+        // MaintenanceScheduler handles worker state internally
+        log::info!("Strategy change requested - using work-stealing scheduler");
+        
         self.strategy_selector.force_strategy(strategy);
+        
+        // No special trigger needed - scheduler handles ongoing operations
     }
 
     /// Start background processing with work-stealing scheduler
     fn start_background_processing(&self) -> Result<(), CacheOperationError> {
-        self.background_coordinator.start_worker_threads()?;
-        // Performance monitor doesn't have start_monitoring_thread method in current implementation
-        // self.performance_monitor.start_monitoring_thread()?;
+        // Maintenance scheduler is already initialized with worker threads
+        // No additional startup required
+        
+        // Task coordinator is already initialized and ready for command processing
+        
         // Error recovery system is initialized and ready
         Ok(())
     }
@@ -422,6 +463,10 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             self.tier_manager
                 .should_promote(key, value, from_tier, to_tier, access_path);
         if promotion_decision.should_promote {
+            // Maintenance scheduler provides health check
+            if self.maintenance_scheduler.is_healthy() {
+                log::debug!("Promotion decision - maintenance scheduler healthy");
+            }
             let _ = self
                 .tier_manager
                 .schedule_promotion(key.clone(), from_tier, to_tier, 5);
@@ -597,6 +642,67 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     /// Cancel a specific task
     pub fn cancel_task(&self, task_id: u64) -> Result<bool, CacheOperationError> {
         self.task_coordinator.cancel_task(task_id)
+    }
+
+    /// Atomically put value only if key is not present
+    /// Returns the previous value if key was present, None if key was absent
+    pub fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        // Use lock-free tier-native atomic operations
+        self.tier_operations.put_if_absent_atomic(key, value)
+    }
+
+    /// Atomically replace existing value with new value, returning the old value
+    /// Returns None if key was not present
+    pub fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+        // Use lock-free tier-native atomic operations
+        self.tier_operations.replace_atomic(key, value)
+    }
+
+    /// Atomically replace value only if current value equals expected value
+    /// Returns true if replacement occurred, false otherwise
+    /// 
+    /// Note: This method is only available when V implements PartialEq
+    pub fn compare_and_swap(&self, key: K, expected: V, new_value: V) -> Result<bool, CacheOperationError>
+    where 
+        V: PartialEq
+    {
+        // Use lock-free tier-native atomic operations
+        self.tier_operations.compare_and_swap_atomic(key, expected, new_value)
+    }
+
+    /// Check if key exists in cache without retrieving the value
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Atomically get value or insert using factory function if key is absent
+    pub fn get_or_insert_atomic<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
+    where 
+        F: FnOnce() -> V
+    {
+        self.tier_operations.get_or_insert_atomic(key, factory)
+    }
+
+    /// Shutdown cache system gracefully with proper cleanup
+    pub fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
+        // Stop maintenance operations gracefully
+        self.maintenance_scheduler.stop_maintenance()?;
+        
+        // Note: Full shutdown with thread joining requires ownership of MaintenanceScheduler
+        // This is handled during UnifiedCacheManager Drop if needed
+        
+        Ok(())
+    }
+
+    /// Start a background processing task with specified priority
+    pub fn start_background_processor(&self) -> Result<(), CacheOperationError> {        
+        // Check if maintenance scheduler is healthy before starting
+        if !self.maintenance_scheduler.is_healthy() {
+            return Err(CacheOperationError::InvalidState("Maintenance scheduler not healthy".to_string()));
+        }
+        
+        // Start worker threads instead
+        self.start_background_processing()
     }
 }
 

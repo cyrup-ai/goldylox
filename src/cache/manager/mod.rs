@@ -20,11 +20,9 @@ pub mod strategy;
 // - Use crate::cache::coordinator::unified_manager::UnifiedCacheManager::<K, V>::new()
 // - etc.
 
-pub use background::{
-    MaintenanceScheduler,
-};
-// Remove unused BackgroundCoordinator export
-pub use error_recovery::ErrorRecoverySystem;
+// NO RE-EXPORTS - Use canonical imports only:
+// - Use crate::cache::manager::background::types::MaintenanceScheduler
+// - Use crate::cache::manager::error_recovery::ErrorRecoverySystem
 // Remove unused performance exports
 // Remove unused policy exports
 // REMOVED: Redirecting to canonical location

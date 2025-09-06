@@ -3,7 +3,7 @@
 //! This module implements ML-based eviction using utility scoring,
 //! temporal pattern analysis, and adaptive weight adjustment.
 
-use crate::cache::tier::hot::memory_pool::SlotMetadata;
+use crate::cache::tier::hot::memory_pool::{SlotMetadata, MemoryPool};
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use super::engine::EvictionEngine;
 use super::types::EvictionCandidate;
@@ -18,6 +18,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         metadata: &[SlotMetadata],
         lru_tracker: &SimdLruTracker,
         current_time_ns: u64,
+        memory_pool: &MemoryPool<K, V>,
     ) -> Option<EvictionCandidate<K, V>> {
         let mut best_candidate: Option<EvictionCandidate<K, V>> = None;
         let mut lowest_utility = f64::INFINITY;
@@ -29,12 +30,14 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
 
                 if utility_score < lowest_utility {
                     lowest_utility = utility_score;
-                    best_candidate = Some(EvictionCandidate::from_slot_index(
-                        slot_idx,
-                        K::default(), // Placeholder key - actual key will be provided by caller
-                        utility_score,
-                        SelectionReason::LowPriority,
-                    ));
+                    if let Some(slot) = memory_pool.get_slot(slot_idx) {
+                        best_candidate = Some(EvictionCandidate::from_slot_index(
+                            slot_idx,
+                            slot.key.clone(),
+                            utility_score,
+                            SelectionReason::LowPriority,
+                        ));
+                    }
                 }
             }
         }

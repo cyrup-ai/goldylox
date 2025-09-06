@@ -109,8 +109,7 @@ impl MemoryMonitoringStats {
     }
 }
 
-/// Historical memory usage tracking using sophisticated implementation
-pub type MemoryUsageHistoryStub = crate::cache::tier::warm::monitoring::usage_history::MemoryUsageHistory;
+
 
 /// Performance monitoring task for background analysis
 #[derive(Debug)]
