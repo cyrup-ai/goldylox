@@ -32,6 +32,7 @@ pub struct ErrorStatistics {
     burst_detector: ErrorBurstDetector,
 }
 
+#[allow(dead_code)] // Error recovery - comprehensive error statistics library for monitoring and analytics
 impl ErrorStatistics {
     /// Create new error statistics tracker with optimized const initialization
     pub fn new() -> Self {
@@ -125,7 +126,7 @@ impl ErrorStatistics {
         }
     }
 
-    /// Get recovery attempt count for strategy (legacy usize interface)
+    /// Get recovery attempt count for strategy (by index)
     #[inline(always)]
     pub fn get_recovery_attempts_by_index(&self, strategy_idx: usize) -> u64 {
         if strategy_idx < 8 {
@@ -146,7 +147,7 @@ impl ErrorStatistics {
         }
     }
 
-    /// Get recovery success count for strategy (legacy usize interface)
+    /// Get recovery success count for strategy (by index)
     #[inline(always)]
     pub fn get_recovery_successes_by_index(&self, strategy_idx: usize) -> u64 {
         if strategy_idx < 8 {
@@ -269,10 +270,10 @@ impl ErrorStatistics {
         // Collect all error types with their counts
         for (i, count) in self.error_counts.iter().enumerate() {
             let error_count = count.load(Ordering::Relaxed);
-            if error_count > 0 {
-                if let Some(error_type) = index_to_error_type(i) {
-                    errors.push((error_type, error_count));
-                }
+            if error_count > 0
+                && let Some(error_type) = index_to_error_type(i)
+            {
+                errors.push((error_type, error_count));
             }
         }
 
@@ -310,9 +311,7 @@ impl ErrorStatistics {
         // Penalize for high error counts
         let error_penalty = (total_errors as f64 / 1000.0).min(0.3);
 
-        (recovery_rate - burst_penalty - error_penalty)
-            .max(0.0)
-            .min(1.0)
+        (recovery_rate - burst_penalty - error_penalty).clamp(0.0, 1.0)
     }
 }
 

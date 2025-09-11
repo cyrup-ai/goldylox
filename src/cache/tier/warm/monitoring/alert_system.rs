@@ -3,6 +3,8 @@
 //! This module handles alert generation, cooldown management, and notification
 //! delivery for memory pressure monitoring.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete alert system library for memory pressure notifications
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -25,6 +27,12 @@ pub struct AlertStats {
     pub avg_response_time_ms: AtomicF64,
     /// Alert effectiveness score
     pub effectiveness_score: AtomicF64,
+}
+
+impl Default for AlertStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AlertStats {

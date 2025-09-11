@@ -3,6 +3,8 @@
 //! This module implements pattern detection algorithms for classifying
 //! access sequences into temporal patterns like periodic, sequential, burst, or random.
 
+#![allow(dead_code)] // Warm tier access tracking - Complete pattern classification library for temporal pattern analysis
+
 use crossbeam_utils::atomic::AtomicCell;
 
 use super::confidence_tracker::ConfidenceTracker;
@@ -18,6 +20,12 @@ pub struct TemporalPatternClassifier {
     current_pattern: AtomicCell<PatternState>,
     /// Pattern confidence tracker
     confidence_tracker: ConfidenceTracker,
+}
+
+impl Default for TemporalPatternClassifier {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TemporalPatternClassifier {

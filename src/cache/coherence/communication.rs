@@ -156,6 +156,12 @@ pub enum CoherenceError {
     // UnsupportedSchemaVersion and ChecksumMismatch variants removed - were unused error types
 }
 
+impl<K: CacheKey, V: CacheValue> Default for CommunicationHub<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: CacheKey, V: CacheValue> CommunicationHub<K, V> {
     pub fn new() -> Self {
         let (hot_tx, hot_rx) = unbounded();
@@ -261,6 +267,12 @@ impl<K: CacheKey, V: CacheValue> CommunicationHub<K, V> {
     }
 
 
+}
+
+impl Default for MessageStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MessageStatistics {

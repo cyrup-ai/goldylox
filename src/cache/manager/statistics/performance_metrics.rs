@@ -6,8 +6,15 @@
 use crate::telemetry::unified_stats::CachePerformanceMetrics;
 use crate::cache::types::statistics::tier_stats::TierStatistics;
 
+impl Default for CachePerformanceMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CachePerformanceMetrics {
     /// Create new performance metrics
+    #[allow(dead_code)] // Performance metrics - constructor for cache performance tracking
     pub fn new() -> Self {
         Self {
             overall_hit_rate: 0.0,
@@ -23,6 +30,7 @@ impl CachePerformanceMetrics {
     }
 
     /// Calculate cache efficiency score (0.0 to 1.0)
+    #[allow(dead_code)] // Performance metrics - efficiency scoring API for performance analysis
     pub fn efficiency_score(&self) -> f64 {
         if self.total_operations == 0 {
             return 0.0;
@@ -41,6 +49,7 @@ impl CachePerformanceMetrics {
     }
 
     /// Get tier distribution percentages
+    #[allow(dead_code)] // Performance metrics - tier distribution analysis API for cache optimization
     pub fn tier_distribution(&self) -> (f64, f64, f64) {
         let total_hits = self.hot_tier.hits + self.warm_tier.hits + self.cold_tier.hits;
         if total_hits == 0 {
@@ -55,6 +64,7 @@ impl CachePerformanceMetrics {
     }
 
     /// Check if cache performance is healthy
+    #[allow(dead_code)] // Performance metrics - health check API for system monitoring
     pub fn is_healthy(&self) -> bool {
         // Consider cache healthy if:
         // 1. Hit rate > 80%

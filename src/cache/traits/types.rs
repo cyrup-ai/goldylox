@@ -2,6 +2,8 @@
 //!
 //! This module contains remaining unique types that are not duplicated in types_and_enums.rs
 
+#![allow(dead_code)] // Cache traits - Core type definitions for cache traits
+
  // Internal trait types - may not be used in minimal API
 
 use std::time::Instant;

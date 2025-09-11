@@ -21,7 +21,7 @@ pub fn create_advanced_pressure_monitor(config: &CacheConfig) -> Result<MemoryPr
     };
     
     // Use memory limit from config or auto-detect
-    let memory_limit = config.memory_config.max_memory_usage.unwrap_or_else(|| get_system_memory_with_fallback());
+    let memory_limit = config.memory_config.max_memory_usage.unwrap_or_else(get_system_memory_with_fallback);
     
     Ok(MemoryPressureMonitor::with_thresholds(
         memory_limit, 
@@ -61,14 +61,12 @@ pub fn get_system_memory_with_fallback() -> u64 {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("sysctl").arg("hw.memsize").output() {
-            if let Ok(output_str) = String::from_utf8(output.stdout) {
-                if let Some(mem_str) = output_str.split_whitespace().nth(1) {
-                    if let Ok(bytes) = mem_str.parse::<u64>() {
-                        return bytes;
-                    }
-                }
-            }
+        if let Ok(output) = Command::new("sysctl").arg("hw.memsize").output()
+            && let Ok(output_str) = String::from_utf8(output.stdout)
+            && let Some(mem_str) = output_str.split_whitespace().nth(1)
+            && let Ok(bytes) = mem_str.parse::<u64>()
+        {
+            return bytes;
         }
     }
 

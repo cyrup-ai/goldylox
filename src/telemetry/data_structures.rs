@@ -152,6 +152,12 @@ pub struct AlertRateLimits {
     pub window_start: CachePadded<AtomicU64>, // Nanoseconds since epoch
 }
 
+impl Default for AlertRateLimits {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlertRateLimits {
     /// Create with default per-type rate limits
     pub fn new() -> Self {
@@ -207,7 +213,7 @@ pub struct AlertHistoryBuffer {
     /// Recent alerts with full context
     pub alerts: ArrayVec<PerformanceAlert, 128>,
     /// Alert pattern analysis state
-    pub pattern_state: AlertPatternState,
+    pub pattern_state: crate::cache::manager::performance::alert_system::AlertPatternState,
     /// Buffer utilization tracking
     pub utilization: AtomicUsize,
 }
@@ -216,7 +222,7 @@ impl AlertHistoryBuffer {
     pub fn new() -> Self {
         Self {
             alerts: ArrayVec::new(),
-            pattern_state: AlertPatternState::new(),
+            pattern_state: crate::cache::manager::performance::alert_system::AlertPatternState::new(),
             utilization: AtomicUsize::new(0),
         }
     }
@@ -388,19 +394,7 @@ impl TrendHistoryBuffer {
     }
 }
 
-impl AlertPatternState {
-    /// Get the pattern confidence level
-    pub fn pattern_confidence(&self) -> f32 {
-        self.pattern_confidence.load(Ordering::Relaxed) as f32 / 1000.0
-    }
 
-    /// Update pattern confidence
-    pub fn update_pattern_confidence(&self, confidence: f32) {
-        let confidence_scaled = (confidence * 1000.0) as u32;
-        self.pattern_confidence
-            .store(confidence_scaled, Ordering::Relaxed);
-    }
-}
 
 impl TrendSample {
     /// Create a new trend sample
@@ -445,35 +439,7 @@ impl TrendSample {
     }
 }
 
-/// Alert pattern analysis state
-#[derive(Debug)]
-pub struct AlertPatternState {
-    /// Pattern recognition coefficients
-    pub pattern_coefficients: [AtomicU32; 8], // Packed as u32 * 1000
-    /// Pattern matching confidence
-    pub pattern_confidence: AtomicU32, // Confidence * 1000
-    /// Last pattern update timestamp
-    pub last_pattern_update: AtomicU64,
-}
 
-impl AlertPatternState {
-    pub fn new() -> Self {
-        Self {
-            pattern_coefficients: [
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-                AtomicU32::new(0),
-            ],
-            pattern_confidence: AtomicU32::new(0),
-            last_pattern_update: AtomicU64::new(0),
-        }
-    }
-}
 
 impl OpsPerSecondState {
     pub fn new() -> Self {

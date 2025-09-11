@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Coherence system handle that manages worker lifecycle
+#[derive(Debug)]
 pub struct CoherenceSystem<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static> {
     sender: CoherenceSender<K, V>,
     #[allow(dead_code)] // MESI coherence - worker manager used for lifecycle management
@@ -149,7 +150,7 @@ where
     
     // Wait for response with timeout
     match sender.receive_response(request_id, Duration::from_secs(5))? {
-        CoherenceResponse::SerializeSuccess { envelope, .. } => Ok(envelope),
+        CoherenceResponse::SerializeSuccess { envelope, .. } => Ok(*envelope),
         CoherenceResponse::Error { error, .. } => Err(error),
         _ => Err(CoherenceError::ProtocolViolation),
     }

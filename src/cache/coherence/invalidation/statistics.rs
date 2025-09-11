@@ -26,6 +26,12 @@ pub struct InvalidationStatistics {
     pub peak_pending_count: AtomicU32,
 }
 
+impl Default for InvalidationStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InvalidationStatistics {
     pub fn new() -> Self {
         Self {

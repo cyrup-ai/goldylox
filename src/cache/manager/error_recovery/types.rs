@@ -194,6 +194,12 @@ pub struct PatternMatchingState {
     pub matching_stats: PatternMatchingStats,
 }
 
+impl Default for PatternMatchingState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PatternMatchingState {
     pub fn new() -> Self {
         Self {
@@ -257,6 +263,12 @@ impl Default for HealthCheckConfig {
     }
 }
 
+impl Default for DetectionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DetectionState {
     pub fn new() -> Self {
         Self {
@@ -287,6 +299,12 @@ impl Default for CircuitBreakerConfig {
             timeout_duration: Duration::from_secs(60),
             half_open_test_count: 3,
         }
+    }
+}
+
+impl Default for ErrorBurstDetector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

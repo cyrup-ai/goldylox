@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Atomic Operations - Complete lock-free atomic cache entry library with cache-line alignment, generation-based ABA prevention, atomic metadata updates, sophisticated access tracking, and comprehensive concurrency coordination
+
 //! Atomic cache data structures with zero-cost abstractions
 //!
 //! This module provides lock-free atomic cache entries using
@@ -15,7 +17,7 @@ pub fn timestamp_nanos(_instant: Instant) -> u64 {
     use std::time::SystemTime;
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::ZERO)
+        .unwrap_or(Duration::ZERO)
         .as_nanos() as u64
 }
 
@@ -369,7 +371,6 @@ impl<K: CacheKey, V: CacheValue> AtomicCacheEntry<K, V> {
 ///
 /// Provides factory functions and utilities for creating AtomicCacheEntry
 /// instances with proper generic type support.
-
 /// Create atomic cache entry with automatic type inference
 #[inline(always)]
 pub fn create_atomic_entry<K, V>(key: K, value: V) -> AtomicCacheEntry<K, V>

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier global API - Complete global interface library with thread-safe access, type-erased storage, alerts, and cache management
+
 //! Global API functions and tier operations for warm tier cache
 //!
 //! This module provides thread-safe global access to warm tier cache instances
@@ -152,10 +154,8 @@ impl WarmTierCoordinator {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         
         // Try to get existing tier
-        if let Some(handle_ops) = self.warm_tiers.get(&type_key) {
-            if let Some(handle) = handle_ops.as_any().downcast_ref::<WarmTierHandle<K, V>>() {
-                return Ok(handle.clone());
-            }
+        if let Some(handle_ops) = self.warm_tiers.get(&type_key) && let Some(handle) = handle_ops.as_any().downcast_ref::<WarmTierHandle<K, V>>() {
+            return Ok(handle.clone());
         }
         
         // Create new tier if doesn't exist
@@ -297,7 +297,6 @@ impl WarmTierCoordinator {
     }
 
     /// Execute cache operation via specific message types (following hot tier pattern)
-    
     fn execute_operation<K: CacheKey + 'static, V: CacheValue + Default + 'static, T: Send + 'static>(
         &self,
         _operation: impl FnOnce(&mut LockFreeWarmTier<K, V>) -> Result<T, CacheOperationError>,
@@ -311,7 +310,6 @@ impl WarmTierCoordinator {
     }
     
     /// Send a message to a tier and wait for response
-    
     fn send_message<K: CacheKey + 'static, V: CacheValue + Default + 'static, R: 'static>(
         &self,
         create_message: impl FnOnce(Sender<R>) -> WarmCacheRequest<K, V>,
@@ -677,8 +675,8 @@ pub fn get_warm_tier_ml_policies<K: CacheKey + 'static, V: CacheValue + Default 
     handle.sender.send(request)
         .map_err(|_| CacheOperationError::invalid_state("Worker queue full"))?;
     
-    Ok(response_rx.recv_timeout(Duration::from_millis(100))
-        .map_err(|_| CacheOperationError::TimeoutError)?)
+    response_rx.recv_timeout(Duration::from_millis(100))
+        .map_err(|_| CacheOperationError::TimeoutError)
 }
 
 /// Update ML models in warm tier instances via crossbeam messaging

@@ -18,6 +18,12 @@ use super::types::{
 // Use the comprehensive canonical implementation with full async write-behind processing,
 // complete batching and flush coordination, and production-ready error handling
 
+impl<K: crate::cache::traits::CacheKey> Default for WriteScheduler<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: crate::cache::traits::CacheKey> WriteScheduler<K> {
     #[allow(dead_code)] // Policy management - new used in write scheduler initialization
     pub fn new() -> Self {
@@ -34,6 +40,12 @@ impl<K: crate::cache::traits::CacheKey> WriteScheduler<K> {
 // ThroughputMetrics impl moved to canonical location: crate::cache::tier::warm::metrics::ThroughputMetrics
 // All methods available through canonical implementation with enhanced functionality
 
+impl Default for AdaptivePolicyConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdaptivePolicyConfig {
     #[allow(dead_code)] // Policy management - new used in adaptive policy configuration initialization
     pub fn new() -> Self {
@@ -43,6 +55,12 @@ impl AdaptivePolicyConfig {
             performance_threshold: AtomicU32::new(800), // 80% threshold
             learning_rate: AtomicCell::new(0.01),
         }
+    }
+}
+
+impl Default for BackgroundWriteCoordinator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -3,6 +3,8 @@
 //! This module implements the core memory pressure monitoring logic with
 //! real-time alerting and trend analysis.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete memory pressure monitoring library with adaptive thresholds
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 

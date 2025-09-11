@@ -3,6 +3,8 @@
 //! This module provides blazing-fast error handling with zero-allocation error propagation
 //! and intelligent recovery mechanisms for production cache systems.
 
+#![allow(dead_code)] // Cache traits - Error handling trait definitions for sophisticated error management
+
  // Internal error traits - may not be used in minimal API
 
 use std::fmt::Debug;

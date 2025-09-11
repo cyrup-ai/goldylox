@@ -279,7 +279,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
             };
 
             // Submit task to worker via crossbeam channel
-            if let Err(_) = self.worker_channels.task_tx.try_send(task.clone()) {
+            if self.worker_channels.task_tx.try_send(task.clone()).is_err() {
                 // Channel full - record worker task error
                 self.propagation_stats.record_worker_error();
             } else {

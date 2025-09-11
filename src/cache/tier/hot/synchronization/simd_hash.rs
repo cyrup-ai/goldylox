@@ -18,6 +18,12 @@ pub struct SimdHashState {
     pub state: [u64; 4],
 }
 
+impl Default for SimdHashState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimdHashState {
     /// Create new SIMD hash state
     pub fn new() -> Self {

@@ -3,6 +3,8 @@
 //! This module contains all the core types, enums, and data structures
 //! used for access pattern tracking and classification.
 
+#![allow(dead_code)] // Warm tier access tracking - Complete type definitions for access pattern tracking and classification
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -61,7 +63,6 @@ pub enum AccessContext {
 
 /// Temporal pattern classification for access prediction
 // TemporalPattern moved to canonical location: crate::cache::traits::types_and_enums
-
 /// Pattern state for temporal pattern tracking
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PatternState {
@@ -141,6 +142,12 @@ impl Default for PatternState {
             pattern_type: TemporalPattern::Random,
             confidence: 0.0,
         }
+    }
+}
+
+impl Default for GlobalConfidenceStats {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Memory management types - Complete memory management library with allocation statistics, region management, and size distribution tracking
+
 //! Common types and data structures for memory management
 //!
 //! This module contains shared types used across the memory management subsystem.

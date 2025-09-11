@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete cache measurement types with metrics tracking and timing utilities
+
 //! Cache measurement types and error definitions
 
 

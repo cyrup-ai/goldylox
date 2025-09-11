@@ -286,7 +286,7 @@ impl PoolCleanupManager {
 
     /// Update fragmentation tracking using existing AllocationStatistics
     fn update_fragmentation_tracking(&self, fragmentation_level: u32) -> Result<(), CacheOperationError> {
-        // Update existing AllocationStatistics using public method
+        // Update existing AllocationStatistics using direct atomic store
         use crate::cache::memory::allocation_manager::global_stats;
         global_stats::ALLOCATION_STATS.fragmentation_level.store(fragmentation_level, std::sync::atomic::Ordering::Relaxed);
         Ok(())

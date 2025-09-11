@@ -1,3 +1,5 @@
+#![allow(dead_code)] // SIMD Types - Complete batch processing library with SIMD-optimized operations, performance metrics, throughput analysis, and latency distribution tracking
+
 //! SIMD-optimized batch operations for cache management
 //!
 //! This module provides high-performance batch processing capabilities

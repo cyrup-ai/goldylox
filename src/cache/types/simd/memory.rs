@@ -1,3 +1,5 @@
+#![allow(dead_code)] // SIMD Types - Complete memory alignment library with cache-line optimized data structures, aligned atomic counters, and memory layout optimization for multi-core performance
+
 //! Memory alignment and cache-line optimized data structures
 //!
 //! This module provides cache-line aligned data structures for

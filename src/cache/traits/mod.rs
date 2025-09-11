@@ -3,24 +3,28 @@
 //! This module provides production-quality cache traits with Generic Associated Types,
 //! Higher-Ranked Trait Bounds, SIMD optimization, ML integration, and zero-copy operations.
 
+#![allow(dead_code)] // Cache traits - Complete trait library for cache system abstractions and interfaces
+
 // Core module declarations (crate private)
 pub(crate) mod cache_entry; // Domain model with CacheEntry<K,V> wrapper
-pub(crate) mod core; // Advanced CacheKey, CacheValue, CacheTier, EvictionPolicy traits
+pub mod core; // Advanced CacheKey, CacheValue, CacheTier, EvictionPolicy traits
 pub(crate) mod entry_and_stats; // Cache entry and statistics traits with zero-copy monitoring
 pub(crate) mod error; // Sophisticated error handling with recovery strategies
-pub(crate) mod impls; // Concrete implementations for standard types
-pub(crate) mod metadata; // Value metadata and serialization contexts
+pub mod impls; // Concrete implementations for standard types
+pub mod metadata; // Value metadata and serialization contexts
 pub(crate) mod policy; // Eviction policies with ML optimization and HRTBs
 pub(crate) mod structures; // Data structure definitions
-pub(crate) mod supporting_types; // Supporting traits (HashContext, Priority, SizeEstimator)
+pub mod supporting_types; // Supporting traits (HashContext, Priority, SizeEstimator)
 pub(crate) mod types; // Core type definitions
-pub(crate) mod types_and_enums; // Essential enumerations and value types
+pub mod types_and_enums; // Essential enumerations and value types
+
+// Public API re-exports for users
+pub use core::{CacheKey, CacheValue};
+pub use metadata::CacheValueMetadata;
+pub use supporting_types::ValueMetadata;
+pub use types_and_enums::CompressionHint;
 
 // Re-export API for crate-internal use only
-
-// Domain model
-// Advanced core traits with GATs and HRTBs
-pub(crate) use core::{CacheKey, CacheValue};
 
 pub(crate) use cache_entry::CacheEntry;
 // Entry and statistics monitoring

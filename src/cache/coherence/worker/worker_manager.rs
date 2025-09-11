@@ -16,6 +16,7 @@ use super::coherence_worker::CoherenceWorker;
 use super::message_types::{CoherenceRequest, CoherenceResponse};
 
 /// External handle for sending requests to coherence worker
+#[derive(Debug)]
 pub struct CoherenceSender<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned> {
     request_tx: Sender<CoherenceRequest<K, V>>,
     response_rx: Receiver<CoherenceResponse<K, V>>,
@@ -25,6 +26,7 @@ pub struct CoherenceSender<K: CacheKey + Default + bincode::Encode + bincode::De
 }
 
 /// Manager for coherence worker lifecycle
+#[derive(Debug)]
 pub struct CoherenceWorkerManager<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned> {
     config: ProtocolConfiguration,
     worker_handle: Option<JoinHandle<()>>,
@@ -87,10 +89,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
     /// Receive response with timeout
     pub fn receive_response(&self, request_id: u64, timeout: Duration) -> Result<CoherenceResponse<K, V>, CoherenceError> {
         // Check buffer first for previously received responses
-        if let Ok(mut buffer) = self.response_buffer.lock() {
-            if let Some(response) = buffer.remove(&request_id) {
+        if let Ok(mut buffer) = self.response_buffer.lock()
+            && let Some(response) = buffer.remove(&request_id) {
                 return Ok(response);
-            }
         }
         
         // Receive responses until we find the target or timeout

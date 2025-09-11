@@ -4,6 +4,8 @@
 //! with sophisticated cache infrastructure including access tracking, tier management,
 //! timestamps, and metadata for intelligent cache operations.
 
+#![allow(dead_code)] // Cache traits - Cache entry implementation with advanced metadata management
+
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -577,9 +579,7 @@ impl TierInfo {
     pub fn tier_stability_score(&self) -> f32 {
         let residency_hours = self.current_tier_residency().as_secs() as f32 / 3600.0;
         let transition_penalty = self.transition_count as f32 * 0.1;
-        (residency_hours / (1.0 + residency_hours) - transition_penalty)
-            .max(0.0)
-            .min(1.0)
+        (residency_hours / (1.0 + residency_hours) - transition_penalty).clamp(0.0, 1.0)
     }
 }
 

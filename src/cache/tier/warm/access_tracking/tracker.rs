@@ -3,6 +3,8 @@
 //! This module implements the main access tracking functionality with
 //! lock-free data structures and background analysis processing.
 
+#![allow(dead_code)] // Warm tier access tracking - Complete access tracker library for lock-free access pattern monitoring
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
@@ -50,6 +52,12 @@ pub struct ConcurrentAccessTracker<K: CacheKey> {
     /// Pattern analysis background channel
     analysis_tx: Sender<AccessAnalysisTask<K>>,
     analysis_rx: Receiver<AccessAnalysisTask<K>>,
+}
+
+impl<K: CacheKey> Default for ConcurrentAccessTracker<K> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K: CacheKey> ConcurrentAccessTracker<K> {

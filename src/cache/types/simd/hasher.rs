@@ -1,3 +1,5 @@
+#![allow(dead_code)] // SIMD Types - Complete SIMD hashing library with SSE2/AVX2 optimization, true parallel batch processing, runtime CPU detection, and scalar fallbacks
+
 //! SIMD-optimized hash computation for cache keys
 //!
 //! This module provides hardware SIMD acceleration using SSE2/AVX2 intrinsics
@@ -290,7 +292,6 @@ impl SimdHasher {
     }
 
     /// Scalar fallback for batch hashing
-    
     fn hash_batch_keys_scalar<K: CacheKey>(&mut self, keys: &[K]) -> Vec<u64> {
         keys.iter().map(|key| self.hash_cache_key_scalar(key)).collect()
     }

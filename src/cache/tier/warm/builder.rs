@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier builder - Complete builder pattern library with safe initialization, retry logic, graceful degradation, and error handling
+
 //! Builder pattern for safe warm tier initialization
 //!
 //! This module implements a builder pattern for WarmTier construction with

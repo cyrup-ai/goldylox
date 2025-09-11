@@ -161,6 +161,12 @@ pub struct HistoryStorageStats {
     pub estimated_memory_bytes: AtomicU64,
 }
 
+impl Default for HistoryStorageStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HistoryStorageStats {
     pub fn new() -> Self {
         Self {

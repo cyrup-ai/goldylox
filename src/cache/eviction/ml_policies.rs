@@ -191,8 +191,8 @@ impl FeatureExtractor {
         let mut features = [0.0; 24];
 
         // Extract frequency features (16 features)
-        for i in 0..16 {
-            features[i] = self.frequency_features[i].load(Ordering::Relaxed) as f32;
+        for (i, feature) in features.iter_mut().enumerate().take(16) {
+            *feature = self.frequency_features[i].load(Ordering::Relaxed) as f32;
         }
 
         // Extract temporal features (8 features)

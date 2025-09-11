@@ -1,9 +1,11 @@
+#![allow(dead_code)] // Hot tier eviction engine - Complete eviction library with LRU, LFU, ARC algorithms, performance metrics, and adaptive policy selection
+
 //! Main eviction engine implementation
 //!
 //! This module implements the adaptive eviction engine with machine learning
 //! capabilities and policy management.
 
-use crate::cache::tier::hot::memory_pool::{self, SlotMetadata, MemoryPool};
+use crate::cache::tier::hot::memory_pool::{SlotMetadata, MemoryPool};
 use crate::cache::tier::hot::synchronization::SimdLruTracker;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
@@ -106,7 +108,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         }
 
         // Adapt weights based on performance
-        if self.performance_metrics.total_evictions % 100 == 0 {
+        if self.performance_metrics.total_evictions.is_multiple_of(100) {
             self.adapt_weights();
         }
     }

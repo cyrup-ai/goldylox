@@ -73,6 +73,12 @@ pub struct AccessPath {
     pub start_time: Instant,
 }
 
+impl Default for AccessPath {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AccessPath {
     /// Create new access path
     pub fn new() -> Self {

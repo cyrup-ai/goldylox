@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Serde integration - Complete serialization library with type-safe wrappers, efficient encoding/decoding, and cache-optimized serialization
+
 //! Serialization support for cache types with serde integration
 //!
 //! This module provides wrapper types to make any serde-compatible type

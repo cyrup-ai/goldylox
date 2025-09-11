@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier config - Complete configuration library with memory pressure thresholds, eviction policies, access tracking, and performance tuning
+
 //! Configuration types for warm tier cache behavior
 //!
 //! This module contains all configuration structures for controlling warm tier

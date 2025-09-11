@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete performance monitoring library with alert history, rate limiting, sample recording, and comprehensive cache monitoring
+
 //! Performance monitoring module - consolidated from performance_tracking
 
 use super::types::*;

@@ -198,8 +198,7 @@ impl<K: CacheKey> ConcurrentLruTracker<K> {
     pub fn newest_key(&self) -> Option<WarmCacheKey<K>> {
         self.access_order
             .iter()
-            .rev()
-            .next()
+            .next_back()
             .map(|entry| entry.value().cache_key.clone())
     }
 

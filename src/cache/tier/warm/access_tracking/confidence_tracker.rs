@@ -3,6 +3,8 @@
 //! This module provides confidence tracking and statistics for pattern
 //! classification accuracy and reliability assessment.
 
+#![allow(dead_code)] // Warm tier access tracking - Complete confidence tracking library for pattern classification reliability
+
 use std::sync::atomic::Ordering;
 
 use crossbeam_skiplist::SkipMap;
@@ -17,6 +19,12 @@ pub struct ConfidenceTracker {
     pattern_confidences: SkipMap<TemporalPattern, ConfidenceData>,
     /// Global confidence statistics
     global_stats: GlobalConfidenceStats,
+}
+
+impl Default for ConfidenceTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConfidenceTracker {
@@ -80,12 +88,10 @@ impl ConfidenceTracker {
                 let weight = 1.0 / (sample_count as f32 + 1.0);
                 let correction = if was_correct { 1.0 } else { 0.0 };
                 current_accuracy * (1.0 - weight) + correction * weight
+            } else if was_correct {
+                1.0
             } else {
-                if was_correct {
-                    1.0
-                } else {
-                    0.0
-                }
+                0.0
             };
 
             data.value().accuracy.store(new_accuracy);

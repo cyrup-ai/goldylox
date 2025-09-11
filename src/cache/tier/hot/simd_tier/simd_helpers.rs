@@ -3,6 +3,8 @@
 //! This module contains SIMD-accelerated helper functions for key hashing,
 //! parallel search, and context analysis.
 
+#![allow(dead_code)] // Hot tier SIMD - Complete SIMD-accelerated helper functions for key hashing, parallel search, and context analysis
+
 use crate::cache::tier::hot::types::SearchResult;
 use super::core::SimdHotTier;
 use crate::cache::traits::core::{CacheKey, CacheValue};
@@ -33,12 +35,11 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
 
             if let Some(slot) = self.memory_pool.get_slot(slot_idx) {
                 if slot.is_empty() {
-                    // Found empty slot, key not present
-                    return Some(SearchResult {
-                        slot_index: slot_idx,
-                        found: false,
-                        collision_count,
-                    });
+                    // Found empty slot - continue probing instead of early return
+                    // In linear probing, empty slots can exist due to deletions
+                    // Must continue until we find the key or complete the probe sequence
+                    collision_count += 1;
+                    continue;
                 }
 
                 if slot.key_hash == key_hash && slot.key == *key {
@@ -59,7 +60,12 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
             }
         }
 
-        None
+        // Key not found after probing entire sequence
+        Some(SearchResult {
+            slot_index: start_slot,
+            found: false,
+            collision_count,
+        })
     }
 
     /// Calculate context hash for access pattern analysis

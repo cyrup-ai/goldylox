@@ -73,7 +73,7 @@ pub mod alignment {
     /// Check if pointer is aligned to cache line boundary
     #[inline(always)]
     pub fn is_cache_aligned<T>(ptr: *const T) -> bool {
-        (ptr as usize) % 64 == 0
+        (ptr as usize).is_multiple_of(64)
     }
 
     /// Align size to cache line boundary
@@ -85,7 +85,7 @@ pub mod alignment {
     /// Get cache line count for size
     #[inline(always)]
     pub fn cache_lines_for_size(size: usize) -> usize {
-        (size + 63) / 64
+        size.div_ceil(64)
     }
 }
 

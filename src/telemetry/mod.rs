@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete performance monitoring and telemetry library with unified statistics, trend analysis, performance history, alerting, and comprehensive measurement capabilities
+
 //! Telemetry module - consolidated performance tracking, measurement, and monitoring
 //!
 //! This module provides comprehensive telemetry functionality combining the best features

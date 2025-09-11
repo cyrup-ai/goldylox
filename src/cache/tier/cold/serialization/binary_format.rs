@@ -23,7 +23,7 @@ use crate::cache::traits::CompressionAlgorithm;
 
 /// Helper function to serialize any value using bincode
 #[inline]
-
+#[allow(dead_code)] // Cold tier serialization - Helper function for bincode serialization operations
 fn serialize_with_bincode<V: Serialize + bincode::Encode>(value: &V) -> Result<Vec<u8>, String> {
     encode_to_vec(value, config::standard()).map_err(|e| format!("Bincode serialization failed: {}", e))
 }
@@ -40,6 +40,7 @@ fn deserialize_with_bincode<V: DeserializeOwned + bincode::Decode<()>>(data: &[u
 ///
 /// This function handles only payload serialization and compression.
 /// Header management is handled separately by storage_ops.rs using StorageHeader.
+#[allow(dead_code)] // Cold tier serialization - Core serialization function for cache values with compression support
 pub fn serialize_cache_value<V: CacheValue + Serialize + bincode::Encode>(
     value: &V,
     compression_algorithm: CompressionAlgorithm,
@@ -64,6 +65,7 @@ pub fn serialize_cache_value<V: CacheValue + Serialize + bincode::Encode>(
 /// This function handles only payload decompression and deserialization.
 /// Header parsing is handled separately by storage_ops.rs using StorageHeader.
 /// The compression algorithm is determined from the header and passed as a parameter.
+#[allow(dead_code)] // Cold tier serialization - Core deserialization function for cache values with compression support
 pub fn deserialize_cache_value<V: CacheValue + DeserializeOwned + bincode::Decode<()>>(
     compressed_data: &[u8],
     compression_algorithm: CompressionAlgorithm,
@@ -75,7 +77,7 @@ pub fn deserialize_cache_value<V: CacheValue + DeserializeOwned + bincode::Decod
 
     // Deserialize using bincode
     let deserialized_value = deserialize_with_bincode::<V>(&decompressed_data).map_err(|e| {
-        CacheOperationError::serialization_failed(&format!("Bincode deserialization failed: {}", e))
+        CacheOperationError::serialization_failed(format!("Bincode deserialization failed: {}", e))
     })?;
 
     Ok(Some(deserialized_value))
@@ -83,6 +85,7 @@ pub fn deserialize_cache_value<V: CacheValue + DeserializeOwned + bincode::Decod
 
 /// Compress data using the specified algorithm
 #[inline]
+#[allow(dead_code)] // Cold tier serialization - Multi-algorithm compression engine supporting LZ4, ZSTD, Deflate, Brotli
 pub fn compress_data(
     data: &[u8],
     algorithm: CompressionAlgorithm,
@@ -93,7 +96,7 @@ pub fn compress_data(
         CompressionAlgorithm::Lz4 => Ok(lz4_flex::compress_prepend_size(data)),
 
         CompressionAlgorithm::Zstd => zstd::encode_all(data, 3).map_err(|e| {
-            CacheOperationError::serialization_failed(&format!("ZSTD compression failed: {}", e))
+            CacheOperationError::serialization_failed(format!("ZSTD compression failed: {}", e))
         }),
 
         CompressionAlgorithm::Deflate => {
@@ -102,10 +105,10 @@ pub fn compress_data(
             
             let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(data).map_err(|e| {
-                CacheOperationError::serialization_failed(&format!("Deflate compression failed: {}", e))
+                CacheOperationError::serialization_failed(format!("Deflate compression failed: {}", e))
             })?;
             encoder.finish().map_err(|e| {
-                CacheOperationError::serialization_failed(&format!("Deflate compression finish failed: {}", e))
+                CacheOperationError::serialization_failed(format!("Deflate compression finish failed: {}", e))
             })
         },
 
@@ -113,7 +116,7 @@ pub fn compress_data(
             let mut output = Vec::new();
             let params = brotli::enc::BrotliEncoderParams::default();
             brotli::enc::BrotliCompress(&mut Cursor::new(data), &mut output, &params)
-                .map_err(|e| CacheOperationError::serialization_failed(&format!("Brotli compression failed: {:?}", e)))?;
+                .map_err(|e| CacheOperationError::serialization_failed(format!("Brotli compression failed: {:?}", e)))?;
             Ok(output)
         },
     }
@@ -121,6 +124,7 @@ pub fn compress_data(
 
 /// Decompress data using the specified algorithm
 #[inline]
+#[allow(dead_code)] // Cold tier serialization - Multi-algorithm decompression engine supporting LZ4, ZSTD, Deflate, Brotli
 pub fn decompress_data(
     data: &[u8],
     algorithm: CompressionAlgorithm,
@@ -132,7 +136,7 @@ pub fn decompress_data(
             .map_err(|_| CacheOperationError::serialization_failed("LZ4 decompression failed")),
 
         CompressionAlgorithm::Zstd => zstd::decode_all(data).map_err(|e| {
-            CacheOperationError::serialization_failed(&format!("ZSTD decompression failed: {}", e))
+            CacheOperationError::serialization_failed(format!("ZSTD decompression failed: {}", e))
         }),
 
         CompressionAlgorithm::Deflate => {
@@ -141,10 +145,10 @@ pub fn decompress_data(
             
             let mut decoder = DeflateDecoder::new(Vec::new());
             decoder.write_all(data).map_err(|e| {
-                CacheOperationError::serialization_failed(&format!("Deflate decompression failed: {}", e))
+                CacheOperationError::serialization_failed(format!("Deflate decompression failed: {}", e))
             })?;
             decoder.finish().map_err(|e| {
-                CacheOperationError::serialization_failed(&format!("Deflate decompression finish failed: {}", e))
+                CacheOperationError::serialization_failed(format!("Deflate decompression finish failed: {}", e))
             })
         },
 
@@ -152,13 +156,14 @@ pub fn decompress_data(
             let mut output = Vec::new();
             let mut decompressor = brotli::Decompressor::new(Cursor::new(data), 4096);
             decompressor.read_to_end(&mut output)
-                .map_err(|e| CacheOperationError::serialization_failed(&format!("Brotli decompression failed: {}", e)))?;
+                .map_err(|e| CacheOperationError::serialization_failed(format!("Brotli decompression failed: {}", e)))?;
             Ok(output)
         },
     }
 }
 
 /// Get estimated size for a cache value with compression ratio consideration
+#[allow(dead_code)] // Cold tier serialization - Size estimation utility for capacity planning and memory management
 pub fn estimate_serialized_size<V: CacheValue + Serialize>(value: &V) -> usize {
     let base_size = value.estimated_size();
     // Default compression ratio estimate for cold tier (Zstd)

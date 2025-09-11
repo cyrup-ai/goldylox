@@ -19,6 +19,12 @@ pub struct CoordinationState {
     generation: AtomicU64,
 }
 
+impl Default for CoordinationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoordinationState {
     /// Create new coordination state
     pub fn new() -> Self {

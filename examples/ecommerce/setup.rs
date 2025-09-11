@@ -44,7 +44,7 @@ pub fn create_cache_node(node_id: &str, location: &str) -> Result<CacheNode, Box
         .warm_tier_max_entries(50_000)      // 50K products in warm tier
         .warm_tier_max_memory_bytes(512 * 1024 * 1024) // 512MB
         .cold_tier_base_dir("./tmp")
-        .cache_id(&format!("goldylox_products_{}", node_id))
+        .cache_id(format!("goldylox_products_{}", node_id))
         .cold_tier_max_size_bytes(5 * 1024 * 1024 * 1024) // 5GB for full catalog
         .compression_level(6)               // Balanced compression
         .background_worker_threads(2)
@@ -61,7 +61,7 @@ pub fn create_cache_node(node_id: &str, location: &str) -> Result<CacheNode, Box
     // Analytics cache: Cold tier optimized for large, infrequent data
     let analytics_cache = Goldylox::<String, AnalyticsEvent>::builder()
         .cold_tier_base_dir("./tmp")
-        .cache_id(&format!("goldylox_analytics_{}", node_id))
+        .cache_id(format!("goldylox_analytics_{}", node_id))
         .cold_tier_max_size_bytes(20 * 1024 * 1024 * 1024) // 20GB for analytics
         .compression_level(9)               // Maximum compression for analytics
         .build()?;

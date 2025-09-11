@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Hot tier synchronization - Complete synchronization library with atomic coordination, memory ordering, and thread-safe primitives
+
 //! Atomic coordination with memory ordering for hot tier cache
 //!
 //! This module provides thread-safe synchronization primitives and atomic

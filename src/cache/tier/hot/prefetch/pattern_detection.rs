@@ -115,7 +115,7 @@ impl PatternDetector {
         for access in access_history {
             key_accesses
                 .entry(access.key.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(access.timestamp);
         }
 
@@ -160,10 +160,8 @@ impl PatternDetector {
 
             // Find other accesses within time window
             for (j, other_access) in access_history.iter().enumerate() {
-                if i != j && other_access.timestamp.abs_diff(access.timestamp) <= time_window {
-                    if !related_keys.contains(&other_access.key) {
-                        related_keys.push(other_access.key.clone());
-                    }
+                if i != j && other_access.timestamp.abs_diff(access.timestamp) <= time_window && !related_keys.contains(&other_access.key) {
+                    related_keys.push(other_access.key.clone());
                 }
             }
 
@@ -295,10 +293,8 @@ impl PatternDetector {
                 
                 // Check for consistent stride in reverse
                 let stride = hash1 - hash2;
-                if let Some(last) = last_stride {
-                    if stride.abs_diff(last) > last / 5 {
-                        stride_consistent = false;
-                    }
+                if let Some(last) = last_stride && stride.abs_diff(last) > last / 5 {
+                    stride_consistent = false;
                 }
                 last_stride = Some(stride);
             }

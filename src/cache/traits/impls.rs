@@ -3,6 +3,8 @@
 //! This module provides clean implementations that work with our simplified traits.
 //! All infrastructure concerns are handled by CacheEntry<K,V>.
 
+#![allow(dead_code)] // Cache traits - Concrete implementations for standard types
+
  // Internal trait implementations - may not be used in minimal API
 
 use std::hash::{Hash, Hasher};

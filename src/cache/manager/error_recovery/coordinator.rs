@@ -1,6 +1,7 @@
 //! ErrorRecoveryCoordinator with crossbeam message-passing architecture
 //!
 //! This module provides proper crossbeam message-passing for error recovery operations,
+#![allow(unused)] // Error recovery coordination - comprehensive API for recovery operations
 //! following the same patterns as Hot and Warm tier coordinators.
 
 use std::any::TypeId;
@@ -111,10 +112,10 @@ impl ErrorRecoveryCoordinator {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         
         // Try to get existing worker
-        if let Some(handle_ops) = self.recovery_workers.get(&type_key) {
-            if let Some(handle) = handle_ops.as_any().downcast_ref::<ErrorRecoveryHandle<K, V>>() {
-                return Ok(handle.clone());
-            }
+        if let Some(handle_ops) = self.recovery_workers.get(&type_key)
+            && let Some(handle) = handle_ops.as_any().downcast_ref::<ErrorRecoveryHandle<K, V>>()
+        {
+            return Ok(handle.clone());
         }
         
         // Create new worker if doesn't exist
@@ -178,18 +179,18 @@ impl ErrorRecoveryCoordinator {
         
         // Reinitialize tiers with proper generic types K, V
         if let Err(e) = crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config) {
-            return Err(CacheOperationError::io_failed(&format!("Hot tier init failed during config reset: {}", e)));
+            return Err(CacheOperationError::io_failed(format!("Hot tier init failed during config reset: {}", e)));
         }
         
         // Warm tier reinitialization with PROPER GENERIC TYPES
         let warm_tier_config = default_config.warm_tier.clone();
         if let Err(e) = crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config) {
-            return Err(CacheOperationError::io_failed(&format!("Warm tier init failed during config reset: {}", e)));
+            return Err(CacheOperationError::io_failed(format!("Warm tier init failed during config reset: {}", e)));
         }
         
         // Cold tier reinitialization with PROPER GENERIC TYPES
         if let Err(e) = crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.base_dir.as_str(), &default_config.cache_id) {
-            return Err(CacheOperationError::io_failed(&format!("Cold tier init failed during config reset: {}", e)));
+            return Err(CacheOperationError::io_failed(format!("Cold tier init failed during config reset: {}", e)));
         }
         
         // 3. Reinitialize coherence protocol with PROPER GENERIC TYPES
@@ -231,7 +232,7 @@ impl ErrorRecoveryCoordinator {
         crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
         crate::cache::tier::warm::init_warm_tier::<K, V>(default_config.warm_tier.clone())?;
         crate::cache::tier::cold::init_cold_tier::<K, V>(default_config.cold_tier.base_dir.as_str(), &default_config.cache_id)
-            .map_err(|e| CacheOperationError::io_failed(&format!("Cold tier restart failed: {}", e)))?;
+            .map_err(|e| CacheOperationError::io_failed(format!("Cold tier restart failed: {}", e)))?;
         
         // 4. Reinitialize coherence protocol
         let _coherence_sender = crate::cache::coherence::protocol::global_api::init_coherence_system::<K, V>().map_err(|_| CacheOperationError::InternalError)?;
@@ -350,6 +351,87 @@ pub fn shutdown_error_recovery_system() -> Result<(), CacheOperationError> {
     Ok(())
 }
 
+/// Get circuit breaker failure statistics for error analysis
+pub fn get_circuit_breaker_failure_stats() -> Vec<(u8, u32)> {
+    use super::circuit_breaker::CircuitBreaker;
+    
+    // Create circuit breaker instance for statistics access
+    let breaker = CircuitBreaker::new();
+    
+    // Use CircuitBreaker::get_failure_count() to collect failure statistics for all tiers
+    let mut failure_stats = Vec::new();
+    for tier in 0..3 {
+        let failure_count = breaker.get_failure_count(tier);
+        failure_stats.push((tier, failure_count));
+    }
+    
+    failure_stats
+}
+
+/// Get circuit breaker success statistics for performance analysis  
+pub fn get_circuit_breaker_success_stats() -> Vec<(u8, u32)> {
+    use super::circuit_breaker::CircuitBreaker;
+    
+    // Create circuit breaker instance for statistics access
+    let breaker = CircuitBreaker::new();
+    
+    // Use CircuitBreaker::get_success_count() to collect success statistics for all tiers
+    let mut success_stats = Vec::new();
+    for tier in 0..3 {
+        let success_count = breaker.get_success_count(tier);
+        success_stats.push((tier, success_count));
+    }
+    
+    success_stats
+}
+
+/// Reset all circuit breakers for system-wide recovery
+pub fn reset_all_circuit_breakers() -> Result<(), CacheOperationError> {
+    use super::circuit_breaker::CircuitBreaker;
+    
+    // Create circuit breaker instance and use CircuitBreaker::reset_all()
+    let breaker = CircuitBreaker::new();
+    breaker.reset_all();
+    
+    log::info!("All circuit breakers have been reset for system-wide recovery");
+    Ok(())
+}
+
+/// Configure error detection thresholds using ErrorDetector::update_thresholds()
+pub fn configure_error_thresholds(
+    max_error_rate: u32, 
+    burst_threshold: u32, 
+    critical_threshold: u32
+) -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    
+    // Create error detector and configure thresholds using error_thresholds field
+    let detector = ErrorDetector::new();
+    detector.update_thresholds(max_error_rate, burst_threshold, critical_threshold);
+    
+    log::info!("Error detection thresholds updated: max_rate={}, burst={}, critical={}", 
+               max_error_rate, burst_threshold, critical_threshold);
+    Ok(())
+}
+
+/// Check system error state using ErrorDetector::exceeds_error_rate_threshold()
+pub fn check_system_error_state(current_error_rate: u32) -> bool {
+    use super::detection::ErrorDetector;
+    
+    // Create error detector and check thresholds using error_thresholds field
+    let detector = ErrorDetector::new();
+    detector.exceeds_error_rate_threshold(current_error_rate)
+}
+
+/// Check if system is in critical error state using ErrorDetector::is_critical_error_state()
+pub fn check_critical_error_state(error_count: u32) -> bool {
+    use super::detection::ErrorDetector;
+    
+    // Create error detector and check critical state using error_thresholds field
+    let detector = ErrorDetector::new();
+    detector.is_critical_error_state(error_count)
+}
+
 /// Execute configuration reset via type-erased tier coordination (works with any K,V types)
 pub fn execute_configuration_reset_type_erased() -> Result<(), CacheOperationError> {
     // Use tier coordinators directly - they handle multiple K,V types via TypeId
@@ -390,5 +472,77 @@ pub fn execute_system_restart_type_erased() -> Result<(), CacheOperationError> {
         let _ = coordinator.execute_type_erased_maintenance("restart");
     }
     
+    Ok(())
+}
+
+/// Configure error detection sensitivity using ErrorDetector::set_sensitivity()
+pub fn configure_error_detection_sensitivity(sensitivity: f32) -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let error_detector = ErrorDetector::new();
+    error_detector.set_sensitivity(sensitivity);
+    log::info!("Error detection sensitivity configured to: {:.2}", sensitivity);
+    Ok(())
+}
+
+/// Get current error detection sensitivity using ErrorDetector::get_sensitivity()
+pub fn get_error_detection_sensitivity() -> Result<f32, CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let error_detector = ErrorDetector::new();
+    let sensitivity = error_detector.get_sensitivity();
+    log::debug!("Current error detection sensitivity: {:.2}", sensitivity);
+    Ok(sensitivity)
+}
+
+/// Add error pattern to detector using ErrorDetector::pattern_detector::add_pattern()
+pub fn add_error_pattern(pattern: super::types::ErrorPattern) -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let mut error_detector = ErrorDetector::new();
+    error_detector.pattern_detector.add_pattern(pattern);
+    log::info!("Error pattern added to detection system");
+    Ok(())
+}
+
+/// Remove error pattern from detector using ErrorDetector::pattern_detector::remove_pattern()
+pub fn remove_error_pattern(pattern_id: u32) -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let mut error_detector = ErrorDetector::new();
+    error_detector.pattern_detector.remove_pattern(pattern_id);
+    log::info!("Error pattern {} removed from detection system", pattern_id);
+    Ok(())
+}
+
+/// Configure pattern confidence threshold using ErrorDetector::pattern_detector::set_confidence_threshold()
+pub fn configure_pattern_confidence_threshold(threshold: f32) -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let error_detector = ErrorDetector::new();
+    error_detector.pattern_detector.set_confidence_threshold(threshold);
+    log::info!("Pattern confidence threshold configured to: {:.2}", threshold);
+    Ok(())
+}
+
+/// Get current pattern confidence threshold using ErrorDetector::pattern_detector::get_confidence_threshold()
+pub fn get_pattern_confidence_threshold() -> Result<f32, CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let error_detector = ErrorDetector::new();
+    let threshold = error_detector.pattern_detector.get_confidence_threshold();
+    log::debug!("Current pattern confidence threshold: {:.2}", threshold);
+    Ok(threshold)
+}
+
+/// Get pattern count using ErrorDetector::pattern_detector::pattern_count()
+pub fn get_error_pattern_count() -> Result<usize, CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let error_detector = ErrorDetector::new();
+    let count = error_detector.pattern_detector.pattern_count();
+    log::debug!("Current error pattern count: {}", count);
+    Ok(count)
+}
+
+/// Clear all error patterns using ErrorDetector::pattern_detector::clear_patterns()
+pub fn clear_all_error_patterns() -> Result<(), CacheOperationError> {
+    use super::detection::ErrorDetector;
+    let mut error_detector = ErrorDetector::new();
+    error_detector.pattern_detector.clear_patterns();
+    log::info!("All error patterns cleared from detection system");
     Ok(())
 }

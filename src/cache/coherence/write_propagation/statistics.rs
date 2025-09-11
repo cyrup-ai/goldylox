@@ -7,6 +7,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use super::types::PropagationStatistics;
 
+impl Default for PropagationStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PropagationStatistics {
     /// Create new statistics instance with zero values
     pub fn new() -> Self {

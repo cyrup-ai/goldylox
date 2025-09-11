@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Tier statistics - Complete tier statistics library with promotion/demotion tracking, performance analysis, and optimization metrics
+
 //! Atomic promotion statistics for performance monitoring and analysis
 //!
 //! This module provides thread-safe statistics collection for tier promotion
@@ -16,14 +18,18 @@ pub struct PromotionStatistics {
     /// Promotion counts per tier transition
     promotion_counts: CachePadded<[[AtomicU64; 3]; 3]>, // [from][to] tier matrix
     /// Demotion counts per tier transition  
+    #[allow(dead_code)] // Tier statistics - Demotion count matrix for [from][to] tier transitions
     demotion_counts: CachePadded<[[AtomicU64; 3]; 3]>, // [from][to] tier matrix
     /// Average promotion latency per tier (nanoseconds)
     avg_promotion_latency: CachePadded<[AtomicU64; 3]>,
     /// Average demotion latency per tier (nanoseconds)
+    #[allow(dead_code)] // Tier statistics - Average demotion latency tracking per tier
     avg_demotion_latency: CachePadded<[AtomicU64; 3]>,
     /// Successful vs failed promotion ratios
+    #[allow(dead_code)] // Tier statistics - Promotion success rate tracking (rate * 1000 for precision)
     promotion_success_rate: CachePadded<[AtomicU32; 3]>, // Success rate * 1000
     /// Memory efficiency metrics per tier
+    #[allow(dead_code)] // Tier statistics - Memory efficiency tracking (bytes per operation)
     memory_efficiency: CachePadded<[AtomicU32; 3]>, // Bytes per operation
 }
 
@@ -85,6 +91,7 @@ impl PromotionStatistics {
     }
 
     /// Record failed promotion attempt
+    #[allow(dead_code)] // Tier statistics - Failed promotion tracking for success rate analysis
     pub fn record_failed_promotion(
         &self,
         from_tier: CacheTier,
@@ -100,6 +107,7 @@ impl PromotionStatistics {
     }
 
     /// Record successful demotion between tiers
+    #[allow(dead_code)] // Tier statistics - Successful demotion tracking for tier transition analysis
     pub fn record_successful_demotion(
         &self,
         from_tier: CacheTier,
@@ -123,12 +131,14 @@ impl PromotionStatistics {
     }
 
     /// Update memory efficiency metric
+    #[allow(dead_code)] // Tier statistics - Memory efficiency tracking for performance analysis
     pub fn record_memory_efficiency(&self, tier: CacheTier, bytes_per_operation: u32) {
         let idx = tier_to_index(tier);
         self.memory_efficiency[idx].store(bytes_per_operation, Ordering::Relaxed);
     }
 
     /// Get total promotion count for a tier transition
+    #[allow(dead_code)] // Tier statistics - Promotion count retrieval for monitoring and analysis
     pub fn get_promotion_count(&self, from_tier: CacheTier, to_tier: CacheTier) -> u64 {
         let from_idx = tier_to_index(from_tier);
         let to_idx = tier_to_index(to_tier);
@@ -136,6 +146,7 @@ impl PromotionStatistics {
     }
 
     /// Get total demotion count for a tier transition
+    #[allow(dead_code)] // Tier statistics - Demotion count retrieval for monitoring and analysis
     pub fn get_demotion_count(&self, from_tier: CacheTier, to_tier: CacheTier) -> u64 {
         let from_idx = tier_to_index(from_tier);
         let to_idx = tier_to_index(to_tier);
@@ -143,18 +154,21 @@ impl PromotionStatistics {
     }
 
     /// Get average promotion latency for a tier
+    #[allow(dead_code)] // Tier statistics - Average promotion latency retrieval for performance monitoring
     pub fn get_avg_promotion_latency(&self, tier: CacheTier) -> u64 {
         let idx = tier_to_index(tier);
         self.avg_promotion_latency[idx].load(Ordering::Relaxed)
     }
 
     /// Get promotion success rate for a tier
+    #[allow(dead_code)] // Tier statistics - Promotion success rate retrieval for performance analysis
     pub fn get_promotion_success_rate(&self, tier: CacheTier) -> f32 {
         let idx = tier_to_index(tier);
         self.promotion_success_rate[idx].load(Ordering::Relaxed) as f32 / 1000.0
     }
 
     /// Get memory efficiency for a tier
+    #[allow(dead_code)] // Tier statistics - Memory efficiency retrieval for performance analysis
     pub fn get_memory_efficiency(&self, tier: CacheTier) -> u32 {
         let idx = tier_to_index(tier);
         self.memory_efficiency[idx].load(Ordering::Relaxed)

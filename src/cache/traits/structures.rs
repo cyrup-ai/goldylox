@@ -3,6 +3,8 @@
 //! This module provides re-exports of canonical implementations from types_and_enums
 //! for backward compatibility.
 
+#![allow(dead_code)] // Cache traits - Data structure definitions for cache implementation types
+
  // Internal structure traits - may not be used in minimal API
 
 use std::fmt::Debug;

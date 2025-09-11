@@ -11,6 +11,8 @@
 //! - `trend_analysis`: Memory usage pattern analysis
 //! - `types`: Configuration types and alert definitions
 
+#![allow(dead_code)] // Warm tier monitoring - Complete monitoring and alerting library for memory pressure, performance stats, and trend analysis
+
 pub mod alert_system;
 pub mod memory_pressure;
 pub mod performance_stats;

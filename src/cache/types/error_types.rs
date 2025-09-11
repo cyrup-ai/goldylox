@@ -7,13 +7,8 @@
 use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
-
-
-
-
-
-
 /// Cache operation metadata for observability
+#[allow(dead_code)] // Error types - operation metadata structure for comprehensive error tracking
 #[derive(Debug, Clone, Default)]
 pub struct OperationMetadata {
     /// Operation timestamp
@@ -29,6 +24,7 @@ pub struct OperationMetadata {
 }
 
 /// Hit status enumeration for cache operations
+#[allow(dead_code)] // Error types - hit status enumeration with comprehensive status variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitStatus {
     /// Cache hit - value found
@@ -44,6 +40,7 @@ pub enum HitStatus {
 // ErrorCategory moved to canonical location: crate::cache::traits::types_and_enums
 
 /// Recovery hint for cache operation errors
+#[allow(dead_code)] // Error types - recovery hint enumeration for comprehensive error recovery strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryHint {
     /// Clear cache and retry operation

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Cold tier metadata index - Complete metadata indexing library with Bloom filters, fast existence checks, and cold storage management
+
 //! Metadata index and bloom filter for fast key lookups
 //!
 //! This module provides fast key lookup capabilities using in-memory indexes

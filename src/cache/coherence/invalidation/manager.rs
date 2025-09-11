@@ -113,12 +113,11 @@ impl<K: CacheKey> InvalidationManager<K> {
             }
 
             // Check if we should retry
-            if let Some(last_attempt) = request.last_attempt {
-                if (now.duration_since(last_attempt).as_millis() as u64)
+            if let Some(last_attempt) = request.last_attempt
+                && (now.duration_since(last_attempt).as_millis() as u64)
                     < self.config.retry_delay_ms
-                {
-                    continue; // Too soon to retry
-                }
+            {
+                continue; // Too soon to retry
             }
 
             // Check retry limit

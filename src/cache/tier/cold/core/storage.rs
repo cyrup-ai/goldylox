@@ -69,7 +69,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
                     std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
                     
                     // Read from the memory-mapped region
-                    let mmap_ptr = mmap.as_ptr() as *const u8;
+                    let mmap_ptr = mmap.as_ptr();
                     let src_ptr = mmap_ptr.add(start);
                     std::ptr::copy_nonoverlapping(src_ptr, data.as_mut_ptr(), index_entry.compressed_size as usize);
                 }

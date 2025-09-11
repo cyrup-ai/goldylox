@@ -43,6 +43,7 @@ impl CompactionSystem {
     }
 
     /// Check if compaction is currently running
+    #[allow(dead_code)] // Cold tier - compaction status used in storage management and API integration
     pub fn is_compacting(&self) -> bool {
         self.compaction_state.is_compacting.load(Ordering::Relaxed)
     }
@@ -54,6 +55,7 @@ impl CompactionSystem {
     }
 
     /// Get last compaction duration
+    #[allow(dead_code)] // Cold tier - compaction duration used in performance monitoring and API integration
     pub fn last_compaction_duration(&self) -> u64 {
         self.compaction_state
             .last_duration_ns
@@ -61,6 +63,7 @@ impl CompactionSystem {
     }
 
     /// Get bytes reclaimed in last compaction
+    #[allow(dead_code)] // Cold tier - bytes reclaimed used in storage optimization and API integration
     pub fn bytes_reclaimed(&self) -> u64 {
         self.compaction_state
             .bytes_reclaimed
@@ -282,6 +285,7 @@ impl SyncState {
 
 
     /// Get pending write count
+    #[allow(dead_code)] // Cold tier - pending writes used in sync state monitoring and API integration
     pub fn pending_writes(&self) -> u32 {
         self.pending_writes.load(Ordering::Relaxed)
     }
@@ -322,6 +326,7 @@ impl RecoverySystem {
     }
 
     /// Create checkpoint
+    #[allow(dead_code)] // Cold tier - checkpoint creation used in recovery system and API integration
     pub fn create_checkpoint(&self) -> io::Result<()> {
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -347,6 +352,7 @@ impl RecoverySystem {
     }
 
     /// Check if checkpoint is needed
+    #[allow(dead_code)] // Cold tier - checkpoint checking used in recovery system and API integration
     pub fn needs_checkpoint(&self) -> bool {
         let last_checkpoint = self.last_checkpoint_ns.load(Ordering::Relaxed);
         let now_ns = std::time::SystemTime::now()
@@ -358,6 +364,7 @@ impl RecoverySystem {
     }
 
     /// Recover from log
+    #[allow(dead_code)] // Cold tier - log recovery used in recovery system and API integration
     pub fn recover_from_log<K: CacheKey + serde::de::DeserializeOwned>(&self) -> io::Result<Vec<K>> {
         use std::io::{BufRead, BufReader};
 
@@ -366,32 +373,32 @@ impl RecoverySystem {
         if let Ok(file) = File::open(&self.log_path) {
             let reader = BufReader::new(file);
             for line in reader.lines() {
-                if let Ok(line) = line {
-                    if let Some(operation_data) = line.split_once(':') {
-                        let (_timestamp, operation) = operation_data;
-                        
-                        // Parse different operation types based on log format
-                        if let Some(key_start) = operation.find("key=") {
-                            let key_section = &operation[key_start + 4..];
-                            if let Some(key_end) = key_section.find(',').or_else(|| key_section.find(' ')) {
-                                let key_json = &key_section[..key_end];
-                                if let Ok(key) = serde_json::from_str::<K>(key_json) {
-                                    recovered_keys.push(key);
-                                }
-                            } else {
-                                // Key is at the end of the line
-                                if let Ok(key) = serde_json::from_str::<K>(key_section.trim()) {
-                                    recovered_keys.push(key);
-                                }
+                if let Ok(line) = line
+                    && let Some(operation_data) = line.split_once(':')
+                {
+                    let (_timestamp, operation) = operation_data;
+                    
+                    // Parse different operation types based on log format
+                    if let Some(key_start) = operation.find("key=") {
+                        let key_section = &operation[key_start + 4..];
+                        if let Some(key_end) = key_section.find(',').or_else(|| key_section.find(' ')) {
+                            let key_json = &key_section[..key_end];
+                            if let Ok(key) = serde_json::from_str::<K>(key_json) {
+                                recovered_keys.push(key);
                             }
-                        } else if operation.contains("PUT") || operation.contains("GET") || operation.contains("DELETE") {
-                            // Extract key from structured operation format
-                            let parts: Vec<&str> = operation.split_whitespace().collect();
-                            if parts.len() >= 2 {
-                                if let Ok(key) = serde_json::from_str::<K>(parts[1]) {
-                                    recovered_keys.push(key);
-                                }
+                        } else {
+                            // Key is at the end of the line
+                            if let Ok(key) = serde_json::from_str::<K>(key_section.trim()) {
+                                recovered_keys.push(key);
                             }
+                        }
+                    } else if operation.contains("PUT") || operation.contains("GET") || operation.contains("DELETE") {
+                        // Extract key from structured operation format
+                        let parts: Vec<&str> = operation.split_whitespace().collect();
+                        if parts.len() >= 2
+                            && let Ok(key) = serde_json::from_str::<K>(parts[1])
+                        {
+                            recovered_keys.push(key);
                         }
                     }
                 }

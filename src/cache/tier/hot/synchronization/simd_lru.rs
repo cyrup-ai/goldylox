@@ -16,7 +16,7 @@ pub struct SimdLruTracker {
     /// Current time counter
     time_counter: AtomicU64,
     /// SIMD work buffer for vectorized operations
-    
+    #[allow(dead_code)] // Hot tier SIMD - SIMD buffer for vectorized LRU timestamp operations (AVX-512 ready)
     simd_buffer: [u64; 8], // 8 u64s = 512 bits (AVX-512 ready)
 }
 

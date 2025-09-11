@@ -75,16 +75,19 @@ impl CacheStrategySelector {
     }
 
     /// Get strategy performance metrics
+    #[allow(dead_code)] // Library API - may be used by external consumers
     pub fn get_metrics(&self) -> &StrategyMetrics {
         &self.strategy_metrics
     }
 
     /// Get strategy thresholds
+    #[allow(dead_code)] // Library API - may be used by external consumers
     pub fn get_thresholds(&self) -> &StrategyThresholds {
         &self.strategy_thresholds
     }
 
     /// Force strategy change (for testing or manual optimization)
+    #[allow(dead_code)] // Library API - may be used by external consumers
     pub fn force_strategy(&self, strategy: CacheStrategy) {
         let _old_strategy = self.current_strategy.swap(strategy);
         self.strategy_metrics.reset_evaluation();

@@ -28,8 +28,8 @@ pub struct CachePolicyEngine<K: CacheKey + Default + 'static, V: CacheValue> {
     /// Advanced replacement policies with adaptive algorithms
     replacement_policies: ReplacementPolicies<K>,
     /// Write policy manager with consistency guarantees
-    #[allow(dead_code)] // Policy engine - write policy manager used in write operation processing
-    write_policy_manager: WritePolicyManager<K>,
+    #[allow(dead_code)] // Policy engine - write policy manager used in write operation coordination
+    pub write_policy_manager: WritePolicyManager<K>,
     /// Prefetch predictor with pattern recognition
     #[allow(dead_code)] // Policy engine - prefetch predictor used in cache prediction algorithms
     prefetch_predictor: PrefetchPredictor<K>,
@@ -48,7 +48,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     ) -> Result<Self, CacheOperationError> {
         let pattern_analyzer =
             AccessPatternAnalyzer::new(config.analyzer.clone()).map_err(|e| {
-                CacheOperationError::initialization_failed(&format!(
+                CacheOperationError::initialization_failed(format!(
                     "Failed to initialize pattern analyzer: {:?}",
                     e
                 ))
@@ -71,7 +71,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
             PolicyType::AdaptiveLRU => 0,
             PolicyType::AdaptiveLFU => 1,
             PolicyType::TwoQueue => 2,
-            PolicyType::ARC => 3,
+            PolicyType::Arc => 3,
             PolicyType::MLPredictive => 4,
         }
     }
@@ -83,7 +83,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
             0 => PolicyType::AdaptiveLRU,
             1 => PolicyType::AdaptiveLFU,
             2 => PolicyType::TwoQueue,
-            3 => PolicyType::ARC,
+            3 => PolicyType::Arc,
             4 => PolicyType::MLPredictive,
             _ => PolicyType::AdaptiveLRU, // Default fallback
         }
@@ -102,6 +102,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Select replacement candidate using current sophisticated policy
+    #[allow(dead_code)] // Policy engine - replacement candidate selection with sophisticated ML algorithms
     pub fn select_replacement_candidate(&self, _tier: CacheTier, candidates: &[K]) -> Option<K> {
         if candidates.is_empty() {
             return None;
@@ -115,12 +116,13 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
             PolicyType::TwoQueue => self
                 .replacement_policies
                 .select_two_queue_victim(candidates),
-            PolicyType::ARC => self.replacement_policies.select_arc_victim(candidates),
+            PolicyType::Arc => self.replacement_policies.select_arc_victim(candidates),
             PolicyType::MLPredictive => self.replacement_policies.select_ml_victim(candidates),
         }
     }
 
     /// Generate prefetch predictions based on access patterns
+    #[allow(dead_code)] // Public API method for ML-driven prefetching
     pub fn generate_prefetch_predictions(
         &mut self,
         current_key: &K,
@@ -170,6 +172,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Update policy performance metrics and adapt if necessary
+    #[allow(dead_code)] // Policy engine - performance metrics update with adaptive learning
     pub fn update_performance_metrics(
         &self,
         policy: PolicyType,
@@ -186,11 +189,13 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Check if policy adaptation is needed based on performance
+    #[allow(dead_code)] // Policy engine - adaptive policy evaluation with performance analysis
     pub fn should_adapt_policy(&self) -> Option<PolicyType> {
         self.replacement_policies.evaluate_policy_performance()
     }
 
     /// Adapt to new policy based on performance analysis
+    #[allow(dead_code)] // Policy engine - dynamic policy adaptation with atomic switching
     pub fn adapt_policy(&self, new_policy: PolicyType) -> Result<(), CacheOperationError> {
         // Atomically switch to new policy
         self.current_policy
@@ -199,6 +204,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Record access event for pattern analysis
+    #[allow(dead_code)] // Public API method for pattern learning
     pub fn record_access(&mut self, event: AccessEvent<K>) {
         let _ = self.pattern_analyzer.record_access(&event.key);
         self.replacement_policies.record_access(&event);
@@ -222,6 +228,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Process write operation with configured policy
+    #[allow(dead_code)] // Policy engine - write operation processing with pattern analysis
     pub fn process_write_operation(
         &self,
         key: &K,
@@ -266,11 +273,13 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Get write policy statistics
+    #[allow(dead_code)] // Policy engine - write statistics API for performance monitoring
     pub fn get_write_stats(&self) -> WriteStats {
         self.write_policy_manager.get_statistics()
     }
 
     /// Execute prefetch operations using canonical API
+    #[allow(dead_code)] // Public API method for intelligent prefetching
     pub fn execute_prefetch(
         &mut self,
         requests: &[crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>],
@@ -295,6 +304,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     }
 
     /// Shutdown policy engine and cleanup resources
+    #[allow(dead_code)] // Policy engine - graceful shutdown API with resource cleanup
     pub fn shutdown(&self) -> Result<(), CacheOperationError> {
         self.replacement_policies.shutdown()?;
         self.write_policy_manager.shutdown()?;
@@ -326,7 +336,7 @@ pub struct WriteResult {
 }
 
 /// Write operation statistics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct WriteStats {
     #[allow(dead_code)] // Policy engine - total writes used in statistics reporting
     pub total_writes: u64,
@@ -339,7 +349,7 @@ pub struct WriteStats {
 }
 
 /// Prefetch operation result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // Policy engine - prefetch result used in prefetch operation tracking
 pub struct PrefetchResult {
     pub successful_prefetches: usize,
@@ -372,23 +382,6 @@ impl Default for WriteResult {
     }
 }
 
-impl Default for WriteStats {
-    fn default() -> Self {
-        Self {
-            total_writes: 0,
-            batched_writes: 0,
-            average_latency_ns: 0,
-            failure_count: 0,
-        }
-    }
-}
 
-impl Default for PrefetchResult {
-    fn default() -> Self {
-        Self {
-            successful_prefetches: 0,
-            failed_prefetches: 0,
-            total_latency_ns: 0,
-        }
-    }
-}
+
+

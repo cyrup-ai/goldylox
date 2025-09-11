@@ -3,6 +3,8 @@
 //! This module handles feature extraction, vector operations, and feature
 //! learning for machine learning-based cache eviction policies.
 
+#![allow(dead_code)] // Warm tier eviction ML - Complete feature extraction library for ML-based eviction policies
+
 use crate::cache::traits::AccessType;
 
 /// Number of features in the ML model

@@ -3,6 +3,8 @@
 //! This module provides lock-free performance tracking and statistics collection
 //! for cache operations with atomic counters and performance scoring.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete performance statistics library for tier operations
+
 // AtomicTierStats moved to canonical location: crate::cache::types::statistics::atomic_stats::AtomicTierStats
 // Use the comprehensive cache-line aligned implementation with enhanced performance metrics
 

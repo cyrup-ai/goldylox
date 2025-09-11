@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Batch Operations - Complete batch processing library with timed results, statistical analysis, operation builders, latency tracking, and comprehensive multi-key operation coordination
+
 //! Batch operation support for efficient multi-key operations
 //!
 //! This module provides batch operation types for processing multiple
@@ -46,7 +48,6 @@ impl<V: CacheValue> TimedResult<V> {
 }
 
 /// Extension trait for Result to provide is_success method
-
 trait ResultExt<T, E> {
     fn is_success(&self) -> bool;
 }
@@ -172,7 +173,7 @@ impl<K: CacheKey, V: CacheValue> BatchResult<K, V> {
 
     /// Check if operation for key was successful
     pub fn was_successful(&self, key: &K) -> bool {
-        self.results.get(key).map_or(false, |r| r.is_success())
+        self.results.get(key).is_some_and(|r| r.is_success())
     }
 
     /// Get execution time for specific key operation

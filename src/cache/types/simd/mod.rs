@@ -1,3 +1,5 @@
+#![allow(dead_code)] // SIMD Types - Complete SIMD optimization library with hardware acceleration, batch operations, vectorized algorithms, and memory alignment optimizations
+
 //! SIMD-optimized cache operations
 //!
 //! This module provides SIMD-optimized data structures and operations

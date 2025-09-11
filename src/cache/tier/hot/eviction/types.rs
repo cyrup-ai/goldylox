@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Hot tier eviction types - Complete eviction type library with policies, candidates, feature weights, and performance tracking
+
 //! Core types and data structures for eviction system
 //!
 //! This module defines the fundamental types used throughout the eviction

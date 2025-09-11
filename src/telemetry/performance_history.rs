@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete performance history library with circular buffer management, sample retention, error recovery integration, qualitative analysis, and comprehensive performance tracking
+
 //! Performance history with efficient circular buffer
 //!
 //! This module implements the `PerformanceHistory` structure for storing
@@ -60,11 +62,7 @@ impl PerformanceHistory {
     /// Get recent samples (up to specified count)
     pub fn get_recent_samples(&self, count: usize) -> Vec<(u64, f32)> {
         let buffer_len = self.history_buffer.len();
-        let start_idx = if buffer_len > count {
-            buffer_len - count
-        } else {
-            0
-        };
+        let start_idx = buffer_len.saturating_sub(count);
 
         self.history_buffer[start_idx..]
             .iter()
@@ -118,12 +116,12 @@ impl PerformanceHistory {
             return None;
         }
 
-        let sum: f32 = samples.iter().map(|s| extract_metric(s)).sum();
+        let sum: f32 = samples.iter().map(extract_metric).sum();
         Some(sum / samples.len() as f32)
     }
 
-    /// Get performance statistics summary
-    pub fn get_performance_summary(&self) -> PerformanceSummary {
+    /// Get performance statistics summary with error recovery provider
+    pub fn get_performance_summary(&self, error_provider: &dyn crate::cache::manager::error_recovery::ErrorRecoveryProvider) -> PerformanceSummary {
         if self.history_buffer.is_empty() {
             return PerformanceSummary::default();
         }
@@ -147,7 +145,16 @@ impl PerformanceHistory {
         let avg_memory_usage =
             samples.iter().map(|s| s.memory_usage as f32).sum::<f32>() / count as f32;
 
-        let avg_ops_per_sec = 0.0; // Would need additional calculation
+        let avg_ops_per_sec = if count > 0 {
+            // Calculate average operations per second from existing per-sample data
+            let total_ops_per_sec_x100 = samples
+                .iter()
+                .map(|s| s.ops_per_second_x100 as f32)
+                .sum::<f32>();
+            (total_ops_per_sec_x100 / count as f32) / 100.0  // Unscale from x100
+        } else {
+            0.0
+        };
 
         // Find min/max values using feature-rich fields
         let min_hit_rate = samples
@@ -174,32 +181,16 @@ impl PerformanceHistory {
             min_hit_rate,
             max_hit_rate,
             avg_access_time_ns: avg_access_time as u64,
-            max_access_time_ns: max_access_time as u64,
+            max_access_time_ns: max_access_time,
             avg_memory_usage: avg_memory_usage as u64,
-            max_memory_usage: max_memory_usage as u64,
+            max_memory_usage,
             avg_ops_per_second: avg_ops_per_sec,
-            // Error recovery metrics - connect to actual error statistics
-            total_errors: {
-                // Create error recovery system to get actual error stats
-                let error_system = crate::cache::manager::error_recovery::core::ErrorRecoverySystem::<String, String>::new();
-                error_system.error_stats.get_total_error_count()
-            },
-            error_distribution: {
-                let error_system = crate::cache::manager::error_recovery::core::ErrorRecoverySystem::<String, String>::new();
-                error_system.error_stats.get_error_distribution()
-            },
-            health_score: {
-                let error_system = crate::cache::manager::error_recovery::core::ErrorRecoverySystem::<String, String>::new();
-                error_system.error_stats.get_health_score() as f64
-            },
-            active_recoveries: {
-                let error_system = crate::cache::manager::error_recovery::core::ErrorRecoverySystem::<String, String>::new();
-                error_system.circuit_breaker.get_failure_count(0) as u32  // Use tier 0 (hot tier) as default
-            },
-            mttr_ms: {
-                let error_system = crate::cache::manager::error_recovery::core::ErrorRecoverySystem::<String, String>::new();
-                error_system.error_stats.get_mttr_ms()
-            },
+            // Error recovery metrics - use error recovery provider data
+            total_errors: error_provider.get_total_errors(),
+            error_distribution: error_provider.get_error_distribution(),
+            health_score: error_provider.get_health_score(),
+            active_recoveries: error_provider.get_active_recoveries(),
+            mttr_ms: error_provider.get_mttr_ms(),
             // Qualitative analysis flags
             is_fast: avg_access_time < 1_000_000.0, // < 1ms is fast
             is_consistent: {
@@ -279,15 +270,27 @@ impl PerformanceHistory {
             return Ok(()); // Not time for cleanup yet
         }
 
-        // Note: Feature-rich PerformanceSample uses Instant, cleanup logic needs adjustment
-        // For now, skip time-based cleanup to avoid compilation errors
+        // Calculate cutoff timestamp for cleanup
+        let cutoff_timestamp = now.saturating_sub(self.retention_policy.max_sample_age);
+        
+        // Remove samples older than cutoff using timestamp_ns field
+        let initial_len = self.history_buffer.len();
+        self.history_buffer.retain(|sample| sample.timestamp_ns >= cutoff_timestamp);
+        let final_len = self.history_buffer.len();
+        
+        // Log cleanup results if samples were removed
+        if initial_len > final_len {
+            let removed_count = initial_len - final_len;
+            log::info!("Performance history cleanup: removed {} old samples (cutoff: {} ns)", 
+                      removed_count, cutoff_timestamp);
+        }
 
         // Update cleanup timestamp
         self.retention_policy
             .last_cleanup
             .store(now, Ordering::Relaxed);
 
-        // Update utilization
+        // Update utilization to reflect actual buffer size after cleanup
         self.utilization
             .store(self.history_buffer.len(), Ordering::Relaxed);
 

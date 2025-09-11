@@ -27,6 +27,12 @@ pub struct StrategySwitcher {
     emergency_mode: AtomicBool,
 }
 
+impl Default for StrategySwitcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StrategySwitcher {
     /// Create new strategy switcher
     #[inline]

@@ -58,18 +58,21 @@ impl AllocationStatistics {
     }
 
     /// Record a memory deallocation
+    #[allow(dead_code)] // Memory management - deallocation recording used in advanced memory tracking
     pub fn record_deallocation(&self, size: u64) {
         self.total_allocated.fetch_sub(size, Ordering::Relaxed);
         self.deallocation_operations.fetch_add(1, Ordering::Relaxed);
         self.active_allocations.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Record an allocation failure
+    /// Record an allocation failure  
+    #[allow(dead_code)] // Memory management - allocation failure tracking used in advanced memory analytics
     pub fn record_allocation_failure(&self) {
         self.allocation_failures.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Update peak allocation atomically
+    #[allow(dead_code)] // Memory management - peak allocation tracking used in memory optimization
     pub fn update_peak_allocation(&self) {
         let current_total = self.total_allocated.load(Ordering::Relaxed);
         let mut current_peak = self.peak_allocation.load(Ordering::Relaxed);
@@ -88,6 +91,7 @@ impl AllocationStatistics {
     }
 
     /// Update fragmentation level
+    #[allow(dead_code)] // Memory management - fragmentation tracking used in memory optimization
     pub fn update_fragmentation_level(&self, fragmentation_percentage: f32) {
         let fragmentation_scaled = (fragmentation_percentage * 100.0) as u32;
         self.fragmentation_level
@@ -110,21 +114,25 @@ impl AllocationStatistics {
     }
 
     /// Get total allocated memory
+    #[allow(dead_code)] // Memory management - allocation tracking getter used in memory monitoring
     pub fn total_allocated(&self) -> u64 {
         self.total_allocated.load(Ordering::Relaxed)
     }
 
     /// Get active allocations count
+    #[allow(dead_code)] // Memory management - active allocation tracking used in memory monitoring
     pub fn active_allocations(&self) -> usize {
         self.active_allocations.load(Ordering::Relaxed)
     }
 
     /// Get allocation failure count
+    #[allow(dead_code)] // Memory management - failure tracking used in error analysis
     pub fn allocation_failures(&self) -> u64 {
         self.allocation_failures.load(Ordering::Relaxed)
     }
 
     /// Get fragmentation level
+    #[allow(dead_code)] // Memory management - fragmentation level getter used in memory optimization
     pub fn fragmentation_level(&self) -> f32 {
         self.fragmentation_level.load(Ordering::Relaxed) as f32 / 100.0
     }

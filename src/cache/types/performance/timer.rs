@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Performance Types - Complete high-precision timing library with RDTSC cycle-accurate measurements, CPU frequency calibration, precision timers, stopwatch functionality, and timer collections
+
 //! High-precision timing utilities
 //!
 //! This module provides RDTSC-based timing for sub-nanosecond
@@ -9,12 +11,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Static CPU frequency cache for RDTSC conversion
-
 static CPU_FREQ_GHZ: OnceLock<f64> = OnceLock::new();
 
 /// Calibrate CPU frequency by measuring RDTSC cycles over known time
 #[inline(never)]
-
 fn calibrate_cpu_frequency() -> f64 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -50,7 +50,6 @@ fn calibrate_cpu_frequency() -> f64 {
 
 /// Get CPU frequency in GHz (cached after first call)
 #[inline(always)]
-
 fn get_cpu_freq_ghz() -> f64 {
     *CPU_FREQ_GHZ.get_or_init(calibrate_cpu_frequency)
 }
@@ -93,7 +92,7 @@ pub fn timestamp_nanos(_instant: Instant) -> u64 {
     use std::time::SystemTime;
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::ZERO)
+        .unwrap_or(Duration::ZERO)
         .as_nanos() as u64
 }
 
@@ -206,11 +205,7 @@ impl PrecisionTimer {
     #[inline(always)]
     pub fn remaining_ns(&self, threshold_ns: u64) -> u64 {
         let elapsed = self.elapsed_ns();
-        if elapsed >= threshold_ns {
-            0
-        } else {
-            threshold_ns - elapsed
-        }
+        threshold_ns.saturating_sub(elapsed)
     }
 }
 

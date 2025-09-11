@@ -30,6 +30,12 @@ pub struct StrategyMetrics {
     last_evaluation: AtomicCell<Instant>,
 }
 
+impl Default for StrategyMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StrategyMetrics {
     /// Create new strategy metrics tracker
     #[inline]

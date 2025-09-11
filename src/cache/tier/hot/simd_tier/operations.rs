@@ -3,6 +3,8 @@
 //! This module contains the main cache operations including get, put, and remove
 //! with SIMD-accelerated lookup and intelligent eviction.
 
+#![allow(dead_code)] // Hot tier SIMD - Complete SIMD-accelerated cache operations with intelligent eviction and prefetch prediction
+
 use crate::cache::tier::hot::synchronization::{ReadGuard, WriteGuard};
 use crate::cache::tier::hot::synchronization::timing::timestamp;
 use crate::cache::types::performance::timer::PrecisionTimer;
@@ -37,38 +39,36 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         let primary_slot = self.memory_pool.slot_index_from_hash(key_hash);
 
         // Search for the key
-        if let Some(search_result) = self.simd_parallel_search(key, key_hash, primary_slot) {
-            if search_result.found {
-                // Cache hit - clone value first
-                let value_clone =
-                    if let Some(slot) = self.memory_pool.get_slot(search_result.slot_index) {
-                        slot.value.clone()
-                    } else {
-                        None
-                    };
+        if let Some(search_result) = self.simd_parallel_search(key, key_hash, primary_slot) && search_result.found {
+            // Cache hit - clone value first
+            let value_clone =
+                if let Some(slot) = self.memory_pool.get_slot(search_result.slot_index) {
+                    slot.value.clone()
+                } else {
+                    None
+                };
 
-                if let Some(value) = value_clone {
-                    // Update LRU tracking
-                    self.lru_tracker.record_access(search_result.slot_index);
+            if let Some(value) = value_clone {
+                // Update LRU tracking
+                self.lru_tracker.record_access(search_result.slot_index);
 
-                    // Update metadata
-                    if let Some(metadata) =
-                        self.memory_pool.get_metadata_mut(search_result.slot_index)
-                    {
-                        metadata.record_access();
-                    }
-
-                    // Record hit
-                    self.stats.record_hit(timer.elapsed_ns());
-                    self.eviction_engine.record_access(
-                        key.clone(),
-                        search_result.slot_index,
-                        true,
-                        timer.elapsed_ns(),
-                    );
-
-                    return Some(value);
+                // Update metadata
+                if let Some(metadata) =
+                    self.memory_pool.get_metadata_mut(search_result.slot_index)
+                {
+                    metadata.record_access();
                 }
+
+                // Record hit
+                self.stats.record_hit(timer.elapsed_ns());
+                self.eviction_engine.record_access(
+                    key.clone(),
+                    search_result.slot_index,
+                    true,
+                    timer.elapsed_ns(),
+                );
+
+                return Some(value);
             }
         }
 
@@ -112,24 +112,22 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
 
         // Try to find existing entry first
         let search_result = self.simd_parallel_search(&key, key_hash, primary_slot);
-        if let Some(result) = search_result {
-            if result.found {
-                // Update existing entry and record access
-                self.lru_tracker.record_access(result.slot_index);
-                self.memory_pool.update_at_slot(
-                    result.slot_index,
-                    value,
-                    timestamp::now_nanos(),
-                );
-                return Ok(());
-            }
+        if let Some(result) = search_result && result.found {
+            // Update existing entry and record access
+            self.lru_tracker.record_access(result.slot_index);
+            self.memory_pool.update_at_slot(
+                result.slot_index,
+                value,
+                timestamp::now_nanos(),
+            );
+            return Ok(());
         }
 
         // Try to allocate new slot
         if let Some(slot_idx) = self.memory_pool.allocate_slot() {
             self.memory_pool.insert_at_slot(
                 slot_idx,
-                key,
+                key.clone(),
                 value,
                 key_hash,
                 timestamp::now_nanos(),
@@ -188,24 +186,21 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
         };
         let primary_slot = self.memory_pool.slot_index_from_hash(key_hash);
 
-        if let Some(search_result) = self.simd_parallel_search(key, key_hash, primary_slot) {
-            if search_result.found {
-                if let Some(slot) = self.memory_pool.get_slot_mut(search_result.slot_index) {
-                    // Take the Option<V> out, replacing with None
-                    let value = slot.value.take();
-                    slot.clear();
+        if let Some(search_result) = self.simd_parallel_search(key, key_hash, primary_slot) && search_result.found
+            && let Some(slot) = self.memory_pool.get_slot_mut(search_result.slot_index) {
+                // Take the Option<V> out, replacing with None
+                let value = slot.value.take();
+                slot.clear();
 
-                    if let Some(metadata) =
-                        self.memory_pool.get_metadata_mut(search_result.slot_index)
-                    {
-                        metadata.mark_empty();
-                    }
-
-                    self.memory_pool.deallocate_slot(search_result.slot_index);
-                    return value;  // Already Option<V> from slot.value.take()
+                if let Some(metadata) =
+                    self.memory_pool.get_metadata_mut(search_result.slot_index)
+                {
+                    metadata.mark_empty();
                 }
+
+                self.memory_pool.deallocate_slot(search_result.slot_index);
+                return value;  // Already Option<V> from slot.value.take()
             }
-        }
 
         None
     }

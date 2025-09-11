@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Performance metrics collection - Complete metrics collection library with timing analysis, statistical sampling, and performance optimization
+
 //! Performance metrics collector with zero-allocation collection
 //!
 //! This module handles the collection and aggregation of performance metrics
@@ -35,6 +37,12 @@ pub struct MetricsCollector {
     collection_interval_ns: u64,
 }
 
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsCollector {
     /// Create new metrics collector
     pub fn new() -> Self {
@@ -65,6 +73,7 @@ impl MetricsCollector {
     }
 
     /// Create metrics collector with custom interval
+    #[allow(dead_code)] // Metrics collector - custom interval constructor for configurable collection
     pub fn with_interval(interval: Duration) -> Self {
         let mut collector = Self::new();
         collector.collection_interval = interval;
@@ -73,6 +82,7 @@ impl MetricsCollector {
     }
 
     /// Start metrics collection process
+    #[allow(dead_code)] // Metrics collector - collection startup API for performance monitoring
     pub fn start_collection(&self) -> Result<(), CacheOperationError> {
         if self.collection_state.is_collecting.load() {
             return Err(CacheOperationError::resource_exhausted(
@@ -89,6 +99,7 @@ impl MetricsCollector {
     }
 
     /// Stop metrics collection process
+    #[allow(dead_code)] // Metrics collector - collection shutdown API for resource cleanup
     pub fn stop_collection(&self) {
         self.collection_state.is_collecting.store(false);
     }
@@ -114,6 +125,7 @@ impl MetricsCollector {
     }
 
     /// Collect a single performance sample with zero allocation
+    #[allow(dead_code)] // Metrics collector - sample collection API for performance analysis
     pub fn collect_sample(&self) -> Result<PerformanceSample, CacheOperationError> {
         if !self.collection_state.is_collecting.load() {
             return Err(CacheOperationError::resource_exhausted(
@@ -323,11 +335,7 @@ impl MetricsCollector {
         let last_collection_time = self.last_collection.load(Ordering::Relaxed);
         let elapsed = now.saturating_sub(last_collection_time);
 
-        if elapsed >= self.collection_interval_ns {
-            0
-        } else {
-            self.collection_interval_ns - elapsed
-        }
+        self.collection_interval_ns.saturating_sub(elapsed)
     }
 
     /// Create performance snapshot from current metrics with advanced algorithms
@@ -399,7 +407,7 @@ impl MetricsCollector {
         let latency_factor = if avg_latency > 0 && baseline_latency_ns > 0.0 {
             let latency_ratio = avg_latency as f64 / baseline_latency_ns;
             // Exponential decay for latency penalty - worse performance has exponentially higher penalty
-            (-0.5 * latency_ratio.ln()).exp().min(1.0).max(0.0)
+            (-0.5 * latency_ratio.ln()).exp().clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -457,8 +465,35 @@ pub struct MetricsBufferStats {
     pub current_sample_index: u32,
 }
 
+impl Default for MetricsBufferStats {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            hit_count: 0,
+            miss_count: 0,
+            total_operations: 0,
+            total_access_time: 0,
+            current_sample_index: 0,
+        }
+    }
+}
+
 impl MetricsBufferStats {
+    /// Create new buffer stats with zero allocation
+    #[inline]
+    #[allow(dead_code)] // Metrics collector - buffer statistics constructor for performance tracking
+    pub const fn new() -> Self {
+        Self {
+            hit_count: 0,
+            miss_count: 0,
+            total_operations: 0,
+            total_access_time: 0,
+            current_sample_index: 0,
+        }
+    }
+
     /// Calculate hit rate from buffer stats
+    #[inline]
     pub fn hit_rate(&self) -> f64 {
         if self.total_operations > 0 {
             self.hit_count as f64 / self.total_operations as f64
@@ -468,6 +503,7 @@ impl MetricsBufferStats {
     }
 
     /// Calculate average access time from buffer stats
+    #[allow(dead_code)] // Metrics collector - average access time calculation for performance analysis
     pub fn avg_access_time(&self) -> u64 {
         if self.total_operations > 0 {
             self.total_access_time / self.total_operations

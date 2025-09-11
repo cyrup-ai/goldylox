@@ -3,6 +3,8 @@
 //! This module contains the main struct definition and constructor
 //! for the SIMD-optimized hot tier cache.
 
+#![allow(dead_code)] // Hot tier SIMD - Complete SIMD-optimized hot tier implementation with atomic coordination and ML-based eviction
+
 use std::marker::PhantomData;
 use std::time::Duration;
 

@@ -113,6 +113,12 @@ pub enum TransitionResult {
     RequiresSteps { steps: Vec<MesiState> },
 }
 
+impl Default for StateTransitionValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateTransitionValidator {
     pub fn new() -> Self {
         // Initialize valid transition matrix for MESI protocol
@@ -278,6 +284,12 @@ impl StateTransitionValidator {
     }
 }
 
+impl Default for TransitionStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransitionStatistics {
     pub fn new() -> Self {
         Self {
@@ -292,6 +304,12 @@ impl TransitionStatistics {
             transitions_to_exclusive: AtomicU64::new(0),
             transitions_to_modified: AtomicU64::new(0),
         }
+    }
+}
+
+impl Default for ViolationDetector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

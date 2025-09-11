@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Cold tier data structures - Complete cold storage data structure library with persistent entries, compression types, storage management, and serialization
+
 //! Core data structures for the persistent cold tier cache
 //!
 //! This module defines all the primary data structures used by the cold tier cache,
@@ -31,7 +33,7 @@ pub const CACHE_VALUE_VERSION: u8 = 0x01;
 pub const HEADER_SIZE: usize = 16; // Magic(4) + Version(1) + Compression(1) + Reserved(2) + Timestamp(8)
 
 /// Compression algorithm types for the compression engine
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)] // Cold tier - complete compression algorithm support
 pub enum CompressionAlgorithm {
     None,
@@ -250,7 +252,6 @@ impl<K: CacheKey> crate::cache::traits::core::CacheKey for ColdCacheKey<K> {
     }
 
     fn hash_context(&self) -> Self::HashContext {
-        ()
     }
 
     fn priority(&self) -> Self::Priority {
@@ -378,16 +379,7 @@ impl Default for CompressionStats {
     }
 }
 
-/// Snapshot of compression statistics for reporting
-#[derive(Debug, Clone)]
-pub struct CompressionStatsSnapshot {
-    pub total_compressed: u64,
-    pub total_uncompressed: u64,
-    pub compression_ops: u64,
-    pub decompression_ops: u64,
-    pub total_compression_time_ns: u64,
-    pub total_decompression_time_ns: u64,
-}
+// CompressionStatsSnapshot moved to compression_engine.rs as canonical version
 
 /// Compaction task enumeration
 #[derive(Debug)]
@@ -418,10 +410,151 @@ pub struct CompactionState {
 // AtomicTierStats moved to canonical location: crate::cache::types::statistics::atomic_stats::AtomicTierStats
 
 impl StorageManager {
-    /// Validate storage integrity
+    /// Validate storage integrity with comprehensive checks
     pub fn validate_integrity(&self) -> Result<bool, crate::cache::traits::types_and_enums::CacheOperationError> {
-        // For now, always return true (valid)
-        // In production, this would check file integrity, checksums, etc.
+        use std::fs::metadata;
+
+        use crate::cache::tier::cold::serialization::config::{MAGIC_BYTES, SERIALIZATION_VERSION};
+        
+        // 1. Validate file existence and accessibility
+        if !self.data_path.exists() {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Data file does not exist: {:?}", self.data_path)
+            ));
+        }
+        
+        if !self.index_path.exists() {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Index file does not exist: {:?}", self.index_path)
+            ));
+        }
+
+        // 2. Validate file sizes against configured limits
+        let data_metadata = metadata(&self.data_path)
+            .map_err(|e| crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Cannot read data file metadata: {}", e)
+            ))?;
+        
+        let index_metadata = metadata(&self.index_path)
+            .map_err(|e| crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Cannot read index file metadata: {}", e)
+            ))?;
+
+        if data_metadata.len() > self.max_data_size {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Data file size {} exceeds limit {}", data_metadata.len(), self.max_data_size)
+            ));
+        }
+
+        if index_metadata.len() > self.max_index_size {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Index file size {} exceeds limit {}", index_metadata.len(), self.max_index_size)
+            ));
+        }
+
+        // 3. Validate memory-mapped regions are accessible
+        if let Some(data_mmap) = &self.data_file {
+            if data_mmap.len() as u64 != data_metadata.len() {
+                return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                    format!("Memory map size {} does not match file size {}", data_mmap.len(), data_metadata.len())
+                ));
+            }
+            
+            // Test read access to first and last bytes (if file non-empty)
+            if !data_mmap.is_empty() {
+                let _first_byte = data_mmap[0];
+                let _last_byte = data_mmap[data_mmap.len() - 1];
+            }
+        }
+
+        if let Some(index_mmap) = &self.index_file {
+            if index_mmap.len() as u64 != index_metadata.len() {
+                return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                    format!("Index memory map size {} does not match file size {}", index_mmap.len(), index_metadata.len())
+                ));
+            }
+            
+            // Test read access to index file (if non-empty)
+            if !index_mmap.is_empty() {
+                let _first_byte = index_mmap[0];
+            }
+        }
+
+        // 4. Validate storage headers and magic bytes (if files have content)
+        if data_metadata.len() >= 16 {  // Minimum header size
+            if let Some(data_mmap) = &self.data_file {
+                // Read and validate header
+                let header_bytes = &data_mmap[0..16];
+                
+                // Check magic bytes
+                if &header_bytes[0..4] != MAGIC_BYTES {
+                    return Err(crate::cache::traits::types_and_enums::CacheOperationError::serialization_failed(
+                        format!("Invalid magic bytes in data file. Expected {:?}, found {:?}", 
+                            MAGIC_BYTES, &header_bytes[0..4])
+                    ));
+                }
+                
+                // Check version compatibility
+                let version = u32::from_le_bytes([header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]]);
+                if version > SERIALIZATION_VERSION {
+                    return Err(crate::cache::traits::types_and_enums::CacheOperationError::serialization_failed(
+                        format!("Unsupported version {} (current: {})", version, SERIALIZATION_VERSION)
+                    ));
+                }
+                
+                // Validate declared size against actual file size
+                let declared_size = u32::from_le_bytes([header_bytes[8], header_bytes[9], header_bytes[10], header_bytes[11]]);
+                if declared_size as u64 > data_metadata.len() {
+                    return Err(crate::cache::traits::types_and_enums::CacheOperationError::serialization_failed(
+                        format!("Declared size {} exceeds actual file size {}", declared_size, data_metadata.len())
+                    ));
+                }
+                
+                // Validate checksum using existing serialization utilities
+                let stored_checksum = u32::from_le_bytes([header_bytes[12], header_bytes[13], header_bytes[14], header_bytes[15]]);
+                
+                // Only validate checksum if it's not zero (indicating checksum was actually stored)
+                if stored_checksum != 0 {
+                    // Calculate checksum for the data portion (excluding the header)
+                    let data_start = 16; // Header size
+                    let data_end = std::cmp::min(data_start + declared_size as usize, data_mmap.len());
+                    
+                    if data_end > data_start {
+                        let data_slice = &data_mmap[data_start..data_end];
+                        let calculated_checksum = crate::cache::tier::cold::serialization::utilities::calculate_checksum(data_slice);
+                        
+                        if calculated_checksum != stored_checksum {
+                            return Err(crate::cache::traits::types_and_enums::CacheOperationError::serialization_failed(
+                                format!("Checksum validation failed: stored={:08x}, calculated={:08x}, data_range={}..{}", 
+                                       stored_checksum, calculated_checksum, data_start, data_end)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Validate write position consistency
+        let current_write_pos = self.write_position.load(std::sync::atomic::Ordering::Relaxed);
+        if current_write_pos > data_metadata.len() {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                format!("Write position {} exceeds file size {}", current_write_pos, data_metadata.len())
+            ));
+        }
+
+        // 6. Basic consistency checks between components
+        if self.data_file.is_some() != self.data_handle.is_some() {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                "Data file handle and memory map consistency mismatch".to_string()
+            ));
+        }
+
+        if self.index_file.is_some() != self.index_handle.is_some() {
+            return Err(crate::cache::traits::types_and_enums::CacheOperationError::resource_exhausted(
+                "Index file handle and memory map consistency mismatch".to_string()
+            ));
+        }
+
         Ok(true)
     }
 }

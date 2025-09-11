@@ -81,26 +81,25 @@ impl CompressionEngine {
         // Simple heuristic based on data size and current performance
         if data_size > 4096 {
             // For larger data, prefer better compression - check Brotli first for best ratio
-            if let Some(brotli_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Brotli) {
-                if brotli_metrics.avg_compression_ratio < 0.3 {
-                    return CompressionAlgorithm::Brotli;
-                }
+            if let Some(brotli_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Brotli)
+                && brotli_metrics.avg_compression_ratio < 0.3
+            {
+                return CompressionAlgorithm::Brotli;
             }
             // Fall back to Zstd for good balance of speed and compression
-            if let Some(zstd_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Zstd) {
-                if zstd_metrics.avg_compression_ratio < 0.7 {
-                    return CompressionAlgorithm::Zstd;
-                }
+            if let Some(zstd_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Zstd)
+                && zstd_metrics.avg_compression_ratio < 0.7
+            {
+                return CompressionAlgorithm::Zstd;
             }
         }
 
         // For medium-sized data, balance speed and compression
-        if data_size > 1024 {
-            if let Some(lz4_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Lz4) {
-                if lz4_metrics.avg_compression_speed > f64::from_bits(self.adaptive_thresholds.speed_threshold.load(Ordering::Relaxed)) {
-                    return CompressionAlgorithm::Lz4;
-                }
-            }
+        if data_size > 1024
+            && let Some(lz4_metrics) = self.algorithm_metrics.get(&CompressionAlgorithm::Lz4)
+            && lz4_metrics.avg_compression_speed > f64::from_bits(self.adaptive_thresholds.speed_threshold.load(Ordering::Relaxed))
+        {
+            return CompressionAlgorithm::Lz4;
         }
 
         current
@@ -277,7 +276,7 @@ impl CompressionEngine {
         });
         
         // Trigger periodic adaptation using sophisticated metrics with race condition prevention
-        if self.compression_stats.compression_ops.load(Ordering::Relaxed) % 100 == 0 {
+        if self.compression_stats.compression_ops.load(Ordering::Relaxed).is_multiple_of(100) {
             // Connect to existing atomic coordination fields for race prevention
             let current_time = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -413,7 +412,7 @@ impl CompressionEngine {
         let speed_score = (metrics.avg_compression_speed / 100_000_000.0).min(1.0);
         
         // Lower compression ratio is better (more compression)
-        let ratio_score = (2.0f64 - metrics.avg_compression_ratio as f64).max(0.0).min(1.0);
+        let ratio_score = (2.0f64 - metrics.avg_compression_ratio as f64).clamp(0.0, 1.0);
         
         // More operations indicate reliability
         let reliability_score = (metrics.operation_count as f64 / 1000.0).min(1.0);
@@ -530,6 +529,68 @@ pub struct CompressionStatsSnapshot {
     pub total_compression_time_ns: u64,
     pub total_decompression_time_ns: u64,
     pub current_algorithm: CompressionAlgorithm,
+}
+
+impl CompressionStatsSnapshot {
+    /// Get average compression ratio
+    #[allow(dead_code)] // Cold tier - avg_compression_ratio used in compression ratio analysis
+    pub fn avg_compression_ratio(&self) -> f64 {
+        if self.compression_ops > 0 && self.total_uncompressed > 0 {
+            self.total_compressed as f64 / self.total_uncompressed as f64
+        } else {
+            1.0
+        }
+    }
+
+    /// Get total space saved through compression
+    pub fn total_space_saved(&self) -> u64 {
+        self.total_uncompressed.saturating_sub(self.total_compressed)
+    }
+
+    /// Get compression effectiveness (0.0 to 1.0)
+    pub fn compression_effectiveness(&self) -> f64 {
+        if self.compression_ops > 0 {
+            1.0 - self.avg_compression_ratio()
+        } else {
+            0.0
+        }
+    }
+
+    /// Get average compression time per operation (nanoseconds)
+    pub fn avg_compression_time_ns(&self) -> u64 {
+        if self.compression_ops > 0 {
+            self.total_compression_time_ns / self.compression_ops
+        } else {
+            0
+        }
+    }
+
+    /// Get average decompression time per operation (nanoseconds)
+    pub fn avg_decompression_time_ns(&self) -> u64 {
+        if self.decompression_ops > 0 {
+            self.total_decompression_time_ns / self.decompression_ops
+        } else {
+            0
+        }
+    }
+
+    /// Get compression throughput (bytes per second)
+    pub fn compression_throughput(&self) -> f64 {
+        if self.total_compression_time_ns > 0 {
+            (self.total_uncompressed as f64 * 1_000_000_000.0) / self.total_compression_time_ns as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Get decompression throughput (bytes per second)
+    pub fn decompression_throughput(&self) -> f64 {
+        if self.total_decompression_time_ns > 0 {
+            (self.total_compressed as f64 * 1_000_000_000.0) / self.total_decompression_time_ns as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Enhanced compressed data structure with integrity verification

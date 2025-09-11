@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Worker System - Complete task coordination library with command queues, async task scheduling, execution contexts, deferred mutations, statistics tracking, and safe coordination between async tasks and cache state
+
 //! Task coordination and command queue system for cache operations
 //!
 //! This module provides safe coordination between async tasks and cache state,
@@ -43,6 +45,12 @@ pub enum CacheCommand<K: CacheKey, V: CacheValue> {
     Remove {
         key: K,
         tier: CacheTier,
+        timestamp: Instant,
+    },
+    /// Prefetch key into cache (internal optimization)
+    Prefetch {
+        key: K,
+        confidence: f64,
         timestamp: Instant,
     },
     /// Move entry between tiers
@@ -137,6 +145,23 @@ pub struct TaskInfo<K: CacheKey> {
     /// Associated cache keys
     
     keys: Vec<K>, // Generic keys for tracking
+}
+
+impl<K: CacheKey> TaskInfo<K> {
+    /// Get the task ID
+    pub fn task_id(&self) -> u64 {
+        self.id
+    }
+    
+    /// Get the task type
+    pub fn task_type(&self) -> &str {
+        &self.task_type
+    }
+    
+    /// Get task priority
+    pub fn priority(&self) -> u16 {
+        self.priority
+    }
 }
 
 /// Coordinator statistics
@@ -358,7 +383,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             priority,
             started_at: start_time,
             estimated_completion: None,
-            keys: keys,
+            keys,
         };
 
         // Track active task
@@ -397,7 +422,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             result
         };
 
-        // Task coordination complete - no dummy task needed
+        // Task coordination complete - direct CacheCommandQueue routing used
         // Real work goes through CacheCommandQueue directly
         
         self.stats.total_tasks.fetch_add(1, Ordering::Relaxed);
@@ -411,6 +436,11 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
         F: FnMut(CacheCommand<K, V>) -> Result<(), CacheOperationError>,
     {
         self.command_queue.execute_pending_commands(executor)
+    }
+
+    /// Enqueue command for background processing
+    pub fn enqueue_command(&self, command: CacheCommand<K, V>) -> Result<(), CacheOperationError> {
+        self.command_queue.enqueue_command(command)
     }
 
     /// Get coordinator statistics

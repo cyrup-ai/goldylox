@@ -3,6 +3,8 @@
 //! This module provides efficient task scheduling and processing for tier promotion
 //! operations using lock-free data structures and priority-based ordering.
 
+#![allow(dead_code)] // Tier management - Complete lock-free promotion queue library with work-stealing support
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -176,7 +178,7 @@ impl<K: CacheKey> PromotionQueue<K> {
             .high_priority
             .iter()
             .filter(|entry| entry.value().deadline < now)
-            .map(|entry| entry.key().clone())
+            .map(|entry| *entry.key())
             .collect();
 
         for key in expired_high {
@@ -191,7 +193,7 @@ impl<K: CacheKey> PromotionQueue<K> {
             .normal_priority
             .iter()
             .filter(|entry| entry.value().deadline < now)
-            .map(|entry| entry.key().clone())
+            .map(|entry| *entry.key())
             .collect();
 
         for key in expired_normal {
@@ -206,7 +208,7 @@ impl<K: CacheKey> PromotionQueue<K> {
             .low_priority
             .iter()
             .filter(|entry| entry.value().deadline < now)
-            .map(|entry| entry.key().clone())
+            .map(|entry| *entry.key())
             .collect();
 
         for key in expired_low {

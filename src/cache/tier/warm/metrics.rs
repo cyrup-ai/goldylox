@@ -3,6 +3,7 @@
 //! This module contains atomic metrics tracking structures for monitoring
 //! cache performance including operation latencies, throughput measurements,
 //! resource utilization, and cache effectiveness.
+#![allow(unused)] // Warm tier metrics - comprehensive API for performance monitoring
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -113,6 +114,12 @@ pub enum FrequencyTrend {
     Increasing,
     Decreasing,
     Stable,
+}
+
+impl Default for PerformanceMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PerformanceMetrics {
@@ -226,6 +233,12 @@ impl PerformanceMetrics {
     }
 }
 
+impl Default for LatencyMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LatencyMetrics {
     #[inline]
     pub fn new() -> Self {
@@ -240,6 +253,12 @@ impl LatencyMetrics {
     }
 }
 
+impl Default for P99LatencyMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl P99LatencyMetrics {
     #[inline]
     pub fn new() -> Self {
@@ -249,6 +268,12 @@ impl P99LatencyMetrics {
             remove_p99_ns: CachePadded::new(AtomicU64::new(0)),
             eviction_p99_ns: CachePadded::new(AtomicU64::new(0)),
         }
+    }
+}
+
+impl Default for ThroughputMetrics {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -398,6 +423,12 @@ impl ThroughputMetrics {
     }
 }
 
+impl Default for ResourceMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResourceMetrics {
     #[inline]
     pub fn new() -> Self {
@@ -408,6 +439,12 @@ impl ResourceMetrics {
             network_utilization: AtomicCell::new(0.0),
             disk_utilization: AtomicCell::new(0.0),
         }
+    }
+}
+
+impl Default for EffectivenessMetrics {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

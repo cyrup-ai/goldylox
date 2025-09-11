@@ -3,6 +3,8 @@
 //! This module provides the canonical AlertThresholds implementation
 //! optimized for high-performance concurrent cache operations.
 
+#![allow(dead_code)] // Performance Types - Complete atomic alert thresholds library with 6-decimal precision, thread-safe operations, and performance monitoring
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Alert thresholds configuration - CANONICAL VERSION

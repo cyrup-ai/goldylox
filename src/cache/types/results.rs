@@ -9,6 +9,7 @@ pub use crate::cache::types::error_types::HitStatus; // Canonical location
 use crate::cache::traits::*;
 
 /// Cache operation result with rich metadata
+#[allow(dead_code)] // Cache types - comprehensive cache result structure with metadata
 #[derive(Debug, Clone)]
 pub struct CacheResult<V: CacheValue> {
     /// Operation success status
@@ -25,6 +26,7 @@ pub struct CacheResult<V: CacheValue> {
     pub metadata: OperationMetadata,
 }
 
+#[allow(dead_code)] // Cache types - cache result methods for comprehensive operation tracking
 impl<V: CacheValue> CacheResult<V> {
     /// Create successful cache hit result
     #[inline(always)]
@@ -82,6 +84,7 @@ impl<V: CacheValue> CacheResult<V> {
 }
 
 /// Cache operation metadata for observability
+#[allow(dead_code)] // Cache types - operation metadata structure for comprehensive observability
 #[derive(Debug, Clone, Default)]
 pub struct OperationMetadata {
     /// Operation timestamp

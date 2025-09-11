@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Eviction selector - Complete candidate selection library with multi-criteria algorithms and configurable weighting strategies
+
 //! Eviction candidate selection algorithms
 //!
 //! This module provides sophisticated multi-criteria eviction

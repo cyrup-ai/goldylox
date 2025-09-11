@@ -17,7 +17,7 @@ pub mod timestamp {
         use std::sync::OnceLock;
         static START_TIME: OnceLock<Instant> = OnceLock::new();
 
-        let start = START_TIME.get_or_init(|| Instant::now());
+        let start = START_TIME.get_or_init(Instant::now);
         instant.duration_since(*start).as_nanos() as u64
     }
 

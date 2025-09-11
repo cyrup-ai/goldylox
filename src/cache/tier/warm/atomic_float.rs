@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier atomic float - Complete atomic floating-point library with bit manipulation, lock-free operations, and array utilities
+
 //! Lock-free atomic floating point operations using bit manipulation
 //!
 //! This module provides atomic f64 operations without external dependencies
@@ -192,7 +194,7 @@ impl AtomicF64 {
 
     /// Load from raw bits (for debugging/deserialization)
     #[inline]
-    pub fn from_bits(&self, bits: u64, ordering: Ordering) {
+    pub fn store_bits(&self, bits: u64, ordering: Ordering) {
         self.bits.store(bits, ordering);
     }
 }
@@ -226,7 +228,6 @@ pub mod array_utils {
 
         unsafe {
             let ptr = array.as_ptr() as *const [AtomicF64; N];
-            std::mem::forget(array);
             ptr.read()
         }
     }

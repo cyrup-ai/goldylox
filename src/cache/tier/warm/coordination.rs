@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier coordination - Complete coordination library with atomic primitives, reader/writer coordination, backoff strategies, and cache-aligned structures
+
 //! Atomic coordination primitives for lock-free warm tier operations
 //!
 //! This module provides atomic coordination structures for managing concurrent
@@ -57,6 +59,12 @@ pub struct BackoffState {
     pub adaptive_multiplier: AtomicCell<f64>,
 }
 
+impl Default for AtomicCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AtomicCoordinator {
     #[inline]
     pub fn new() -> Self {
@@ -108,15 +116,12 @@ impl AtomicCoordinator {
         // Try to acquire write access
         let current_writers = self.active_writers.load(Ordering::Acquire);
         if current_writers == 0 {
-            match self.active_writers.compare_exchange_weak(
+            self.active_writers.compare_exchange_weak(
                 0,
                 1,
                 Ordering::AcqRel,
                 Ordering::Relaxed,
-            ) {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            ).is_ok()
         } else {
             false
         }
@@ -135,6 +140,12 @@ impl AtomicCoordinator {
     }
 }
 
+impl Default for CoordinationFlags {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoordinationFlags {
     #[inline]
     pub fn new() -> Self {
@@ -146,6 +157,12 @@ impl CoordinationFlags {
             pattern_analysis: CachePadded::new(AtomicBool::new(false)),
             tier_sync_active: CachePadded::new(AtomicBool::new(false)),
         }
+    }
+}
+
+impl Default for BackoffState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -241,6 +258,12 @@ pub mod atomic_primitives {
     #[derive(Debug)]
     pub struct AtomicFlag {
         state: CachePadded<AtomicU32>,
+    }
+
+    impl Default for AtomicFlag {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl AtomicFlag {

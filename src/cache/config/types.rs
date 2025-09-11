@@ -37,11 +37,11 @@ mod arraystring_serde {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HashFunction {
     #[serde(rename = "xxhash")]
-    XxHash,
+    Xx,
     #[serde(rename = "ahash")]
-    AHash,
+    A,
     #[serde(rename = "fnv")]
-    FnvHash,
+    Fnv,
 }
 
 // EvictionPolicy moved to canonical location: crate::cache::tier::warm::eviction::types::EvictionPolicyType
@@ -254,12 +254,11 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Default implementations for all config types
-
 impl Default for HotTierConfig {
     fn default() -> Self {
         Self {
             max_entries: 128,
-            hash_function: HashFunction::AHash,
+            hash_function: HashFunction::A,
             eviction_policy: EvictionPolicyType::Lru,
             cache_line_size: 64,
             prefetch_distance: 2,
@@ -347,8 +346,10 @@ impl Default for MemoryConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         let cache_id = Uuid::new_v4().to_string();
-        let mut cold_tier_config = ColdTierConfig::default();
-        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        let cold_tier_config = ColdTierConfig {
+            base_dir: generate_storage_path(&cache_id),
+            ..ColdTierConfig::default()
+        };
         
         Self {
             cache_id,
@@ -526,14 +527,14 @@ impl MemoryConfig {
         }
 
         // Validate memory limit if specified
-        if let Some(max_memory) = self.max_memory_usage {
-            if max_memory < 1024 * 1024 {  // 1MB minimum
-                return Err(ConfigError::InvalidFieldValue {
-                    field: "max_memory_usage".to_string(),
-                    value: max_memory.to_string(),
-                    reason: "Memory limit must be at least 1MB".to_string(),
-                });
-            }
+        if let Some(max_memory) = self.max_memory_usage
+            && max_memory < 1024 * 1024  // 1MB minimum
+        {
+            return Err(ConfigError::InvalidFieldValue {
+                field: "max_memory_usage".to_string(),
+                value: max_memory.to_string(),
+                reason: "Memory limit must be at least 1MB".to_string(),
+            });
         }
 
         Ok(())
@@ -556,14 +557,16 @@ impl CacheConfig {
     #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn high_performance() -> Self {
         let cache_id = Uuid::new_v4().to_string();
-        let mut cold_tier_config = ColdTierConfig::default();
-        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        let cold_tier_config = ColdTierConfig {
+            base_dir: generate_storage_path(&cache_id),
+            ..ColdTierConfig::default()
+        };
         
         Self {
             cache_id,
             hot_tier: HotTierConfig {
                 max_entries: 1024,
-                hash_function: HashFunction::XxHash,
+                hash_function: HashFunction::Xx,
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 64,
                 prefetch_distance: 8,
@@ -585,14 +588,16 @@ impl CacheConfig {
     #[allow(dead_code)] // Configuration system - used in config validation and error handling
     pub fn low_memory() -> Self {
         let cache_id = Uuid::new_v4().to_string();
-        let mut cold_tier_config = ColdTierConfig::default();
-        cold_tier_config.base_dir = generate_storage_path(&cache_id);
+        let cold_tier_config = ColdTierConfig {
+            base_dir: generate_storage_path(&cache_id),
+            ..ColdTierConfig::default()
+        };
         
         Self {
             cache_id,
             hot_tier: HotTierConfig {
                 max_entries: 64,
-                hash_function: HashFunction::XxHash,
+                hash_function: HashFunction::Xx,
                 eviction_policy: EvictionPolicyType::Lru,
                 cache_line_size: 32,
                 prefetch_distance: 2,

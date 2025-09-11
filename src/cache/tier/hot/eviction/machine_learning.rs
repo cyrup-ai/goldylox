@@ -64,12 +64,10 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         let temporal_feature = self.analyze_temporal_pattern(slot_idx);
 
         // Combined utility score using learned weights
-        let utility = self.feature_weights.recency_weight * recency_feature
+        self.feature_weights.recency_weight * recency_feature
             + self.feature_weights.frequency_weight * frequency_feature
             + self.feature_weights.size_weight * (1.0 / size_feature)
-            + self.feature_weights.temporal_weight * temporal_feature;
-
-        utility
+            + self.feature_weights.temporal_weight * temporal_feature
     }
 
     /// Analyze temporal access patterns for a slot

@@ -125,6 +125,7 @@ pub struct PolicyMetrics {
     switch_frequency: CachePadded<AtomicU32>, // Switches per hour
 }
 
+#[allow(dead_code)] // Library API - methods may be used by external consumers
 impl<K: CacheKey> ReplacementPolicies<K> {
     pub fn new(config: &CacheConfig) -> Result<Self, CacheOperationError> {
         Ok(Self {
@@ -337,7 +338,7 @@ impl<K: CacheKey> ReplacementPolicies<K> {
             PolicyType::AdaptiveLRU => self.select_lru_victim(candidates),
             PolicyType::AdaptiveLFU => self.select_lfu_victim(candidates),
             PolicyType::TwoQueue => self.select_two_queue_victim(candidates),
-            PolicyType::ARC => self.select_arc_victim(candidates),
+            PolicyType::Arc => self.select_arc_victim(candidates),
             PolicyType::MLPredictive => self.select_ml_victim(candidates),
         }
     }
@@ -613,11 +614,11 @@ impl<K: CacheKey> TwoQueuePolicy<K> {
         let mut oldest_timestamp = u64::MAX;
 
         for candidate in candidates {
-            if let Some(timestamp) = self.am_queue.get(candidate) {
-                if *timestamp < oldest_timestamp {
-                    oldest_timestamp = *timestamp;
-                    oldest_key = Some(candidate.clone());
-                }
+            if let Some(timestamp) = self.am_queue.get(candidate)
+                && *timestamp < oldest_timestamp
+            {
+                oldest_timestamp = *timestamp;
+                oldest_key = Some(candidate.clone());
             }
         }
 
@@ -709,11 +710,11 @@ impl<K: CacheKey> ARCPolicy<K> {
                 self.b1_ghost.insert(key, ());
 
                 // Maintain B1 ghost size
-                if self.b1_ghost.len() > self.max_size {
-                    if let Some(old_entry) = self.b1_ghost.iter().next() {
-                        let old_key = old_entry.key().clone();
-                        self.b1_ghost.remove(&old_key);
-                    }
+                if self.b1_ghost.len() > self.max_size
+                    && let Some(old_entry) = self.b1_ghost.iter().next()
+                {
+                    let old_key = old_entry.key().clone();
+                    self.b1_ghost.remove(&old_key);
                 }
             }
         } else if t2_size > 0 {
@@ -724,11 +725,11 @@ impl<K: CacheKey> ARCPolicy<K> {
                 self.b2_ghost.insert(key, ());
 
                 // Maintain B2 ghost size
-                if self.b2_ghost.len() > self.max_size {
-                    if let Some(old_entry) = self.b2_ghost.iter().next() {
-                        let old_key = old_entry.key().clone();
-                        self.b2_ghost.remove(&old_key);
-                    }
+                if self.b2_ghost.len() > self.max_size
+                    && let Some(old_entry) = self.b2_ghost.iter().next()
+                {
+                    let old_key = old_entry.key().clone();
+                    self.b2_ghost.remove(&old_key);
                 }
             }
         }
@@ -837,7 +838,7 @@ impl PolicyMetrics {
                     0 => PolicyType::AdaptiveLRU,
                     1 => PolicyType::AdaptiveLFU,
                     2 => PolicyType::TwoQueue,
-                    3 => PolicyType::ARC,
+                    3 => PolicyType::Arc,
                     4 => PolicyType::MLPredictive,
                     _ => PolicyType::AdaptiveLRU,
                 };
@@ -922,7 +923,7 @@ impl PolicyMetrics {
                 self.memory_efficiency[3].load(Ordering::Relaxed) as f64 / 1000.0,
                 self.memory_efficiency[4].load(Ordering::Relaxed) as f64 / 1000.0,
             ],
-            switch_frequency: switch_frequency,
+            switch_frequency,
         }
     }
 }

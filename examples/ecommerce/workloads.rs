@@ -6,7 +6,6 @@
 use crate::ecommerce::types::*;
 use rand::{rng, Rng};
 use std::collections::BTreeMap;
-use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Instant;
 
@@ -71,7 +70,7 @@ pub fn generate_black_friday_rush(workload: &WorkloadState) -> Result<(), Box<dy
                 let session_key = format!("session:sess_{:06}", user_id);
                 
                 // REAL get_or_insert operation - creates session if not exists
-                let result = nodes_clone[node_idx].session_cache.get_or_insert(session_key.clone(), || {
+                let _result = nodes_clone[node_idx].session_cache.get_or_insert(session_key.clone(), || {
                     UserSession {
                         session_id: format!("sess_{:06}", user_id),
                         user_id,

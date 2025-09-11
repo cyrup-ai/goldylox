@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Cold tier storage manager - Complete storage management library with memory-mapped files, atomic operations, and storage statistics
+
 //! Storage management for memory-mapped files and atomic operations
 //!
 //! This module handles memory-mapped file operations, atomic writes, and file management
@@ -18,6 +20,7 @@ impl StorageManager {
         // Create or open data file
         let data_handle = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(&data_path)?;
@@ -34,6 +37,7 @@ impl StorageManager {
         // Create or open index file
         let index_handle = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(&index_path)?;
@@ -204,7 +208,6 @@ impl StorageManager {
     }
 
     /// Calculate fragmentation ratio (simplified)
-    
     fn calculate_fragmentation_ratio<K: crate::cache::traits::CacheKey, V: crate::cache::traits::CacheValue>(
         &self, 
         cache: &crate::cache::tier::cold::storage::ColdTierCache<K, V>
@@ -222,6 +225,43 @@ impl StorageManager {
         } else {
             Ok(0.0)
         }
+    }
+
+    /// Clear all storage data and reset file contents
+    pub fn clear_storage(&mut self) -> Result<(), std::io::Error> {
+        // 1. Reset write position to beginning
+        self.write_position.store(0, std::sync::atomic::Ordering::SeqCst);
+        
+        // 2. Increment generation for consistency tracking
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        
+        // 3. Truncate data file to zero and resize to max capacity
+        if let Some(handle) = &self.data_handle {
+            handle.set_len(0)?;
+            handle.set_len(self.max_data_size)?;
+            handle.sync_all()?;
+        }
+        
+        // 4. Truncate index file to zero and resize to max capacity
+        if let Some(handle) = &self.index_handle {
+            handle.set_len(0)?;
+            handle.set_len(self.max_index_size)?;
+            handle.sync_all()?;
+        }
+        
+        // 5. Recreate memory maps for the cleared files
+        if let (Some(data_handle), Some(index_handle)) = (&self.data_handle, &self.index_handle) {
+            // Drop existing memory maps
+            self.data_file = None;
+            self.index_file = None;
+            
+            // Create new memory maps
+            use memmap2::MmapOptions;
+            self.data_file = Some(unsafe { MmapOptions::new().map_mut(data_handle)? });
+            self.index_file = Some(unsafe { MmapOptions::new().map_mut(index_handle)? });
+        }
+        
+        Ok(())
     }
 }
 

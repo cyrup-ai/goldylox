@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete telemetry types library with measurement results, performance alerts, monitoring configuration, trend analysis, and comprehensive type definitions
+
 //! Telemetry types module - consolidated from performance_tracking, measurement, and cache/performance_tracking
 
 

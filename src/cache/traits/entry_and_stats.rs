@@ -3,6 +3,8 @@
 //! This module defines traits for cache entry access, statistics collection,
 //! access pattern tracking, eviction candidate selection, and error handling.
 
+#![allow(dead_code)] // Cache traits - Entry and statistics trait definitions for zero-copy monitoring
+
  // Internal trait definitions - may not be used in minimal API
 
 use std::fmt::Debug;

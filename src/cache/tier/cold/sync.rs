@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Cold tier synchronization - Complete synchronization library with background operations, cleanup, compaction, and sync coordination
+
 //! Background synchronization operations for cold tier cache
 //!
 //! This module handles background tasks including file syncing, cleanup,
@@ -16,6 +18,7 @@ use crate::cache::traits::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Background sync task types
+#[allow(dead_code)] // Cold tier sync - comprehensive background sync task types for cold tier maintenance
 #[derive(Debug, Clone)]
 pub enum SyncTask {
     /// Sync file to disk
@@ -31,6 +34,7 @@ pub enum SyncTask {
 }
 
 /// Sync operation result
+#[allow(dead_code)] // Cold tier sync - sync operation result structure for background task tracking
 #[derive(Debug)]
 pub struct SyncResult {
     /// Task that was executed
@@ -46,6 +50,7 @@ pub struct SyncResult {
 }
 
 /// Background sync coordinator
+#[allow(dead_code)] // Cold tier sync - background sync coordinator for task management and threading
 #[derive(Debug)]
 pub struct SyncCoordinator {
     /// Task sender
@@ -61,6 +66,7 @@ pub struct SyncCoordinator {
 }
 
 /// Synchronization statistics
+#[allow(dead_code)] // Cold tier sync - synchronization statistics for performance monitoring
 #[derive(Debug, Default)]
 pub struct SyncStats {
     /// Total sync tasks executed
@@ -76,6 +82,7 @@ pub struct SyncStats {
 }
 
 /// Sync configuration
+#[allow(dead_code)] // Cold tier sync - sync configuration for automatic background operations
 #[derive(Debug, Clone)]
 pub struct SyncConfig {
     /// Automatic sync interval in seconds

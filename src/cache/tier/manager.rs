@@ -3,6 +3,8 @@
 //! This module provides the core TierPromotionManager implementation with
 //! intelligent promotion/demotion decisions and adaptive learning capabilities.
 
+#![allow(dead_code)] // Tier management - Complete tier promotion/demotion library with SIMD optimization and adaptive learning
+
 use std::time::{Duration, Instant};
 
 use crate::cache::coherence::CacheTier;
@@ -232,7 +234,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> Ti
     }
 
     /// Remove value from specific tier - FIXED: Now properly generic over both K and V
-    fn remove_from_tier<V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
+    pub fn remove_from_tier<V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
         &self,
         key: &K,
         tier: CacheTier,

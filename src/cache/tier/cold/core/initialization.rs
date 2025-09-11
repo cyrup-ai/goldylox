@@ -42,8 +42,7 @@ impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::Deseri
         
         // Start the background compaction worker thread
         compaction_system.start_background_worker()
-            .map_err(|e| std::io::Error::new(
-                std::io::ErrorKind::Other, 
+            .map_err(|e| std::io::Error::other(
                 format!("Failed to start compaction worker: {:?}", e)
             ))?;
         

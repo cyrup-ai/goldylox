@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Worker System - Complete worker types library with maintenance workers, canonical task integration, statistics tracking, atomic performance metrics, and comprehensive background cache maintenance coordination
+
 //! Core types and data structures for cache maintenance worker
 //!
 //! This module defines the main data structures used for background cache
@@ -10,7 +12,7 @@ use crossbeam_utils::CachePadded;
 
 use crossbeam::channel::{Sender, Receiver};
 
-use crate::cache::traits::{CacheKey, CacheValue};
+
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Stats update messages sent from worker thread to manager
@@ -152,7 +154,6 @@ impl CacheMaintenanceWorker {
 
 /// CANONICAL MaintenanceTask is used directly - NO LOCAL DUPLICATES
 /// All worker operations now use the canonical maintenance task definition.
-
 // Import canonical MaintenanceTask and supporting types
 pub use crate::cache::tier::warm::maintenance::{
     MaintenanceTask,
@@ -164,7 +165,7 @@ pub struct WorkerMaintenanceOps;
 
 impl WorkerMaintenanceOps {
     /// Create promote operation using canonical cleanup task
-    pub fn promote_task<K: CacheKey, V: CacheValue>() -> MaintenanceTask {
+    pub fn promote_task() -> MaintenanceTask {
         // Worker promotions are implemented as cleanup + optimization
         MaintenanceTask::CleanupExpired { 
             ttl: std::time::Duration::from_secs(300),
@@ -173,7 +174,7 @@ impl WorkerMaintenanceOps {
     }
 
     /// Create demote operation using canonical eviction task
-    pub fn demote_task<K: CacheKey, V: CacheValue>() -> MaintenanceTask {
+    pub fn demote_task() -> MaintenanceTask {
         MaintenanceTask::PerformEviction { 
             target_pressure: 0.7,
             max_evictions: 50 

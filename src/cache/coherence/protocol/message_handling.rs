@@ -20,7 +20,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
         // Process pending invalidations
         let invalidation_messages = self.invalidation_manager.process_pending();
         for message in invalidation_messages {
-            if let Err(_) = self.communication_hub.broadcast(message) {
+            if self.communication_hub.broadcast(message).is_err() {
                 self.coherence_stats.record_failure();
             }
         }
@@ -29,7 +29,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
         let writeback_tasks = self.write_propagation.process_writebacks();
         for task in writeback_tasks {
             // Send task to background worker via existing channel
-            if let Err(_) = self.write_propagation.worker_channels.task_tx.try_send(task) {
+            if self.write_propagation.worker_channels.task_tx.try_send(task).is_err() {
                 // Worker queue is full, record failure and continue
                 self.coherence_stats.record_failure();
             } else {

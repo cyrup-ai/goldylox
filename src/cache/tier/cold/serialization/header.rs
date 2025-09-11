@@ -11,6 +11,7 @@ use crate::cache::traits::CompressionAlgorithm;
 
 /// Unified storage header supporting multiple format versions
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Cold tier serialization - Complete versioned header system for storage format compatibility
 pub enum StorageHeader {
     /// Version 1: Legacy format compatible with existing storage_ops.rs
     /// Format: MAGIC(4) + VERSION(4) + SIZE(4) + CHECKSUM(4) = 16 bytes
@@ -34,6 +35,7 @@ pub enum StorageHeader {
 
 impl StorageHeader {
     /// Create V1 header for legacy compatibility
+    #[allow(dead_code)] // Cold tier serialization - V1 header constructor for legacy storage format compatibility
     pub fn new_v1(size: u32, checksum: u32) -> Result<Self, CacheOperationError> {
         let magic_bytes: [u8; 4] = MAGIC_BYTES
             .try_into()
@@ -48,6 +50,7 @@ impl StorageHeader {
     }
 
     /// Create V2 header with advanced features
+    #[allow(dead_code)] // Cold tier serialization - V2 header constructor with compression and timestamp support
     pub fn new_v2(
         estimated_size: u32,
         compression: CompressionAlgorithm,
@@ -67,7 +70,7 @@ impl StorageHeader {
 
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|e| CacheOperationError::serialization_failed(&format!("System time error: {}", e)))?
+            .map_err(|e| CacheOperationError::serialization_failed(format!("System time error: {}", e)))?
             .as_nanos() as u64;
 
         Ok(StorageHeader::V2 {
@@ -81,6 +84,7 @@ impl StorageHeader {
     }
 
     /// Get the size of this header when serialized
+    #[allow(dead_code)] // Cold tier serialization - Header size calculation for storage operations
     pub fn size(&self) -> usize {
         match self {
             StorageHeader::V1 { .. } => 16,
@@ -89,6 +93,7 @@ impl StorageHeader {
     }
 
     /// Serialize header to bytes
+    #[allow(dead_code)] // Cold tier serialization - Header serialization for storage file operations
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             StorageHeader::V1 { magic_bytes, version, size, checksum } => {
@@ -121,6 +126,7 @@ impl StorageHeader {
     
     /// Deserialize header from bytes with automatic version detection
     /// Returns (header, bytes_consumed)
+    #[allow(dead_code)] // Cold tier serialization - Header deserialization with automatic version detection
     pub fn deserialize(data: &[u8]) -> Result<(Self, usize), CacheOperationError> {
         if data.len() < 4 {
             return Err(CacheOperationError::resource_exhausted("Insufficient data for magic bytes"));
@@ -131,7 +137,7 @@ impl StorageHeader {
             .try_into()
             .map_err(|_| CacheOperationError::serialization_failed("Invalid magic bytes"))?;
 
-        if &magic_bytes != MAGIC_BYTES {
+        if magic_bytes != MAGIC_BYTES {
             return Err(CacheOperationError::serialization_failed("Invalid magic bytes"));
         }
 
@@ -156,11 +162,12 @@ impl StorageHeader {
                 }
                 Self::deserialize_v2(data)
             },
-            v => Err(CacheOperationError::serialization_failed(&format!("Unsupported version: {}", v))),
+            v => Err(CacheOperationError::serialization_failed(format!("Unsupported version: {}", v))),
         }
     }
 
     /// Deserialize V1 header format
+    #[allow(dead_code)] // Cold tier serialization - V1 format deserialization for legacy compatibility
     fn deserialize_v1(data: &[u8]) -> Result<(Self, usize), CacheOperationError> {
         if data.len() < 16 {
             return Err(CacheOperationError::resource_exhausted("Insufficient data for V1 header"));
@@ -185,6 +192,7 @@ impl StorageHeader {
     }
 
     /// Deserialize V2 header format
+    #[allow(dead_code)] // Cold tier serialization - V2 format deserialization with advanced features
     fn deserialize_v2(data: &[u8]) -> Result<(Self, usize), CacheOperationError> {
         if data.len() < 25 {
             return Err(CacheOperationError::resource_exhausted("Insufficient data for V2 header"));
@@ -205,7 +213,7 @@ impl StorageHeader {
 
         // Validate compression algorithm
         if compression_algorithm > 4 {
-            return Err(CacheOperationError::serialization_failed(&format!(
+            return Err(CacheOperationError::serialization_failed(format!(
                 "Invalid compression algorithm: {}", compression_algorithm
             )));
         }
@@ -221,6 +229,7 @@ impl StorageHeader {
 
         Ok((header, 25))
     }    /// Detect format version from raw bytes
+    #[allow(dead_code)] // Cold tier serialization - Version detection for storage format compatibility
     pub fn detect_version(data: &[u8]) -> Result<u32, CacheOperationError> {
         if data.len() < 8 {
             return Err(CacheOperationError::resource_exhausted("Insufficient data for version detection"));
@@ -237,6 +246,7 @@ impl StorageHeader {
     }
 
     /// Get magic bytes from header
+    #[allow(dead_code)] // Cold tier serialization - Magic bytes accessor for format validation
     pub fn magic_bytes(&self) -> &[u8; 4] {
         match self {
             StorageHeader::V1 { magic_bytes, .. } => magic_bytes,
@@ -245,6 +255,7 @@ impl StorageHeader {
     }
 
     /// Get version from header
+    #[allow(dead_code)] // Cold tier serialization - Version accessor for compatibility checking
     pub fn version(&self) -> u32 {
         match self {
             StorageHeader::V1 { version, .. } => *version,
@@ -253,6 +264,7 @@ impl StorageHeader {
     }
 
     /// Get data size from header (payload size)
+    #[allow(dead_code)] // Cold tier serialization - Data size accessor for storage operations
     pub fn data_size(&self) -> u32 {
         match self {
             StorageHeader::V1 { size, .. } => *size,
@@ -261,6 +273,7 @@ impl StorageHeader {
     }
 
     /// Get checksum (V1 only)
+    #[allow(dead_code)] // Cold tier serialization - Checksum accessor for V1 format integrity verification
     pub fn checksum(&self) -> Option<u32> {
         match self {
             StorageHeader::V1 { checksum, .. } => Some(*checksum),
@@ -269,6 +282,7 @@ impl StorageHeader {
     }
 
     /// Get compression algorithm (V2 only)
+    #[allow(dead_code)] // Cold tier serialization - Compression algorithm accessor for V2 format decompression
     pub fn compression_algorithm(&self) -> Option<CompressionAlgorithm> {
         match self {
             StorageHeader::V1 { .. } => None,
@@ -286,6 +300,7 @@ impl StorageHeader {
     }
 
     /// Get timestamp (V2 only)
+    #[allow(dead_code)] // Cold tier serialization - Timestamp accessor for V2 format metadata
     pub fn timestamp(&self) -> Option<u64> {
         match self {
             StorageHeader::V1 { .. } => None,
@@ -294,6 +309,7 @@ impl StorageHeader {
     }
 
     /// Validate header consistency
+    #[allow(dead_code)] // Cold tier serialization - Header validation for storage integrity checking
     pub fn validate(&self) -> Result<(), CacheOperationError> {
         // Check magic bytes
         if self.magic_bytes() != MAGIC_BYTES {
@@ -303,18 +319,16 @@ impl StorageHeader {
         // Check version
         let version = self.version();
         if version > SERIALIZATION_VERSION {
-            return Err(CacheOperationError::serialization_failed(&format!(
+            return Err(CacheOperationError::serialization_failed(format!(
                 "Unsupported version: {} > {}", version, SERIALIZATION_VERSION
             )));
         }
 
         // Additional validation for V2
-        if let StorageHeader::V2 { compression_algorithm, .. } = self {
-            if *compression_algorithm > 4 {
-                return Err(CacheOperationError::serialization_failed(&format!(
-                    "Invalid compression algorithm: {}", compression_algorithm
-                )));
-            }
+        if let StorageHeader::V2 { compression_algorithm, .. } = self && *compression_algorithm > 4 {
+            return Err(CacheOperationError::serialization_failed(format!(
+                "Invalid compression algorithm: {}", compression_algorithm
+            )));
         }
 
         Ok(())

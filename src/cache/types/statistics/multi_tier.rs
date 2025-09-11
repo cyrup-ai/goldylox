@@ -12,6 +12,7 @@ use super::tier_stats::TierStatistics;
 
 /// Error classification for detailed tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Complete error type enumeration
 pub enum ErrorType {
     /// Cache operation timeout
     Timeout,
@@ -33,6 +34,7 @@ pub enum ErrorType {
 
 /// Time-windowed error rate tracker with atomic precision
 #[derive(Debug)]
+#[allow(dead_code)] // Complete error rate tracking structure
 pub struct ErrorRateTracker {
     /// Error counts per type (atomic for lock-free updates)
     error_counts: [CachePadded<AtomicU64>; 8], // One for each ErrorType variant
@@ -50,6 +52,7 @@ pub struct ErrorRateTracker {
     window_ops_count: CachePadded<AtomicU64>,
 }
 
+#[allow(dead_code)] // Complete error rate tracker implementation
 impl ErrorRateTracker {
     /// Create new error rate tracker
     pub fn new() -> Self {
@@ -237,6 +240,7 @@ impl Default for ErrorRateTracker {
 
 /// Statistical summary of error rates
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Complete error rate statistics structure
 pub struct ErrorRateStatistics {
     /// Overall error rate (lifetime)
     pub overall_rate: f64,
@@ -252,6 +256,7 @@ pub struct ErrorRateStatistics {
 
 /// Statistics aggregator for multiple tiers with sophisticated error tracking
 #[derive(Debug)]
+#[allow(dead_code)] // Complete multi-tier statistics structure
 pub struct MultiTierStatistics {
     /// Hot tier statistics
     pub hot_tier: TierStatistics,
@@ -265,6 +270,7 @@ pub struct MultiTierStatistics {
     pub global_error_tracker: ErrorRateTracker,
 }
 
+#[allow(dead_code)] // Complete multi-tier statistics implementation
 impl MultiTierStatistics {
     /// Create new multi-tier statistics with error tracking
     pub fn new(
@@ -486,9 +492,9 @@ impl MultiTierStatistics {
         let (hot_entries, warm_entries, cold_entries) = self.entry_distribution();
 
         // Optimal distribution: hot ~30%, warm ~50%, cold ~20%
-        let hot_optimal = hot_entries >= 0.2 && hot_entries <= 0.4;
-        let warm_optimal = warm_entries >= 0.4 && warm_entries <= 0.6;
-        let cold_optimal = cold_entries >= 0.1 && cold_entries <= 0.3;
+        let hot_optimal = (0.2..=0.4).contains(&hot_entries);
+        let warm_optimal = (0.4..=0.6).contains(&warm_entries);
+        let cold_optimal = (0.1..=0.3).contains(&cold_entries);
 
         hot_optimal && warm_optimal && cold_optimal
     }

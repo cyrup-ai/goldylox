@@ -50,6 +50,7 @@ impl AlertSeverity {
 // Use the comprehensive implementation for all cache entry needs
 
 /// Batch operation request
+#[allow(dead_code)] // Core types - batch request structure for batch operation coordination
 #[derive(Debug, Clone)]
 pub struct BatchRequest<K, V> {
     pub operations: Vec<BatchOperation<K, V>>,
@@ -57,6 +58,7 @@ pub struct BatchRequest<K, V> {
 }
 
 /// Individual batch operation
+#[allow(dead_code)] // Core types - batch operation enumeration for batch processing
 #[derive(Debug, Clone)]
 pub enum BatchOperation<K, V> {
     Get(K),
@@ -71,6 +73,7 @@ pub enum BatchOperation<K, V> {
 // TierStatistics moved to canonical location: crate::cache::types::statistics::tier_stats::TierStatistics
 
 /// Get current timestamp in nanoseconds
+#[allow(dead_code)] // Core types - timestamp utility function for operation timing
 pub fn timestamp_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

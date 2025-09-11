@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Error type for warm tier initialization failures
+#[allow(dead_code)] // Warm tier error - comprehensive initialization error enumeration
 #[derive(Debug)]
 pub enum WarmTierInitError {
     MemoryMonitorCreation(CacheOperationError),
@@ -55,6 +56,7 @@ impl From<CacheOperationError> for WarmTierInitError {
     }
 }
 
+#[allow(dead_code)] // Warm tier error - error handling methods for retry logic
 impl WarmTierInitError {
     /// Check if this error might be resolved by retrying
     pub fn is_retryable(&self) -> bool {
@@ -83,6 +85,7 @@ impl WarmTierInitError {
 }
 
 /// Retry configuration for warm tier initialization
+#[allow(dead_code)] // Warm tier error - retry configuration for initialization backoff
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     pub max_attempts: usize,
@@ -102,6 +105,7 @@ impl Default for RetryConfig {
     }
 }
 
+#[allow(dead_code)] // Warm tier error - retry config methods for backoff calculation
 impl RetryConfig {
     /// Calculate exponential backoff delay
     pub fn calculate_backoff(&self, attempt: usize) -> Duration {
@@ -113,6 +117,7 @@ impl RetryConfig {
 }
 
 /// Degradation modes for warm tier initialization
+#[allow(dead_code)] // Warm tier error - degradation mode enumeration for fallback strategies
 #[derive(Debug, Clone, PartialEq)]
 pub enum DegradationMode {
     /// Fail immediately on initialization errors

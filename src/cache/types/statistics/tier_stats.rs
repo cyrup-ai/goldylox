@@ -34,6 +34,7 @@ pub struct TierStatistics {
     pub error_rate: f64,
 }
 
+#[allow(dead_code)] // Complete tier statistics implementation
 impl TierStatistics {
     /// Merge statistics from another TierStatistics
     pub fn merge(&mut self, other: TierStatistics) {
@@ -134,8 +135,10 @@ impl TierStats for TierStatistics {
     }
 }
 
+#[allow(dead_code)] // Complete tier statistics implementation
 impl TierStatistics {
     /// Create new comprehensive tier statistics
+    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     pub fn new(
         hits: u64,

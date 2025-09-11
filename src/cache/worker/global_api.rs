@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Worker System - Complete global API library for cache maintenance operations with tier transitions, async promotion/demotion, maintenance scheduling, cleanup operations, and worker statistics
+
 //! Worker API functions for cache maintenance operations
 //!
 //! This module provides worker API functions for maintenance operations.
@@ -23,23 +25,12 @@ pub fn async_promote<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 }
 
 /// Demote entry to cold tier directly using tier API  
-pub fn async_demote<K: CacheKey + bincode::Encode, V: CacheValue + bincode::Decode<()> + bincode::Encode + serde::de::DeserializeOwned>(
+pub fn async_demote<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
     key: &K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    // Use cold tier storage API directly
-    use crate::cache::tier::cold::storage::ColdTierCache;
-    use crate::cache::traits::CompressionAlgorithm;
-    use std::path::Path;
-    
-    // Create a temporary cold tier cache to store the value
-    let cold_cache = ColdTierCache::<K, V>::new(
-        Path::new("/tmp/cold_storage.dat"),
-        CompressionAlgorithm::None,
-    )?;
-    
-    cold_cache.put(key.clone(), value)?;
-    Ok(())
+    // Use proper cold tier insertion through coordinator infrastructure
+    crate::cache::tier::cold::insert_demoted(key.clone(), value)
 }
 
 /// Schedule maintenance task with worker

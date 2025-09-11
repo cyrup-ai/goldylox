@@ -103,7 +103,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
             }
             CoherenceRequest::Serialize { key, value, target_tier, request_id } => {
                 match self.create_serialization_envelope_internal(key, value, target_tier) {
-                    Ok(envelope) => CoherenceResponse::SerializeSuccess { request_id, envelope },
+                    Ok(envelope) => CoherenceResponse::SerializeSuccess { request_id, envelope: Box::new(envelope) },
                     Err(error) => CoherenceResponse::Error { request_id, error },
                 }
             }

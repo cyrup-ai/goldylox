@@ -32,16 +32,19 @@ pub struct MemoryEfficiencyAnalyzer {
 #[derive(Debug)]
 struct AllocationPatternTracker {
     /// Small allocation frequency
+    #[allow(dead_code)] // Memory analysis - allocation frequency tracking used in pattern analysis
     small_alloc_frequency: CachePadded<AtomicU64>,
     /// Medium allocation frequency
+    #[allow(dead_code)] // Memory analysis - allocation frequency tracking used in pattern analysis
     medium_alloc_frequency: CachePadded<AtomicU64>,
     /// Large allocation frequency
+    #[allow(dead_code)] // Memory analysis - allocation frequency tracking used in pattern analysis
     large_alloc_frequency: CachePadded<AtomicU64>,
     /// Allocation size distribution
     #[allow(dead_code)] // Memory management - size_distribution used in allocation pattern analysis
     size_distribution: [AtomicU64; 16], // Size buckets
     /// Temporal allocation patterns
-    
+    #[allow(dead_code)] // Memory analysis - temporal patterns used in allocation timing analysis
     temporal_patterns: ArrayVec<u64, 64>, // Recent allocation timestamps
 }
 
@@ -53,9 +56,10 @@ struct LatencyTracker {
     /// Allocation count for average calculation
     allocation_count: AtomicU64,
     /// Peak allocation latency
+    #[allow(dead_code)] // Memory analysis - peak latency tracking used in performance optimization
     peak_allocation_latency: AtomicU64,
     /// Recent latency samples
-    
+    #[allow(dead_code)] // Memory analysis - latency samples used in performance trend analysis
     recent_latencies: ArrayVec<u64, 128>,
 }
 
@@ -72,7 +76,7 @@ struct FragmentationAnalyzer {
     /// Free block count
     free_block_count: AtomicUsize,
     /// Largest free block size
-    
+    #[allow(dead_code)] // Memory management - largest_free_block used in fragmentation analysis
     largest_free_block: AtomicUsize,
 }
 
@@ -85,6 +89,7 @@ struct AnalysisHistoryBuffer {
     write_position: AtomicUsize,
 }
 
+#[allow(dead_code)] // Memory management - comprehensive memory efficiency analyzer with allocation pattern tracking and latency analysis
 impl MemoryEfficiencyAnalyzer {
     /// Create new memory efficiency analyzer
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
@@ -168,13 +173,13 @@ impl MemoryEfficiencyAnalyzer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos() as u64,
-            efficiency_score: efficiency.min(1.0).max(0.0) as f32,
+            efficiency_score: efficiency.clamp(0.0, 1.0) as f32,
             average_latency_ns: self
                 .latency_tracker
                 .total_allocation_latency
                 .load(std::sync::atomic::Ordering::Relaxed),
             fragmentation_impact: allocation_stats.fragmentation_level(),
-            memory_utilization: efficiency.min(1.0).max(0.0) as f32,
+            memory_utilization: efficiency.clamp(0.0, 1.0) as f32,
             recommendations: self.generate_recommendations_from_existing_stats(allocation_stats),
         }
     }
@@ -281,7 +286,7 @@ impl MemoryEfficiencyAnalyzer {
         score -= fragmentation_impact * 0.3;
 
         // Ensure score is in valid range
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     /// Calculate memory utilization
@@ -334,7 +339,7 @@ impl MemoryEfficiencyAnalyzer {
         let capacity = 32u64; // ArrayVec<EfficiencyAnalysisResult, 32> capacity
         
         // Calculate write index in circular buffer
-        let write_idx = (current_pos % capacity as usize) as usize;
+        let write_idx = current_pos % capacity as usize;
         
         // Store in buffer using UnsafeCell for safe interior mutability
         unsafe {

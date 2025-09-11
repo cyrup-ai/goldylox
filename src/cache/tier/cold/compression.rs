@@ -4,12 +4,12 @@
 //! CompressionEngine implementation from data_structures.rs with additional utilities.
 
 
-// Re-export canonical implementations from data_structures.rs
+// Re-export canonical implementations 
 pub use super::data_structures::{
     CompressionEngine,
     CompressionAlgorithm,
-    CompressionStatsSnapshot,
 };
+pub use super::compression_engine::CompressionStatsSnapshot;
 
 
 
@@ -48,64 +48,4 @@ impl CompressionEngine {
 
 }
 
-impl CompressionStatsSnapshot {
-    /// Get average compression ratio
-    #[allow(dead_code)] // Cold tier - avg_compression_ratio used in compression ratio analysis
-    pub fn avg_compression_ratio(&self) -> f64 {
-        if self.compression_ops > 0 && self.total_uncompressed > 0 {
-            self.total_compressed as f64 / self.total_uncompressed as f64
-        } else {
-            1.0
-        }
-    }
-
-    /// Get total space saved through compression
-    pub fn total_space_saved(&self) -> u64 {
-        self.total_uncompressed.saturating_sub(self.total_compressed)
-    }
-
-    /// Get compression effectiveness (0.0 to 1.0)
-    pub fn compression_effectiveness(&self) -> f64 {
-        if self.compression_ops > 0 {
-            1.0 - self.avg_compression_ratio()
-        } else {
-            0.0
-        }
-    }
-
-    /// Get average compression time per operation (nanoseconds)
-    pub fn avg_compression_time_ns(&self) -> u64 {
-        if self.compression_ops > 0 {
-            self.total_compression_time_ns / self.compression_ops
-        } else {
-            0
-        }
-    }
-
-    /// Get average decompression time per operation (nanoseconds)
-    pub fn avg_decompression_time_ns(&self) -> u64 {
-        if self.decompression_ops > 0 {
-            self.total_decompression_time_ns / self.decompression_ops
-        } else {
-            0
-        }
-    }
-
-    /// Get compression throughput (bytes per second)
-    pub fn compression_throughput(&self) -> f64 {
-        if self.total_compression_time_ns > 0 {
-            (self.total_uncompressed as f64 * 1_000_000_000.0) / self.total_compression_time_ns as f64
-        } else {
-            0.0
-        }
-    }
-
-    /// Get decompression throughput (bytes per second)
-    pub fn decompression_throughput(&self) -> f64 {
-        if self.total_decompression_time_ns > 0 {
-            (self.total_compressed as f64 * 1_000_000_000.0) / self.total_decompression_time_ns as f64
-        } else {
-            0.0
-        }
-    }
-}
+// Helper methods moved to compression_engine.rs canonical implementation

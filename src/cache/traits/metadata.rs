@@ -3,6 +3,8 @@
 //! This module provides blazing-fast metadata and serialization interfaces optimized
 //! for high-performance cache value management and persistent storage.
 
+#![allow(dead_code)] // Cache traits - Metadata trait definitions and implementations
+
  // Internal metadata traits - may not be used in minimal API
 
 use std::fmt::Debug;

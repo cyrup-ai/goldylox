@@ -149,16 +149,16 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         };
 
         match self.access_history.get(key) {
-            Some(record) => self.compute_pattern(key, &*record, now_ns),
-            None => return Self::default_pattern(),
+            Some(record) => self.compute_pattern(key, &record, now_ns),
+            None => Self::default_pattern(),
         }
     }
 
     #[inline(always)]
     fn compute_pattern(&self, key: &K, record: &AccessRecord, now_ns: u64) -> AccessPattern {
 
-        let frequency = self.calculate_frequency(&record, now_ns);
-        let recency = self.calculate_recency(&record, now_ns);
+        let frequency = self.calculate_frequency(record, now_ns);
+        let recency = self.calculate_recency(record, now_ns);
         
         // Use cached pattern hint if available for performance, otherwise detect fresh
         let cached_pattern = record.pattern_hint();
@@ -184,7 +184,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
 
         // Incorporate memory usage into temporal locality calculation
         let memory_adjusted_locality = {
-            let base_locality = self.calculate_temporal_locality(&record, now_ns);
+            let base_locality = self.calculate_temporal_locality(record, now_ns);
             let memory_factor = record.memory_usage() as f64 / 1024.0; // KB scale
             base_locality * (1.0 + memory_factor * 0.01) // Small adjustment based on memory usage
         };
@@ -411,7 +411,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         let decay_rate = std::f64::consts::LN_2 / self.config.recency_half_life;
         let recency = (-time_since * decay_rate).exp();
 
-        recency.max(0.0).min(1.0)
+        recency.clamp(0.0, 1.0)
     }
 
     /// Calculate temporal locality score based on access pattern regularity
@@ -451,7 +451,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         // Convert to locality score: low variation = high temporal locality
         // High coefficient of variation = random/scattered access = low temporal locality
         let locality_score = 1.0 / (1.0 + coefficient_of_variation);
-        locality_score.max(0.0).min(1.0)
+        locality_score.clamp(0.0, 1.0)
     }
 
     /// Get default access pattern for untracked keys
@@ -527,7 +527,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         use std::sync::OnceLock;
         static START_TIME: OnceLock<std::time::Instant> = OnceLock::new();
 
-        let start = START_TIME.get_or_init(|| std::time::Instant::now());
+        let start = START_TIME.get_or_init(std::time::Instant::now);
         let elapsed = std::time::Instant::now().duration_since(*start);
         let wall_time_ns = elapsed.as_nanos() as u64;
         
@@ -546,7 +546,7 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
         let cleanup_counter = self.cleanup_counter.fetch_add(1, Ordering::Relaxed);
 
         // Cleanup every N operations
-        if cleanup_counter % self.config.cleanup_interval == 0 {
+        if cleanup_counter.is_multiple_of(self.config.cleanup_interval) {
             self.perform_cleanup()?;
         }
 

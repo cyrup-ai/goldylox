@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Memory GC coordination - Complete garbage collection library with emergency scheduling, normal cycles, and performance monitoring
+
 //! Garbage collection coordination and scheduling
 //!
 //! This module coordinates garbage collection operations, scheduling both
@@ -229,11 +231,11 @@ impl GCCoordinator {
             .store(cycle_type as u32, Ordering::Relaxed);
 
         // Set running state
-        if !self
+        if self
             .gc_state
             .is_running
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
+            .is_err()
         {
             return Err(CacheOperationError::ConcurrentAccess(
                 "GC already running".to_string(),

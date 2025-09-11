@@ -189,6 +189,12 @@ pub struct ProtocolConfiguration {
     pub schema_version: u32,
 }
 
+impl Default for CacheLineState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CacheLineState {
     /// Create new cache line state
     pub fn new() -> Self {
@@ -248,6 +254,12 @@ impl CacheLineState {
     /// Increment version
     pub fn increment_version(&self) -> u64 {
         self.version.fetch_add(1, Ordering::AcqRel) + 1
+    }
+}
+
+impl Default for CoherenceMetadata {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -360,7 +372,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
         
         // Update concurrent operations tracking
         let active_ops = crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        self.coherence_stats.update_concurrent_operations(active_ops as u32);
+        self.coherence_stats.update_concurrent_operations(active_ops);
         let coherence_key = CoherenceKey::from_cache_key(key);
 
         // Get or create cache line state
@@ -408,7 +420,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
         
         // Update concurrent operations tracking
         let active_ops = crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        self.coherence_stats.update_concurrent_operations(active_ops as u32);
+        self.coherence_stats.update_concurrent_operations(active_ops);
         let coherence_key = CoherenceKey::from_cache_key(key);
 
         // Get or create cache line state
@@ -522,7 +534,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
             CacheTier::Cold => WritePriority::Low, // Cold tier writes can be deferred
             CacheTier::Warm => {
                 // Check access count for warm tier
-                if let Some(entry) = self.cache_line_states.get(&key) {
+                if let Some(entry) = self.cache_line_states.get(key) {
                     if entry.value().get_access_count() > 10 {
                         WritePriority::High // Frequently accessed warm data
                     } else {
@@ -652,6 +664,126 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
 
     // validate_schema_version and validate_checksum methods removed - were unused validation functions
 
+    /// Update coherence state after successful SIMD search hit
+    pub fn update_state_after_hit(
+        &self,
+        key: &K,
+        tier: CacheTier,
+    ) -> Result<(), super::communication::CoherenceError> {
+        use std::time::Instant;
+
+        let coherence_key = CoherenceKey::from_cache_key(key);
+        
+        // Get or create cache line state
+        let cache_line = self
+            .cache_line_states
+            .get_or_insert(coherence_key.clone(), CacheLineState::new());
+
+        let current_state = cache_line.value().get_mesi_state();
+        cache_line.value().increment_access_count();
+
+        // Update to appropriate state based on current state
+        let new_state = match current_state {
+            MesiState::Invalid => MesiState::Shared, // First access - mark as shared
+            MesiState::Shared => MesiState::Shared,  // Keep shared
+            MesiState::Exclusive => MesiState::Exclusive, // Keep exclusive
+            MesiState::Modified => MesiState::Modified, // Keep modified
+        };
+
+        if current_state != new_state {
+            let transition_request = super::state_management::StateTransitionRequest {
+                from_state: current_state,
+                to_state: new_state,
+                tier,
+                version: cache_line.value().get_version(),
+                timestamp_ns: Instant::now().elapsed().as_nanos() as u64,
+                reason: super::state_management::TransitionReason::Read,
+            };
+
+            self.transition_validator.execute_transition(&transition_request)?;
+            cache_line.value().set_mesi_state(new_state);
+            cache_line.value().increment_version();
+        }
+
+        Ok(())
+    }
+
+    /// Update coherence state after successful SIMD put operation
+    pub fn update_state_after_put(
+        &self,
+        key: &K,
+        tier: CacheTier,
+        is_new_entry: bool,
+    ) -> Result<(), super::communication::CoherenceError> {
+        use std::time::Instant;
+
+        let coherence_key = CoherenceKey::from_cache_key(key);
+        
+        // Get or create cache line state
+        let cache_line = self
+            .cache_line_states
+            .get_or_insert(coherence_key.clone(), CacheLineState::new());
+
+        let current_state = cache_line.value().get_mesi_state();
+        cache_line.value().increment_access_count();
+
+        // For put operations, always transition to modified state
+        let new_state = if is_new_entry {
+            MesiState::Exclusive // New entries start as exclusive
+        } else {
+            MesiState::Modified  // Updates are modified
+        };
+
+        if current_state != new_state {
+            let transition_request = super::state_management::StateTransitionRequest {
+                from_state: current_state,
+                to_state: new_state,
+                tier,
+                version: cache_line.value().get_version(),
+                timestamp_ns: Instant::now().elapsed().as_nanos() as u64,
+                reason: super::state_management::TransitionReason::Write,
+            };
+
+            self.transition_validator.execute_transition(&transition_request)?;
+            cache_line.value().set_mesi_state(new_state);
+            cache_line.value().increment_version();
+        }
+
+        Ok(())
+    }
+
+    /// Update coherence state after successful SIMD remove operation  
+    pub fn update_state_after_remove(
+        &self,
+        key: &K,
+        tier: CacheTier,
+    ) -> Result<(), super::communication::CoherenceError> {
+        use std::time::Instant;
+
+        let coherence_key = CoherenceKey::from_cache_key(key);
+        
+        if let Some(cache_line_entry) = self.cache_line_states.get(&coherence_key) {
+            let cache_line = cache_line_entry.value();
+            let current_state = cache_line.get_mesi_state();
+
+            // Transition to invalid state after removal
+            let transition_request = super::state_management::StateTransitionRequest {
+                from_state: current_state,
+                to_state: MesiState::Invalid,
+                tier,
+                version: cache_line.get_version(),
+                timestamp_ns: Instant::now().elapsed().as_nanos() as u64,
+                reason: super::state_management::TransitionReason::Eviction,
+            };
+
+            self.transition_validator.execute_transition(&transition_request)?;
+            cache_line.set_mesi_state(MesiState::Invalid);
+            cache_line.increment_version();
+        }
+
+        Ok(())
+    }
+
     /// Get coherence statistics
     #[allow(dead_code)] // Statistics collection - used in unified telemetry system integration
     pub fn get_statistics(&self) -> crate::cache::coherence::CoherenceStatisticsSnapshot {
@@ -771,9 +903,15 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
     }
 }
 
+impl Default for ProtocolConfiguration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProtocolConfiguration {
     /// Create default protocol configuration
-    pub fn default() -> Self {
+    pub fn new() -> Self {
         Self {
             optimistic_concurrency: true,
             write_through: false,

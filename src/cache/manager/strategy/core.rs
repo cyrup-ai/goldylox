@@ -73,8 +73,15 @@ impl Default for CacheStrategy {
     }
 }
 
+impl Default for CacheStrategySelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CacheStrategySelector {
     /// Create new cache strategy selector
+    #[allow(dead_code)] // Strategy management - strategy selector constructor for cache optimization
     pub fn new() -> Self {
         Self {
             current_strategy: AtomicCell::new(CacheStrategy::default()),
@@ -92,6 +99,7 @@ impl CacheStrategySelector {
 
     /// Record cache operation for strategy evaluation
     #[inline(always)]
+    #[allow(dead_code)] // Strategy management - operation recording API for strategy performance tracking
     pub fn record_operation(&self, strategy: CacheStrategy, hit: bool, access_time_ns: u64) {
         if hit {
             self.strategy_metrics.record_hit(strategy, access_time_ns);

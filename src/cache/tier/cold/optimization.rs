@@ -3,6 +3,8 @@
 //! This module provides optimization algorithms for storage efficiency,
 //! including compaction, garbage collection, and performance tuning.
 
+#![allow(dead_code)] // Cold tier optimization - complete optimization and compaction library
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -93,29 +95,37 @@ impl StorageOptimizer {
         let start_time = Instant::now();
         let efficiency_before = self.calculate_storage_efficiency(cache)?;
 
-        // Remove expired entries
-        let expired_removed = self.remove_expired_entries(cache)?;
+        // Remove expired entries and track bytes reclaimed
+        let (expired_removed, expired_bytes_reclaimed) = self.remove_expired_entries_with_size_tracking(cache)?;
 
-        // Remove idle entries
-        let idle_removed = self.remove_idle_entries(cache)?;
+        // Remove idle entries and track bytes reclaimed
+        let (idle_removed, idle_bytes_reclaimed) = self.remove_idle_entries_with_size_tracking(cache)?;
 
-        // Compact storage if fragmentation is high
-        let fragmentation_ratio = self.calculate_fragmentation_ratio(cache)?;
-        if fragmentation_ratio >= self.config.min_fragmentation_ratio {
+        // Calculate compaction bytes savings
+        let compaction_bytes_saved = if self.calculate_fragmentation_ratio(cache)? >= self.config.min_fragmentation_ratio {
+            let bytes_before_compaction = cache.write_offset.load(Ordering::Relaxed);
             cache.compact()?;
-        }
+            let bytes_after_compaction = cache.write_offset.load(Ordering::Relaxed);
+            bytes_before_compaction.saturating_sub(bytes_after_compaction)
+        } else {
+            0
+        };
 
         let efficiency_after = self.calculate_storage_efficiency(cache)?;
         let optimization_time = start_time.elapsed();
         let total_removed = expired_removed + idle_removed;
+        let total_bytes_reclaimed = expired_bytes_reclaimed + idle_bytes_reclaimed + compaction_bytes_saved;
 
-        // Update statistics
+        // Update statistics with accurate bytes reclaimed
         self.stats
             .total_optimizations
             .fetch_add(1, Ordering::Relaxed);
         self.stats
             .entries_removed
             .fetch_add(total_removed as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_reclaimed
+            .fetch_add(total_bytes_reclaimed, Ordering::Relaxed);
         self.stats
             .avg_optimization_time_ms
             .store(optimization_time.as_millis() as u64, Ordering::Relaxed);
@@ -128,7 +138,7 @@ impl StorageOptimizer {
         );
 
         Ok(OptimizationResult {
-            bytes_reclaimed: 0, // Would need actual size calculation
+            bytes_reclaimed: total_bytes_reclaimed,
             entries_removed: total_removed,
             optimization_time,
             efficiency_before,
@@ -206,6 +216,79 @@ impl StorageOptimizer {
         Ok(removed_count)
     }
 
+    /// Remove expired entries with size tracking for accurate bytes reclaimed calculation
+    fn remove_expired_entries_with_size_tracking<
+        K: crate::cache::traits::CacheKey,
+        V: crate::cache::traits::CacheValue,
+    >(
+        &self,
+        cache: &ColdTierCache<K, V>,
+    ) -> Result<(usize, u64), CacheOperationError> {
+        let mut removed_count = 0;
+        let mut bytes_reclaimed = 0u64;
+
+        // Collect expired keys with their sizes for accurate tracking
+        let expired_entries: Vec<_> = cache
+            .index
+            .iter()
+            .filter_map(|entry_ref| {
+                let (key, entry) = entry_ref.pair();
+                if entry.last_access.elapsed() > self.config.max_idle_duration {
+                    Some((key.clone(), entry.data_size))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Remove expired entries and accumulate bytes reclaimed
+        for (key, entry_size) in expired_entries {
+            if cache.remove(&key).is_ok() {
+                removed_count += 1;
+                bytes_reclaimed += entry_size as u64;
+            }
+        }
+
+        Ok((removed_count, bytes_reclaimed))
+    }
+
+    /// Remove idle entries with size tracking for accurate bytes reclaimed calculation
+    fn remove_idle_entries_with_size_tracking<
+        K: crate::cache::traits::CacheKey,
+        V: crate::cache::traits::CacheValue,
+    >(
+        &self,
+        cache: &ColdTierCache<K, V>,
+    ) -> Result<(usize, u64), CacheOperationError> {
+        let mut removed_count = 0;
+        let mut bytes_reclaimed = 0u64;
+        let idle_threshold = self.config.max_idle_duration / 2;
+
+        // Collect idle keys with their sizes for accurate tracking
+        let idle_entries: Vec<_> = cache
+            .index
+            .iter()
+            .filter_map(|entry_ref| {
+                let (key, entry) = entry_ref.pair();
+                if entry.access_count < 2 && entry.last_access.elapsed() > idle_threshold {
+                    Some((key.clone(), entry.data_size))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Remove idle entries and accumulate bytes reclaimed
+        for (key, entry_size) in idle_entries {
+            if cache.remove(&key).is_ok() {
+                removed_count += 1;
+                bytes_reclaimed += entry_size as u64;
+            }
+        }
+
+        Ok((removed_count, bytes_reclaimed))
+    }
+
     /// Calculate storage efficiency (used space / total space)
     fn calculate_storage_efficiency<
         K: crate::cache::traits::CacheKey,
@@ -258,17 +341,13 @@ impl StorageOptimizer {
         cache: &ColdTierCache<K, V>,
     ) -> bool {
         // Check storage efficiency
-        if let Ok(efficiency) = self.calculate_storage_efficiency(cache) {
-            if efficiency < self.config.target_efficiency {
-                return true;
-            }
+        if let Ok(efficiency) = self.calculate_storage_efficiency(cache) && efficiency < self.config.target_efficiency {
+            return true;
         }
 
         // Check fragmentation
-        if let Ok(fragmentation) = self.calculate_fragmentation_ratio(cache) {
-            if fragmentation >= self.config.min_fragmentation_ratio {
-                return true;
-            }
+        if let Ok(fragmentation) = self.calculate_fragmentation_ratio(cache) && fragmentation >= self.config.min_fragmentation_ratio {
+            return true;
         }
 
         // Check time since last optimization

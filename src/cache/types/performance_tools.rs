@@ -51,6 +51,7 @@ impl SimdMemory {
     /// Copy memory using standard operations (fallback)
     #[cfg(not(target_arch = "x86_64"))]
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier SIMD - Memory copy fallback for non-x86_64 platforms
     pub unsafe fn copy_simd(src: *const u8, dst: *mut u8, len: usize) {
         unsafe {
             std::ptr::copy_nonoverlapping(src, dst, len);
@@ -88,6 +89,7 @@ impl SimdMemory {
     /// Zero memory using standard operations (fallback)
     #[cfg(not(target_arch = "x86_64"))]
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier SIMD - Memory zeroing fallback for non-x86_64 platforms
     pub unsafe fn zero_simd(dst: *mut u8, len: usize) {
         unsafe {
             std::ptr::write_bytes(dst, 0, len);

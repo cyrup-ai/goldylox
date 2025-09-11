@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier core - Complete warm cache implementation with lock-free skiplist, concurrent data structures, and atomic metadata management
+
 //! Core warm tier cache data structures and primary implementation
 //!
 //! This module contains the main LockFreeWarmTier cache implementation with
@@ -294,7 +296,7 @@ impl<'de> serde::Deserialize<'de> for WarmEntryMetadata {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &["last_access_ns", "access_count", "size_bytes", "frequency_estimate", "priority_level", "flags"];
+        const FIELDS: &[&str] = &["last_access_ns", "access_count", "size_bytes", "frequency_estimate", "priority_level", "flags"];
         deserializer.deserialize_struct("WarmEntryMetadata", FIELDS, WarmEntryMetadataVisitor)
     }
 }
@@ -475,20 +477,17 @@ impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
             Ok(tier) => Ok(tier),
             Err(mut err) => {
                 // Add context to help with retry decisions
-                match &mut err {
-                    WarmTierInitError::MemoryMonitorCreation(_cache_err) => {
-                        // For memory monitor failures, try to gather more context about the failure
-                        // This could help determine if retries would be beneficial
-                        let current_memory = Self::get_available_system_memory();
-                        let required_memory = config.max_memory_bytes;
+                if let WarmTierInitError::MemoryMonitorCreation(_cache_err) = &mut err {
+                    // For memory monitor failures, try to gather more context about the failure
+                    // This could help determine if retries would be beneficial
+                    let current_memory = Self::get_available_system_memory();
+                    let required_memory = config.max_memory_bytes;
 
-                        if current_memory < required_memory {
-                            return Err(WarmTierInitError::MemoryAllocationExhausted {
-                                attempts: 1,
-                            });
-                        }
+                    if current_memory < required_memory {
+                        return Err(WarmTierInitError::MemoryAllocationExhausted {
+                            attempts: 1,
+                        });
                     }
-                    _ => {}
                 }
                 Err(err)
             }
@@ -608,7 +607,7 @@ impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
             self.stats.update_memory_usage(entry_size - old_size);
         } else {
             self.stats.update_entry_count(1);
-            self.stats.update_memory_usage(entry_size as i64);
+            self.stats.update_memory_usage(entry_size);
         }
 
         // Update memory monitor

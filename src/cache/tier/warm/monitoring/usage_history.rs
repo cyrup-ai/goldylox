@@ -3,6 +3,8 @@
 //! This module implements circular buffer storage for memory usage samples
 //! and provides trend analysis capabilities.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete usage history tracking library
+
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
@@ -23,6 +25,12 @@ pub struct MemoryUsageHistory {
     pub timestamps: [CachePadded<AtomicU64>; 256],
     /// Trend analysis results
     pub trend_analysis: TrendAnalysis,
+}
+
+impl Default for MemoryUsageHistory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryUsageHistory {

@@ -3,6 +3,8 @@
 //! This module contains statistics collection, maintenance operations,
 //! and configuration access for the SIMD hot tier cache.
 
+#![allow(dead_code)] // Hot tier SIMD - Complete management operations with statistics collection, maintenance, and configuration access
+
 use crate::cache::tier::hot::memory_pool::MemoryPool;
 use crate::cache::tier::hot::synchronization::WriteGuard;
 use crate::cache::config::types::HotTierConfig;
@@ -73,6 +75,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
     }
 
     /// Get configuration
+    #[allow(dead_code)] // Hot tier SIMD - Configuration accessor for SIMD hot tier settings
     pub fn config(&self) -> &HotTierConfig {
         &self.config
     }

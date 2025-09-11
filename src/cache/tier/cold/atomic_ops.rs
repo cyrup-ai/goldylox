@@ -29,7 +29,7 @@ pub fn put_if_absent_atomic<K: CacheKey + Default + bincode::Encode + bincode::D
             // Check if key exists first
             if let Some(existing) = cold_tier.get(&key_clone) {
                 // Key exists, return the existing value
-                bincode::encode_to_vec(&Some(existing), bincode::config::standard()).unwrap_or_default()
+                bincode::encode_to_vec(Some(existing), bincode::config::standard()).unwrap_or_default()
             } else {
                 // Key doesn't exist, put new value
                 match cold_tier.put(key_clone, value_clone) {
@@ -135,17 +135,17 @@ pub fn compare_and_swap_atomic<K: CacheKey + Default + bincode::Encode + bincode
             if let Some(current) = cold_tier.get(&key_clone) {
                 if current == expected_clone {
                     match cold_tier.put(key_clone, new_value_clone) {
-                        Ok(_) => bincode::encode_to_vec(&true, bincode::config::standard()).unwrap_or_default(),
-                        Err(_) => bincode::encode_to_vec(&false, bincode::config::standard()).unwrap_or_default()
+                        Ok(_) => bincode::encode_to_vec(true, bincode::config::standard()).unwrap_or_default(),
+                        Err(_) => bincode::encode_to_vec(false, bincode::config::standard()).unwrap_or_default()
                     }
                 } else {
-                    bincode::encode_to_vec(&false, bincode::config::standard()).unwrap_or_default()
+                    bincode::encode_to_vec(false, bincode::config::standard()).unwrap_or_default()
                 }
             } else {
-                bincode::encode_to_vec(&false, bincode::config::standard()).unwrap_or_default()
+                bincode::encode_to_vec(false, bincode::config::standard()).unwrap_or_default()
             }
         } else {
-            bincode::encode_to_vec(&false, bincode::config::standard()).unwrap_or_default()
+            bincode::encode_to_vec(false, bincode::config::standard()).unwrap_or_default()
         }
     });
     

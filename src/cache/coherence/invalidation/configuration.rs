@@ -26,8 +26,14 @@ pub struct InvalidationConfig {
     pub priority_processing: bool,
 }
 
+impl Default for InvalidationConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InvalidationConfig {
-    pub fn default() -> Self {
+    pub fn new() -> Self {
         Self {
             max_retries: 3,
             retry_delay_ms: 100,

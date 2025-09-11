@@ -12,6 +12,7 @@ use crate::cache::types::timestamp_nanos;
 
 /// Eviction candidate with rich decision metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Eviction types - eviction candidate structure with comprehensive selection metadata
 pub struct EvictionCandidate<K: CacheKey, V: CacheValue> {
     /// Key to evict
     key: K,
@@ -27,6 +28,7 @@ pub struct EvictionCandidate<K: CacheKey, V: CacheValue> {
     _phantom: PhantomData<V>,
 }
 
+#[allow(dead_code)] // Complete eviction candidate implementation
 impl<K: CacheKey, V: CacheValue> EvictionCandidate<K, V> {
     /// Create new eviction candidate
     #[inline(always)]
@@ -49,8 +51,7 @@ impl<K: CacheKey, V: CacheValue> EvictionCandidate<K, V> {
     
     /// Create candidate compatible with hot tier slot-based access
     pub fn from_slot_index(slot_index: usize, key: K, score: f64, reason: SelectionReason) -> Self {
-        let mut metadata = CandidateMetadata::default();
-        metadata.slot_index = Some(slot_index);
+        let metadata = CandidateMetadata { slot_index: Some(slot_index), ..Default::default() };
         
         Self::new(key, score, reason, 0.8, metadata)
     }
@@ -213,11 +214,14 @@ pub struct CandidateMetadata {
     /// For hot tier compatibility
     pub slot_index: Option<usize>,
     /// Access pattern
+    #[allow(dead_code)] // Access pattern classification system for predictive eviction
     pub access_pattern: Option<crate::cache::tier::warm::AccessPattern>,
     /// Creation timestamp
+    #[allow(dead_code)] // Creation timestamp for temporal analysis
     pub creation_time_ns: u64,
 }
 
+#[allow(dead_code)] // Complete candidate metadata implementation
 impl CandidateMetadata {
     /// Create metadata from access statistics
     #[inline(always)]

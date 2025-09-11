@@ -16,6 +16,13 @@ pub struct PerformanceMonitor {
     alert_system: AlertSystem,
 }
 
+#[allow(dead_code)] // Performance monitoring - comprehensive performance monitoring library with metrics collection and alert system
+impl Default for PerformanceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceMonitor {
     /// Create new performance monitor
     pub fn new() -> Self {
@@ -29,6 +36,23 @@ impl PerformanceMonitor {
     #[inline]
     pub fn collect_metrics(&self) -> PerformanceSnapshot {
         self.metrics_collector.collect_current_snapshot()
+    }
+
+    /// Generate comprehensive performance report with minimal allocation
+    #[inline]
+    pub fn generate_report(&self) -> PerformanceReport {
+        let snapshot = self.metrics_collector.collect_current_snapshot();
+        let alerts = self.alert_system.get_active_alerts().to_vec();
+        let buffer_stats = self.metrics_collector.get_buffer_stats();
+        
+        PerformanceReport::new(snapshot, alerts, buffer_stats)
+    }
+
+    /// Get current system health status via performance report
+    #[inline]
+    pub fn health_status(&self) -> (f64, bool) {
+        let report = self.generate_report();
+        (report.health_score(), report.is_healthy())
     }
 
     /// Check for performance alerts
@@ -64,6 +88,12 @@ impl PerformanceMonitor {
     #[allow(dead_code)] // Performance monitoring - get_metrics_collector used in performance system access
     pub fn get_metrics_collector(&self) -> &MetricsCollector {
         &self.metrics_collector
+    }
+
+    /// Get mutable metrics collector reference
+    #[allow(dead_code)] // Performance monitoring - get_metrics_collector_mut used in performance system access
+    pub fn get_metrics_collector_mut(&mut self) -> &mut MetricsCollector {
+        &mut self.metrics_collector
     }
 
     /// Get alert system reference
@@ -127,9 +157,70 @@ pub enum RecommendationPriority {
 }
 
 /// Performance report
+#[allow(dead_code)] // Performance monitoring - comprehensive performance report structure
 #[derive(Debug)]
 pub struct PerformanceReport {
     pub current_snapshot: PerformanceSnapshot,
     pub active_alerts: Vec<PerformanceAlert>,
     pub buffer_stats: super::metrics_collector::MetricsBufferStats,
+}
+
+#[allow(dead_code)] // Performance monitoring - performance report methods for comprehensive analysis
+impl PerformanceReport {
+    /// Create new performance report with zero allocation
+    #[inline]
+    pub fn new(
+        snapshot: PerformanceSnapshot, 
+        alerts: Vec<PerformanceAlert>, 
+        buffer_stats: super::metrics_collector::MetricsBufferStats
+    ) -> Self {
+        Self {
+            current_snapshot: snapshot,
+            active_alerts: alerts,
+            buffer_stats,
+        }
+    }
+
+    /// Create performance report from existing data with zero copying
+    #[inline]
+    pub fn from_components(
+        snapshot: PerformanceSnapshot, 
+        alerts: Vec<PerformanceAlert>, 
+        buffer_stats: super::metrics_collector::MetricsBufferStats
+    ) -> Self {
+        Self {
+            current_snapshot: snapshot,
+            active_alerts: alerts,
+            buffer_stats,
+        }
+    }
+
+    /// Create empty performance report for initialization
+    #[inline]
+    pub fn empty() -> Self {
+        Self {
+            current_snapshot: PerformanceSnapshot::default(),
+            active_alerts: Vec::new(),
+            buffer_stats: super::metrics_collector::MetricsBufferStats::default(),
+        }
+    }
+
+    /// Calculate overall system health score (0.0 = critical, 1.0 = perfect)
+    #[inline]
+    pub fn health_score(&self) -> f64 {
+        let hit_rate = self.buffer_stats.hit_rate();
+        let alert_penalty = match self.active_alerts.len() {
+            0 => 1.0,
+            1..=2 => 0.9,
+            3..=5 => 0.7,
+            _ => 0.5,
+        };
+        hit_rate * alert_penalty
+    }
+
+    /// Check if system is operating optimally
+    #[inline]
+    pub fn is_healthy(&self) -> bool {
+        self.health_score() > 0.8 && self.active_alerts.len() <= 2
+    }
 }

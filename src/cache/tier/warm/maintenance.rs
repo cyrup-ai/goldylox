@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 /// Maintenance task for background operations
+#[allow(dead_code)] // Warm tier maintenance - comprehensive maintenance task enum with all operation types
 #[derive(Debug, Clone)]
 pub enum MaintenanceTask {
     /// Cleanup expired entries

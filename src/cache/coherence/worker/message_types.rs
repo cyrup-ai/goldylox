@@ -60,7 +60,7 @@ pub enum CoherenceResponse<K: CacheKey + Default + bincode::Encode + bincode::De
     /// Successful serialization response
     SerializeSuccess {
         request_id: u64,
-        envelope: SerializationEnvelope<K, V>,
+        envelope: Box<SerializationEnvelope<K, V>>,
     },
     /// Error response for any operation
     Error {

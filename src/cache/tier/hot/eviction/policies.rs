@@ -58,16 +58,12 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             }
 
             if oldest_time != u64::MAX {
-                if let Some(slot) = memory_pool.get_slot(oldest_slot) {
-                    Some(EvictionCandidate::from_slot_index(
-                        oldest_slot,
-                        slot.key.clone(),
-                        1.0 / (oldest_time as f64 + 1.0),
-                        SelectionReason::LeastRecentlyUsed,
-                    ))
-                } else {
-                    None
-                }
+                memory_pool.get_slot(oldest_slot).map(|slot| EvictionCandidate::from_slot_index(
+                    oldest_slot,
+                    slot.key.clone(),
+                    1.0 / (oldest_time as f64 + 1.0),
+                    SelectionReason::LeastRecentlyUsed,
+                ))
             } else {
                 None
             }
@@ -80,8 +76,8 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
 
             // Fallback linear search
             let capacity = metadata.len();
-            for slot_idx in 0..capacity {
-                if metadata[slot_idx].is_occupied()
+            for (slot_idx, slot_metadata) in metadata.iter().enumerate().take(capacity) {
+                if slot_metadata.is_occupied()
                     && lru_tracker.timestamps[slot_idx] < oldest_time
                 {
                     oldest_time = lru_tracker.timestamps[slot_idx];
@@ -90,16 +86,12 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             }
 
             if oldest_time != u64::MAX {
-                if let Some(slot) = memory_pool.get_slot(oldest_slot) {
-                    Some(EvictionCandidate::from_slot_index(
-                        oldest_slot,
-                        slot.key.clone(),
-                        1.0 / (oldest_time as f64 + 1.0),
-                        SelectionReason::LeastRecentlyUsed,
-                    ))
-                } else {
-                    None
-                }
+                memory_pool.get_slot(oldest_slot).map(|slot| EvictionCandidate::from_slot_index(
+                    oldest_slot,
+                    slot.key.clone(),
+                    1.0 / (oldest_time as f64 + 1.0),
+                    SelectionReason::LeastRecentlyUsed,
+                ))
             } else {
                 None
             }
@@ -119,16 +111,12 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
         }
 
         if lowest_count != u8::MAX {
-            if let Some(slot) = memory_pool.get_slot(lowest_slot) {
-                Some(crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
+            memory_pool.get_slot(lowest_slot).map(|slot| crate::cache::types::eviction::candidate::EvictionCandidate::from_slot_index(
                     lowest_slot,
                     slot.key.clone(),
                     lowest_count as f64, // LFU score based on access count
                     crate::cache::traits::types_and_enums::SelectionReason::LeastFrequentlyUsed,
                 ))
-            } else {
-                None
-            }
         } else {
             None
         }

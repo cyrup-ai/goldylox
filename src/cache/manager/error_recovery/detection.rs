@@ -24,6 +24,12 @@ pub struct ErrorDetector {
     pub detection_state: DetectionState,
 }
 
+impl Default for ErrorDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorDetector {
     /// Create new error detector
     pub fn new() -> Self {
@@ -140,6 +146,12 @@ impl ErrorDetector {
         } else {
             HealthStatus::Failed
         }
+    }
+}
+
+impl Default for super::types::ErrorPatternDetector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

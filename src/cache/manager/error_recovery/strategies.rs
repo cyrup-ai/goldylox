@@ -91,7 +91,6 @@ impl<K: CacheKey, V: CacheValue> RecoveryStrategies<K, V> {
     }
 
     /// Execute recovery strategy with operation closure
-    #[allow(dead_code)] // Error recovery - execute_recovery used in error recovery execution
     #[inline]
     pub fn execute_recovery<F>(&self, strategy: RecoveryStrategy, operation: F) -> bool
     where
@@ -336,10 +335,7 @@ impl<K: CacheKey, V: CacheValue> RecoveryStrategies<K, V> {
                         
                         // Signal worker reduction through existing coordination mechanisms
                         // This would integrate with existing worker pool management
-                        match WorkerStatus::request_worker_scaling(0.75) { // Reduce to 75% capacity
-                            Ok(_) => true,
-                            Err(_) => false
-                        }
+                        WorkerStatus::request_worker_scaling(0.75).is_ok() // Reduce to 75% capacity
                     },
                 ];
 

@@ -80,9 +80,9 @@ impl MemoryPool {
                 // Successfully popped from free list
                 self.pool_allocation_stats.record_allocation();
 
-                return Ok(NonNull::new(head as *mut u8).ok_or_else(|| {
+                return NonNull::new(head as *mut u8).ok_or_else(|| {
                     CacheOperationError::resource_exhausted("Null pointer in free list")
-                })?);
+                });
             }
         }
     }

@@ -3,6 +3,8 @@
 //! This module defines advanced cache traits with GATs, HRTBs, and sophisticated
 //! performance optimization features for zero-cost abstractions.
 
+#![allow(dead_code)] // Cache traits - Core trait definitions for cache system abstractions
+
  // Internal trait definitions - may not be used in minimal API
 
 use std::fmt::Debug;

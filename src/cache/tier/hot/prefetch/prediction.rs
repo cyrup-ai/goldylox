@@ -3,6 +3,8 @@
 //! This module handles generating prefetch predictions based on detected
 //! patterns and current access context.
 
+#![allow(dead_code)] // Hot tier prefetch - Complete prediction engine library for pattern-based prefetch generation
+
 use super::types::{
     AccessPattern, DetectedPattern, PredictionConfidence, PrefetchConfig, PrefetchRequest,
 };
@@ -129,10 +131,11 @@ impl PredictionEngine {
             AccessPattern::Random => 0,
         };
 
-        (base_priority + frequency_bonus + pattern_bonus).min(255)
+        base_priority + frequency_bonus + pattern_bonus
     }
 
     /// Check if key should be prefetched based on patterns
+    #[allow(dead_code)] // Hot tier prefetch - Pattern-based prefetch decision engine for intelligent caching
     pub fn should_prefetch<K: CacheKey>(&self, key: &K, patterns: &[DetectedPattern<K>]) -> bool {
         patterns.iter().any(|pattern| {
             pattern.sequence.contains(key)
@@ -141,6 +144,7 @@ impl PredictionEngine {
     }
 
     /// Predict multiple steps ahead in a pattern
+    #[allow(dead_code)] // Hot tier prefetch - Multi-step sequence prediction for advanced prefetching strategies
     pub fn predict_sequence<K: CacheKey>(
         &self,
         pattern: &DetectedPattern<K>,
@@ -191,6 +195,7 @@ impl PredictionEngine {
     }
 
     /// Calculate prediction accuracy for a pattern
+    #[allow(dead_code)] // Hot tier prefetch - Pattern accuracy calculation for prediction engine optimization
     pub fn calculate_pattern_accuracy<K: CacheKey>(
         &self,
         pattern: &DetectedPattern<K>,
@@ -240,6 +245,7 @@ impl PredictionEngine {
     }
 
     /// Get prediction statistics for a set of patterns
+    #[allow(dead_code)] // Hot tier prefetch - Statistics collection for prediction engine performance analysis
     pub fn get_prediction_stats<K: CacheKey>(
         &self,
         patterns: &[DetectedPattern<K>],
@@ -264,6 +270,7 @@ impl PredictionEngine {
     }
 
     /// Calculate distribution of pattern types
+    #[allow(dead_code)] // Hot tier prefetch - Pattern distribution analysis for prediction strategy optimization
     fn calculate_pattern_distribution<K: CacheKey>(
         &self,
         patterns: &[DetectedPattern<K>],
@@ -287,6 +294,7 @@ impl PredictionEngine {
 
 /// Statistics for prediction engine
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Hot tier prefetch - Prediction engine statistics structure for performance monitoring
 pub struct PredictionEngineStats {
     pub total_patterns: usize,
     pub high_confidence_patterns: usize,
@@ -296,6 +304,7 @@ pub struct PredictionEngineStats {
 
 /// Distribution of pattern types
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // Hot tier prefetch - Pattern distribution metrics for prediction engine analysis
 pub struct PatternDistribution {
     pub sequential: usize,
     pub temporal: usize,

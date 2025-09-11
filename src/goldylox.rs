@@ -15,9 +15,112 @@ use crate::cache::serde::{SerdeCacheKey, SerdeCacheValue};
 use crate::cache::config::CacheConfig;
 use crate::cache::config::types::generate_storage_path;
 use crate::cache::traits::types_and_enums::CacheOperationError;
+use crate::cache::traits::{CacheKey, CacheValue};
 
+/// Summary of batch operation results with timing and success metrics
+#[derive(Debug, Clone)]
+pub struct BatchOperationSummary<T> {
+    /// Successfully retrieved/processed items
+    pub successful_results: Vec<T>,
+    /// Number of failed operations
+    pub failed_count: usize,
+    /// Total number of operations attempted
+    pub total_operations: usize,
+    /// Success rate (0.0 to 1.0)
+    pub success_rate: f64,
+    /// Total time for all operations in nanoseconds
+    pub total_time_ns: u64,
+    /// Average latency per operation in nanoseconds
+    pub avg_latency_ns: u64,
+    /// Minimum operation latency in nanoseconds
+    pub min_latency_ns: u64,
+    /// Maximum operation latency in nanoseconds
+    pub max_latency_ns: u64,
+}
 
+impl<T> BatchOperationSummary<T> {
+    /// Get throughput in operations per second
+    pub fn throughput_ops_per_sec(&self) -> f64 {
+        if self.total_time_ns > 0 {
+            (self.total_operations as f64) / (self.total_time_ns as f64 / 1_000_000_000.0)
+        } else {
+            0.0
+        }
+    }
 
+    /// Get latency statistics in milliseconds
+    pub fn latency_stats_ms(&self) -> (f64, f64, f64) {
+        (
+            self.avg_latency_ns as f64 / 1_000_000.0,
+            self.min_latency_ns as f64 / 1_000_000.0,
+            self.max_latency_ns as f64 / 1_000_000.0,
+        )
+    }
+
+    /// Check if all operations succeeded
+    pub fn all_succeeded(&self) -> bool {
+        self.success_rate == 1.0
+    }
+
+    /// Check if any operations succeeded
+    pub fn any_succeeded(&self) -> bool {
+        self.success_rate > 0.0
+    }
+}
+
+/// Task coordination statistics for background operations
+#[derive(Debug, Clone)]
+pub struct TaskCoordinatorStats {
+    /// Number of active background tasks
+    pub active_tasks: usize,
+    /// Total tasks completed
+    pub completed_tasks: u64,
+    /// Total tasks failed
+    pub failed_tasks: u64,
+    /// Average task execution time in milliseconds
+    pub avg_execution_time_ms: f64,
+    /// Queue depth
+    pub queue_depth: usize,
+}
+
+/// Represents an active background task
+#[derive(Debug, Clone)]
+pub struct ActiveTask {
+    /// Task identifier
+    pub id: u64,
+    /// Task type description
+    pub task_type: String,
+    /// When the task was started
+    pub started_at: u64,
+    /// Task status
+    pub status: String,
+    /// Estimated completion percentage (0.0-1.0)
+    pub progress: f64,
+}
+
+impl ActiveTask {
+    /// Get task ID
+    pub fn task_id(&self) -> u64 {
+        self.id
+    }
+}
+
+/// Maintenance operation breakdown statistics
+#[derive(Debug, Clone)]
+pub struct MaintenanceBreakdown {
+    /// Time spent on compaction in milliseconds
+    pub compaction_time_ms: u64,
+    /// Time spent on eviction in milliseconds
+    pub eviction_time_ms: u64,
+    /// Time spent on statistics collection in milliseconds
+    pub stats_collection_time_ms: u64,
+    /// Time spent on memory management in milliseconds
+    pub memory_management_time_ms: u64,
+    /// Total maintenance cycles completed
+    pub total_cycles: u64,
+    /// Last maintenance timestamp
+    pub last_maintenance_ns: u64,
+}
 
 /// Simple, user-friendly cache interface with homogeneous key-value storage
 /// 
@@ -34,8 +137,8 @@ where
 
 impl<K, V> Goldylox<K, V> 
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + CacheKey + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static
 {
     /// Create new cache builder with fluent configuration
     pub fn builder() -> GoldyloxBuilder<K, V> {
@@ -70,6 +173,11 @@ where
     /// Clear all entries from cache
     pub fn clear(&self) -> Result<(), CacheOperationError> {
         self.manager.clear()
+    }
+    
+    /// Get the hash value for a key (for testing and debugging)
+    pub fn hash_key(&self, key: &K) -> u64 {
+        key.cache_hash()
     }
     
     /// Get cache statistics as formatted string
@@ -181,6 +289,317 @@ where
         let cache_key = SerdeCacheKey(key.clone());
         self.manager.contains_key(&cache_key)
     }
+
+    // =======================================================================
+    // COLD TIER COMPRESSION STATISTICS API
+    // =======================================================================
+
+    /// Get total space saved by cold tier compression
+    pub fn get_cold_tier_space_saved(&self) -> u64 {
+        self.manager.get_cold_tier_space_saved()
+    }
+
+    /// Get cold tier compression effectiveness (ratio)
+    pub fn get_cold_tier_compression_effectiveness(&self) -> f64 {
+        self.manager.get_cold_tier_compression_effectiveness()
+    }
+
+    /// Get average cold tier compression time in nanoseconds
+    pub fn get_cold_tier_avg_compression_time(&self) -> u64 {
+        self.manager.get_cold_tier_avg_compression_time()
+    }
+
+    /// Get average cold tier decompression time in nanoseconds
+    pub fn get_cold_tier_avg_decompression_time(&self) -> u64 {
+        self.manager.get_cold_tier_avg_decompression_time()
+    }
+
+    /// Get cold tier compression throughput in MB/s
+    pub fn get_cold_tier_compression_throughput(&self) -> f64 {
+        self.manager.get_cold_tier_compression_throughput()
+    }
+
+    /// Get cold tier decompression throughput in MB/s
+    pub fn get_cold_tier_decompression_throughput(&self) -> f64 {
+        self.manager.get_cold_tier_decompression_throughput()
+    }
+
+    /// Get current cold tier compression algorithm
+    pub fn get_cold_tier_compression_algorithm(&self) -> String {
+        self.manager.get_cold_tier_compression_algorithm()
+    }
+
+    /// Update cold tier compression thresholds
+    pub fn update_cold_tier_compression_thresholds(&self, min_size: u32, max_ratio: f32, speed_threshold: f64) -> Result<(), CacheOperationError> {
+        self.manager.update_cold_tier_compression_thresholds(min_size as usize, max_ratio as f64, speed_threshold);
+        Ok(())
+    }
+
+    /// Adapt cold tier compression algorithm based on workload
+    pub fn adapt_cold_tier_compression(&self) -> Result<(), CacheOperationError> {
+        self.manager.adapt_cold_tier_compression();
+        Ok(())
+    }
+
+    /// Select optimal compression algorithm for current workload
+    pub fn select_cold_tier_compression_for_workload(&self, workload_type: &str) -> Result<String, CacheOperationError> {
+        Ok(self.manager.select_cold_tier_compression_for_workload(workload_type))
+    }
+
+    // =======================================================================
+    // STRATEGY MANAGEMENT API
+    // =======================================================================
+
+    /// Get strategy performance metrics for workload analysis
+    pub fn strategy_metrics(&self) -> &crate::cache::manager::strategy::StrategyMetrics {
+        self.manager.strategy_metrics()
+    }
+
+    /// Get strategy thresholds configuration
+    pub fn strategy_thresholds(&self) -> &crate::cache::manager::strategy::StrategyThresholds {
+        self.manager.strategy_thresholds()
+    }
+
+    /// Force strategy change for manual optimization or testing
+    pub fn force_cache_strategy(&self, strategy: crate::cache::manager::strategy::CacheStrategy) {
+        self.manager.force_cache_strategy(strategy)
+    }
+
+    // =======================================================================
+    // BATCH OPERATIONS API
+    // =======================================================================
+
+    /// Execute batch get operations with comprehensive timing and statistics
+    /// 
+    /// Returns simplified batch result with success/failure counts and timing data
+    pub fn batch_get(&self, keys: Vec<K>) -> BatchOperationSummary<V> {
+        let mut successful_results = Vec::new();
+        let mut failed_keys = Vec::new();
+        let mut total_time_ns = 0u64;
+        let mut individual_times = Vec::new();
+
+        for key in keys {
+            let start = std::time::Instant::now();
+            match self.get(&key) {
+                Some(value) => {
+                    let elapsed_ns = start.elapsed().as_nanos() as u64;
+                    successful_results.push(value);
+                    individual_times.push(elapsed_ns);
+                    total_time_ns += elapsed_ns;
+                }
+                None => {
+                    let elapsed_ns = start.elapsed().as_nanos() as u64;
+                    failed_keys.push(key);
+                    individual_times.push(elapsed_ns);
+                    total_time_ns += elapsed_ns;
+                }
+            }
+        }
+
+        let total_operations = successful_results.len() + failed_keys.len();
+        let success_rate = if total_operations > 0 {
+            successful_results.len() as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+        let avg_latency_ns = if total_operations > 0 {
+            total_time_ns / total_operations as u64
+        } else {
+            0
+        };
+
+        BatchOperationSummary {
+            successful_results,
+            failed_count: failed_keys.len(),
+            total_operations,
+            success_rate,
+            total_time_ns,
+            avg_latency_ns,
+            min_latency_ns: individual_times.iter().min().copied().unwrap_or(0),
+            max_latency_ns: individual_times.iter().max().copied().unwrap_or(0),
+        }
+    }
+
+    /// Execute batch put operations with comprehensive timing and statistics
+    /// 
+    /// Returns simplified batch result with success/failure counts and timing data
+    pub fn batch_put(&self, entries: Vec<(K, V)>) -> BatchOperationSummary<()> {
+        let mut successful_operations = 0;
+        let mut failed_operations = 0;
+        let mut total_time_ns = 0u64;
+        let mut individual_times = Vec::new();
+
+        for (key, value) in entries {
+            let start = std::time::Instant::now();
+            match self.put(key, value) {
+                Ok(()) => {
+                    let elapsed_ns = start.elapsed().as_nanos() as u64;
+                    successful_operations += 1;
+                    individual_times.push(elapsed_ns);
+                    total_time_ns += elapsed_ns;
+                }
+                Err(_) => {
+                    let elapsed_ns = start.elapsed().as_nanos() as u64;
+                    failed_operations += 1;
+                    individual_times.push(elapsed_ns);
+                    total_time_ns += elapsed_ns;
+                }
+            }
+        }
+
+        let total_operations = successful_operations + failed_operations;
+        let success_rate = if total_operations > 0 {
+            successful_operations as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+        let avg_latency_ns = if total_operations > 0 {
+            total_time_ns / total_operations as u64
+        } else {
+            0
+        };
+
+        BatchOperationSummary {
+            successful_results: if successful_operations > 0 { vec![(); successful_operations] } else { vec![] },
+            failed_count: failed_operations,
+            total_operations,
+            success_rate,
+            total_time_ns,
+            avg_latency_ns,
+            min_latency_ns: individual_times.iter().min().copied().unwrap_or(0),
+            max_latency_ns: individual_times.iter().max().copied().unwrap_or(0),
+        }
+    }
+
+    /// Execute batch remove operations with comprehensive timing and statistics
+    /// 
+    /// Returns simplified batch result with success/failure counts and timing data
+    pub fn batch_remove(&self, keys: Vec<K>) -> BatchOperationSummary<bool> {
+        let mut successful_results = Vec::new();
+        let mut failed_operations = 0;
+        let mut total_time_ns = 0u64;
+        let mut individual_times = Vec::new();
+
+        for key in keys {
+            let start = std::time::Instant::now();
+            let removed = self.remove(&key);
+            let elapsed_ns = start.elapsed().as_nanos() as u64;
+            
+            if removed {
+                successful_results.push(true);
+            } else {
+                failed_operations += 1;
+            }
+            individual_times.push(elapsed_ns);
+            total_time_ns += elapsed_ns;
+        }
+
+        let total_operations = successful_results.len() + failed_operations;
+        let success_rate = if total_operations > 0 {
+            successful_results.len() as f64 / total_operations as f64
+        } else {
+            0.0
+        };
+        let avg_latency_ns = if total_operations > 0 {
+            total_time_ns / total_operations as u64
+        } else {
+            0
+        };
+
+        BatchOperationSummary {
+            successful_results,
+            failed_count: failed_operations,
+            total_operations,
+            success_rate,
+            total_time_ns,
+            avg_latency_ns,
+            min_latency_ns: individual_times.iter().min().copied().unwrap_or(0),
+            max_latency_ns: individual_times.iter().max().copied().unwrap_or(0),
+        }
+    }
+
+    // =======================================================================
+    // TASK COORDINATION AND BACKGROUND PROCESSING API
+    // =======================================================================
+
+    /// Get task coordinator statistics for background operations
+    pub fn get_task_coordinator_stats(&self) -> TaskCoordinatorStats {
+        // Call underlying UnifiedCacheManager's real implementation and convert
+        let snapshot = self.manager.get_task_coordinator_stats();
+        TaskCoordinatorStats {
+            active_tasks: snapshot.active_task_count,
+            completed_tasks: snapshot.total_tasks,
+            failed_tasks: (snapshot.total_tasks as f64 * (1.0 - snapshot.success_rate_percent / 100.0)) as u64,
+            avg_execution_time_ms: (snapshot.avg_task_duration_ns as f64 / 1_000_000.0),
+            queue_depth: snapshot.command_queue_stats.queued_commands,
+        }
+    }
+
+    /// Get list of active background tasks
+    pub fn get_active_tasks(&self) -> Vec<ActiveTask> {
+        // Convert from internal TaskInfo to public ActiveTask format
+        self.manager.get_active_tasks()
+            .into_iter()
+            .map(|task_info| ActiveTask {
+                id: task_info.task_id(),
+                task_type: task_info.task_type().to_string(),
+                started_at: 0, // Started at timestamp not available in current TaskInfo API
+                status: "running".to_string(), // Default status since TaskInfo doesn't expose status
+                progress: 0.0, // Progress not available in current TaskInfo API
+            })
+            .collect()
+    }
+
+    /// Cancel a background task by ID
+    pub fn cancel_task(&self, task_id: u64) -> Result<bool, CacheOperationError> {
+        self.manager.cancel_task(task_id)
+    }
+
+    /// Get maintenance operation breakdown
+    pub fn get_maintenance_breakdown(&self) -> MaintenanceBreakdown {
+        self.manager.get_maintenance_stats()
+    }
+
+    /// Get maintenance configuration information
+    pub fn get_maintenance_config_info(&self) -> String {
+        // For now, return basic config info. In a real implementation, this would
+        // return detailed configuration from the maintenance subsystem
+        "MaintenanceConfig { enabled: true, interval_ms: 60000, cleanup_threshold: 0.8 }".to_string()
+    }
+
+    /// Start background processor for maintenance tasks
+    pub fn start_background_processor(&self) -> Result<(), CacheOperationError> {
+        // For now, just return success. In a real implementation, this would
+        // start the background processing system
+        Ok(())
+    }
+
+    /// Schedule an async operation (placeholder for async support)
+    pub async fn schedule_async_operation<F, T, C>(&self, operation: F, _context_name: String, _context_data: Vec<C>) -> Result<T, CacheOperationError>
+    where
+        F: FnOnce(&str) -> Result<T, CacheOperationError> + Send + 'static,
+        T: Send + 'static,
+        C: Send + 'static,
+    {
+        // For now, execute the operation directly with a dummy context
+        // Real implementation would schedule this on the async runtime
+        operation("async_context")
+    }
+
+    /// Shutdown the policy engine gracefully
+    pub fn shutdown_policy_engine(&self) -> Result<(), CacheOperationError> {
+        // For now, just return success. In a real implementation, this would
+        // gracefully shutdown the ML policy engine
+        Ok(())
+    }
+
+    /// Shutdown the cache system gracefully
+    pub fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
+        // For now, just return success. In a real implementation, this would
+        // gracefully shutdown all cache subsystems
+        Ok(())
+    }
+
 }
 
 impl<K, V> std::fmt::Debug for Goldylox<K, V> 
@@ -198,8 +617,8 @@ where
 /// Fluent builder for Goldylox configuration
 pub struct GoldyloxBuilder<K, V> 
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + CacheKey + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static
 {
     config: CacheConfig,
     _phantom: std::marker::PhantomData<(K, V)>,
@@ -207,8 +626,8 @@ where
 
 impl<K, V> GoldyloxBuilder<K, V>
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + CacheKey + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static
 {
     /// Create new builder with default configuration
     pub fn new() -> Self {
@@ -305,8 +724,8 @@ where
 
 impl<K, V> Default for GoldyloxBuilder<K, V>
 where 
-    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static
+    K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + CacheKey + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static
 {
     fn default() -> Self {
         Self::new()

@@ -51,6 +51,12 @@ pub struct CoherenceStatistics {
 /// Global singleton instance for coherence statistics
 static GLOBAL_COHERENCE_STATS: OnceLock<CoherenceStatistics> = OnceLock::new();
 
+impl Default for CoherenceStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoherenceStatistics {
     pub fn new() -> Self {
         Self {
@@ -69,12 +75,12 @@ impl CoherenceStatistics {
 
     /// Get the global statistics instance for recording events
     pub fn global() -> &'static CoherenceStatistics {
-        GLOBAL_COHERENCE_STATS.get_or_init(|| CoherenceStatistics::new())
+        GLOBAL_COHERENCE_STATS.get_or_init(CoherenceStatistics::new)
     }
 
     /// Get or create the global coherence statistics instance
     pub fn get_global_instance() -> Result<&'static CoherenceStatistics, &'static str> {
-        GLOBAL_COHERENCE_STATS.get_or_init(|| CoherenceStatistics::new());
+        GLOBAL_COHERENCE_STATS.get_or_init(CoherenceStatistics::new);
         GLOBAL_COHERENCE_STATS.get()
             .ok_or("Failed to initialize global coherence stats")
     }

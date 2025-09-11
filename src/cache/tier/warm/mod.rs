@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier - Complete warm cache library with lock-free skiplist, concurrent access, sophisticated eviction algorithms, and access pattern analysis
+
 //! Lock-free warm tier cache with crossbeam skiplist for concurrent shared access
 //!
 //! This module implements the L2 Warm Tier cache using advanced lock-free data structures,

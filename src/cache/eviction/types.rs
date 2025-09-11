@@ -16,8 +16,8 @@ pub enum PolicyType {
     AdaptiveLFU,
     #[allow(dead_code)] // Eviction policies - two queue used in policy switching
     TwoQueue,
-    #[allow(dead_code)] // Eviction policies - ARC used in policy switching
-    ARC,
+    #[allow(dead_code)] // Eviction policies - Arc used in policy switching
+    Arc,
     #[allow(dead_code)] // Eviction policies - ML predictive used in policy switching
     MLPredictive,
 }
@@ -25,11 +25,11 @@ pub enum PolicyType {
 /// Write strategy enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteStrategy {
-    WriteThrough,
-    #[allow(dead_code)] // Write policies - write back used in write strategy configuration
-    WriteBack,
-    #[allow(dead_code)] // Write policies - write behind used in write strategy configuration
-    WriteBehind,
+    Through,
+    #[allow(dead_code)] // Write policies - back used in write strategy configuration
+    Back,
+    #[allow(dead_code)] // Write policies - behind used in write strategy configuration
+    Behind,
 }
 
 /// Consistency level requirements
@@ -80,7 +80,7 @@ impl Default for PolicyType {
 
 impl Default for WriteStrategy {
     fn default() -> Self {
-        Self::WriteThrough
+        Self::Through
     }
 }
 

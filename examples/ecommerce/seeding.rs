@@ -11,10 +11,8 @@ use std::collections::BTreeMap;
 
 /// Seed the product catalog with realistic e-commerce data
 pub fn seed_product_catalog(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
-    let categories = vec![
-        "Electronics", "Clothing", "Home & Garden", "Sports", "Books", 
-        "Health", "Automotive", "Toys", "Beauty", "Groceries"
-    ];
+    let categories = ["Electronics", "Clothing", "Home & Garden", "Sports", "Books", 
+        "Health", "Automotive", "Toys", "Beauty", "Groceries"];
     
     let mut rng = rng();
     

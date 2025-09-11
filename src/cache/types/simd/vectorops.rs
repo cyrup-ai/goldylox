@@ -1,3 +1,5 @@
+#![allow(dead_code)] // SIMD Types - Complete vectorized mathematical operations library with AVX2/SSE2 optimization, runtime CPU detection, statistical analysis, filtering, and normalization
+
 //! SIMD-optimized vector operations for cache management
 //!
 //! This module provides hardware SIMD acceleration for mathematical operations
@@ -52,7 +54,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for find_min_f64
     #[inline(always)]
-    
     fn find_min_f64_scalar(values: &[f64]) -> Option<f64> {
         values.iter().fold(None, |acc, &x| match acc {
             None => Some(x),
@@ -111,7 +112,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for find_max_f64
     #[inline(always)]
-    
     fn find_max_f64_scalar(values: &[f64]) -> Option<f64> {
         values.iter().fold(None, |acc, &x| match acc {
             None => Some(x),
@@ -170,7 +170,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for sum_f64
     #[inline(always)]
-    
     fn sum_f64_scalar(values: &[f64]) -> f64 {
         values.iter().sum()
     }
@@ -291,7 +290,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for scale_values
     #[inline(always)]
-    
     fn scale_values_scalar(values: &mut [f64], scale_factor: f64) {
         for value in values.iter_mut() {
             *value *= scale_factor;
@@ -340,7 +338,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for add_arrays
     #[inline(always)]
-    
     fn add_arrays_scalar(a: &[f64], b: &[f64], result: &mut [f64]) {
         assert_eq!(a.len(), b.len());
         assert_eq!(a.len(), result.len());
@@ -402,7 +399,6 @@ impl SimdVectorOps {
 
     /// Scalar fallback for dot_product
     #[inline(always)]
-    
     fn dot_product_scalar(a: &[f64], b: &[f64]) -> f64 {
         assert_eq!(a.len(), b.len());
         a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()

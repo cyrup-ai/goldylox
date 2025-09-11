@@ -3,6 +3,8 @@
 //! This module provides frequency estimation capabilities using exponential
 //! moving averages for tracking access frequency patterns.
 
+#![allow(dead_code)] // Warm tier access tracking - Complete frequency estimation library for access pattern analysis
+
 use crossbeam_utils::atomic::AtomicCell;
 
 use crate::cache::tier::warm::core::WarmCacheKey;
@@ -19,6 +21,12 @@ pub struct FrequencyEstimator<K: CacheKey> {
     update_interval_ns: u64,
     /// Phantom data for generic parameter
     _phantom: std::marker::PhantomData<K>,
+}
+
+impl<K: CacheKey> Default for FrequencyEstimator<K> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K: CacheKey> FrequencyEstimator<K> {

@@ -18,10 +18,18 @@
 pub mod goldylox;
 pub mod prelude;
 
-// Internal implementation modules (crate private)
-pub(crate) mod cache;
+// Cache implementation modules - traits are public for user implementations
+pub mod cache;
 pub(crate) mod telemetry;
 
 // Re-export the public API at the crate root for convenience
 pub use goldylox::{Goldylox, GoldyloxBuilder};
 pub use prelude::*;
+pub use cache::manager::strategy::CacheStrategy;
+
+// Public cache traits and types that users need to implement
+pub mod traits {
+    pub use crate::cache::traits::{CacheKey, CacheValue};
+    pub use crate::cache::traits::{CacheValueMetadata, ValueMetadata};
+    pub use crate::cache::traits::types_and_enums::CompressionHint;
+}

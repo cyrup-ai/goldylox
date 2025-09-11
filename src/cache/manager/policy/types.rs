@@ -55,9 +55,9 @@ pub struct ReplacementPolicies<K: crate::cache::traits::CacheKey> {
 /// Replacement algorithm types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplacementAlgorithm {
-    LRU,
-    LFU,
-    ARC,
+    Lru,
+    Lfu,
+    Arc,
     MLBased,
 }
 
@@ -185,6 +185,12 @@ impl<T> LockFreeCircularBuffer<T> {
 #[derive(Debug)]
 pub struct LockFreeQueue<T> {
     queue: ArrayQueue<T>,
+}
+
+impl<T> Default for LockFreeQueue<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> LockFreeQueue<T> {

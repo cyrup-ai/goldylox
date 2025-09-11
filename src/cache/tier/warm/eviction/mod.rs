@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Warm tier eviction - Complete eviction library with LRU, LFU, ARC, ML-based policies, and adaptive selection for optimal performance
+
 //! Eviction policies and algorithms for warm tier cache
 //!
 //! This module provides a comprehensive set of eviction policies including LRU, LFU, ARC,

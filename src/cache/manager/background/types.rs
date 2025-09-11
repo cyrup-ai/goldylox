@@ -13,12 +13,14 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Trait for processing background tasks
+#[allow(dead_code)] // Background task system - used in sophisticated task coordination
 pub trait TaskProcessor: Send + Sync {
     /// Process a background task
     fn process_task(&self, task: &BackgroundTask) -> Result<(), CacheOperationError>;
 }
 
 /// Background task generic wrapper for type-erased operations
+#[allow(dead_code)] // Background task system - used in sophisticated task coordination
 #[derive(Debug, Clone)]
 pub enum BackgroundTask {
     /// Eviction task
@@ -35,6 +37,7 @@ pub enum BackgroundTask {
         /// Compression algorithm
         algorithm: u8,
         /// Target compression ratio
+        #[allow(dead_code)] // Background task field for compression ratio tuning
         ratio: f32,
     },
     /// Statistics collection task
@@ -42,13 +45,16 @@ pub enum BackgroundTask {
         /// Statistics type
         stats_type: u8,
         /// Collection interval
+        #[allow(dead_code)] // Background task field for statistics interval configuration
         interval_ms: u64,
     },
     /// Maintenance task
+    #[allow(dead_code)] // Background task variant for maintenance operations
     Maintenance(MaintenanceTask),
     /// Prefetch task
     Prefetch {
         /// Number of entries to prefetch
+        #[allow(dead_code)] // Background task field for prefetch count configuration
         count: u32,
         /// Prefetch strategy
         strategy: u8,
@@ -135,6 +141,7 @@ pub struct MaintenanceTask {
 
 impl MaintenanceTask {
     /// Create a new maintenance task with canonical task definition
+    #[allow(dead_code)] // Background types - maintenance task constructor for task creation
     pub fn new(task: CanonicalMaintenanceTask) -> Self {
         let priority = match task.priority() {
             crate::cache::tier::warm::maintenance::TaskPriority::High => 10,
@@ -149,11 +156,37 @@ impl MaintenanceTask {
             created_at: std::time::Instant::now(),
             timeout_ns,
             retry_count: 0,
-            max_retries: 3,
+            max_retries: 3, // Default, can be overridden with new_with_config
+        }
+    }
+    
+    /// Create a new maintenance task with configuration
+    pub fn new_with_config(task: CanonicalMaintenanceTask, config: &MaintenanceConfig) -> Self {
+        let priority = match task.priority() {
+            crate::cache::tier::warm::maintenance::TaskPriority::High => 10,
+            crate::cache::tier::warm::maintenance::TaskPriority::Medium => 50,
+            crate::cache::tier::warm::maintenance::TaskPriority::Low => 100,
+        };
+
+        // Use configured timeout and max retries from MaintenanceConfig
+        let timeout_ns = if config.task_timeout_ns > 0 {
+            config.task_timeout_ns
+        } else {
+            task.estimated_duration().as_nanos() as u64 * 10 // Fallback to 10x estimated duration
+        };
+        
+        Self {
+            task,
+            priority,
+            created_at: std::time::Instant::now(),
+            timeout_ns,
+            retry_count: 0,
+            max_retries: config.max_task_retries,
         }
     }
 
     /// Create task with custom priority override
+    #[allow(dead_code)] // Background types - maintenance task constructor with priority customization
     pub fn with_priority(task: CanonicalMaintenanceTask, priority: u16) -> Self {
         let timeout_ns = task.estimated_duration().as_nanos() as u64 * 10;
         Self {

@@ -17,15 +17,26 @@ use crate::cache::traits::CacheKey;
 
 /// Enhanced prefetch success tracking with atomic counters from policy engine version
 #[derive(Debug)]
+#[allow(dead_code)] // Hot tier prefetch - Success tracking system for prefetch prediction analysis
 pub struct EnhancedPrefetchSuccessTracker {
     /// Total predictions made (atomic for thread safety)
+    #[allow(dead_code)] // Hot tier prefetch - Atomic counter for total predictions made
     pub predictions_made: std::sync::atomic::AtomicU64,
     /// Predictions that resulted in cache hits (atomic)  
+    #[allow(dead_code)] // Hot tier prefetch - Atomic counter for successful prediction hits
     pub predictions_hit: std::sync::atomic::AtomicU64,
     /// False positive predictions (atomic)
+    #[allow(dead_code)] // Hot tier prefetch - Atomic counter for false positive predictions
     pub false_positives: std::sync::atomic::AtomicU64,
     /// Average prediction accuracy (atomic cell for float updates)
+    #[allow(dead_code)] // Hot tier prefetch - Atomic cell for tracking prediction accuracy metrics
     pub avg_prediction_accuracy: crossbeam_utils::atomic::AtomicCell<f32>,
+}
+
+impl Default for EnhancedPrefetchSuccessTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EnhancedPrefetchSuccessTracker {
@@ -38,6 +49,7 @@ impl EnhancedPrefetchSuccessTracker {
         }
     }
     
+    #[allow(dead_code)] // Hot tier prefetch - Method to record prediction results for accuracy tracking
     pub fn record_prediction(&self, hit: bool) {
         self.predictions_made.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if hit {
@@ -165,7 +177,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
         }
 
         // Detect patterns periodically
-        if self.access_history.len() % 50 == 0 {
+        if self.access_history.len().is_multiple_of(50) {
             self.detect_patterns();
         }
 
@@ -262,6 +274,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
     }
 
     /// Record prefetch result for learning (enhanced with atomic success tracking)
+    #[allow(dead_code)] // Hot tier prefetch - Method to record prefetch results for learning and statistics
     pub fn record_prefetch_result(&mut self, key: &K, hit: bool) {
         // Update basic stats
         if hit {
@@ -286,6 +299,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
     }
 
     /// Update pattern confidence based on prefetch result
+    #[allow(dead_code)] // Hot tier prefetch - Internal method to update pattern confidence based on prefetch results
     fn update_pattern_confidence_for_key(&mut self, key: &K, hit: bool) {
         for pattern in &mut self.patterns {
             if pattern.sequence.contains(key) {
@@ -296,6 +310,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
     }
     
     /// Update ML regression coefficients based on prediction accuracy (enhanced ML feature)
+    #[allow(dead_code)] // Hot tier prefetch - Internal ML method to update regression coefficients for prediction accuracy
     fn update_regression_coefficients(&mut self, prediction_success: bool) {
         let learning_rate = self.learning_rate.load();
         let error = if prediction_success { -0.1 } else { 0.1 }; // Gradient descent
@@ -376,32 +391,38 @@ impl<K: CacheKey> PrefetchPredictor<K> {
     }
 
     /// Get queue status
+    #[allow(dead_code)] // Hot tier prefetch - Method to get prefetch queue status and utilization
     pub fn queue_status(&self) -> (usize, usize) {
         self.queue_manager.queue_status()
     }
 
     /// Get detailed queue statistics
+    #[allow(dead_code)] // Hot tier prefetch - Method to get detailed queue statistics
     pub fn get_queue_stats(&self) -> super::queue_manager::QueueStats {
         self.queue_manager.get_queue_stats()
     }
 
     /// Get pattern statistics
+    #[allow(dead_code)] // Hot tier prefetch - Method to get pattern detection and prediction statistics
     pub fn get_pattern_stats(&self) -> super::prediction::PredictionEngineStats {
         self.prediction_engine.get_prediction_stats(&self.patterns)
     }
 
     /// Update configuration
+    #[allow(dead_code)] // Hot tier prefetch - Method to update prefetch configuration dynamically
     pub fn update_config(&mut self, new_config: PrefetchConfig) {
         self.config = new_config.clone();
         self.queue_manager.update_config(new_config);
     }
 
     /// Get current configuration
+    #[allow(dead_code)] // Hot tier prefetch - Method to get current prefetch configuration
     pub fn get_config(&self) -> &PrefetchConfig {
         &self.config
     }
 
     /// Remove expired requests
+    #[allow(dead_code)] // Hot tier prefetch - Method to cleanup expired prefetch requests for memory management
     pub fn cleanup_expired_requests(
         &mut self,
         current_time_ns: u64,
@@ -412,11 +433,13 @@ impl<K: CacheKey> PrefetchPredictor<K> {
     }
 
     /// Get access history length
+    #[allow(dead_code)] // Hot tier prefetch - Method to get access history length for pattern analysis
     pub fn access_history_len(&self) -> usize {
         self.access_history.len()
     }
 
     /// Get number of detected patterns
+    #[allow(dead_code)] // Hot tier prefetch - Method to get count of detected patterns
     pub fn pattern_count(&self) -> usize {
         self.patterns.len()
     }

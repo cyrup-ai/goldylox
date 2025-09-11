@@ -3,8 +3,7 @@
 //! This module contains all data structures used in the e-commerce example,
 //! including products, sessions, analytics, and node representations.
 
-use goldylox::Goldylox;
-use serde::{Serialize, Deserialize};
+use goldylox::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::{Arc, atomic::{AtomicU64, AtomicBool}};
 
@@ -85,4 +84,82 @@ pub fn current_timestamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+// CacheValue implementations for all types
+impl CacheValue for Product {
+    type Metadata = CacheValueMetadata;
+
+    fn estimated_size(&self) -> usize {
+        std::mem::size_of::<Product>() + self.name.len() + self.description.len() + self.category.len()
+    }
+
+    fn is_expensive(&self) -> bool {
+        self.price > 100.0 // High-value products are more expensive to compute
+    }
+
+    fn compression_hint(&self) -> CompressionHint {
+        if self.description.len() > 512 {
+            CompressionHint::Auto
+        } else {
+            CompressionHint::Disable
+        }
+    }
+
+    fn metadata(&self) -> Self::Metadata {
+        CacheValueMetadata::from_cache_value(self)
+    }
+}
+
+impl CacheValue for UserSession {
+    type Metadata = CacheValueMetadata;
+
+    fn estimated_size(&self) -> usize {
+        std::mem::size_of::<UserSession>() + self.session_id.len() + std::mem::size_of::<u64>() + 
+        self.location.len() + (self.shopping_cart.len() * std::mem::size_of::<CartItem>()) +
+        self.browsing_history.len() * std::mem::size_of::<u64>() +
+        self.preferences.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>()
+    }
+
+    fn is_expensive(&self) -> bool {
+        self.shopping_cart.len() > 10 // Sessions with large carts are expensive to recreate
+    }
+
+    fn compression_hint(&self) -> CompressionHint {
+        if self.shopping_cart.len() > 50 {
+            CompressionHint::Auto
+        } else {
+            CompressionHint::Disable
+        }
+    }
+
+    fn metadata(&self) -> Self::Metadata {
+        CacheValueMetadata::from_cache_value(self)
+    }
+}
+
+impl CacheValue for AnalyticsEvent {
+    type Metadata = CacheValueMetadata;
+
+    fn estimated_size(&self) -> usize {
+        std::mem::size_of::<AnalyticsEvent>() + self.event_type.len() + std::mem::size_of::<u64>() +
+        self.properties.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() +
+        self.raw_data.len() + self.event_id.len() + self.session_id.len()
+    }
+
+    fn is_expensive(&self) -> bool {
+        self.properties.len() > 20 // Events with lots of data are expensive
+    }
+
+    fn compression_hint(&self) -> CompressionHint {
+        if self.properties.len() > 10 {
+            CompressionHint::Auto
+        } else {
+            CompressionHint::Disable
+        }
+    }
+
+    fn metadata(&self) -> Self::Metadata {
+        CacheValueMetadata::from_cache_value(self)
+    }
 }

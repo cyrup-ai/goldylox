@@ -3,6 +3,8 @@
 //! This module provides hardware-specific prefetch instructions and
 //! optimizations for different CPU architectures.
 
+#![allow(dead_code)] // Hot tier prefetch - Complete hardware prefetching library for CPU-specific optimizations
+
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -15,6 +17,7 @@ pub struct HardwarePrefetcher;
 impl HardwarePrefetcher {
     /// Prefetch cache lines for upcoming access
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Hardware prefetch for key-based cache slot access optimization
     pub fn prefetch_for_access<K: CacheKey, V: CacheValue>(
         key: &K,
         entries: &[CacheSlot<K, V>],
@@ -50,6 +53,7 @@ impl HardwarePrefetcher {
 
     /// Prefetch multiple slots for batch operations
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Hardware prefetch for batch cache operations optimization
     pub fn prefetch_batch<K: CacheKey, V: CacheValue>(
         slot_indices: &[usize],
         entries: &[CacheSlot<K, V>],
@@ -73,6 +77,7 @@ impl HardwarePrefetcher {
 
     /// Prefetch with specific cache level hint
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Hardware prefetch with cache level targeting for performance optimization
     pub fn prefetch_with_hint(ptr: *const u8, hint: PrefetchHint) {
         #[cfg(target_arch = "x86_64")]
         unsafe {
@@ -92,6 +97,7 @@ impl HardwarePrefetcher {
 
     /// Prefetch cache line containing specific address
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Hardware prefetch for specific memory address optimization
     pub fn prefetch_address(addr: *const u8) {
         #[cfg(target_arch = "x86_64")]
         unsafe {
@@ -106,6 +112,7 @@ impl HardwarePrefetcher {
 
     /// Prefetch sequential cache lines
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Hardware prefetch for sequential memory access patterns
     pub fn prefetch_sequential(base_addr: *const u8, count: usize, stride: usize) {
         #[cfg(target_arch = "x86_64")]
         unsafe {
@@ -123,6 +130,7 @@ impl HardwarePrefetcher {
     }
 
     /// Check if hardware prefetch is supported
+    #[allow(dead_code)] // Hot tier prefetch - Hardware capability detection for platform-specific optimization
     pub fn is_supported() -> bool {
         #[cfg(target_arch = "x86_64")]
         {
@@ -137,6 +145,7 @@ impl HardwarePrefetcher {
     }
 
     /// Get optimal prefetch distance for current hardware
+    #[allow(dead_code)] // Hot tier prefetch - Optimal distance calculation for hardware-specific prefetch tuning
     pub fn optimal_prefetch_distance() -> usize {
         #[cfg(target_arch = "x86_64")]
         {
@@ -152,6 +161,7 @@ impl HardwarePrefetcher {
 
     /// Prefetch with adaptive distance based on access pattern
     #[inline(always)]
+    #[allow(dead_code)] // Hot tier prefetch - Adaptive prefetch with pattern-based distance optimization
     pub fn prefetch_adaptive(
         base_addr: *const u8,
         access_pattern: AccessPatternHint,
@@ -169,6 +179,7 @@ impl HardwarePrefetcher {
 
 /// Prefetch hint for cache level targeting
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Hot tier prefetch - Hardware cache level hints for CPU prefetch instruction optimization
 pub enum PrefetchHint {
     /// Prefetch to L1 cache (highest priority)
     L1Cache,
@@ -182,6 +193,7 @@ pub enum PrefetchHint {
 
 /// Access pattern hint for adaptive prefetching
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Hot tier prefetch - Access pattern hints for adaptive hardware prefetching strategies
 pub enum AccessPatternHint {
     /// Sequential access pattern
     Sequential,
@@ -193,6 +205,7 @@ pub enum AccessPatternHint {
 
 /// Hardware prefetch statistics
 #[derive(Debug, Default)]
+#[allow(dead_code)] // Hot tier prefetch - Hardware prefetch performance statistics and metrics tracking
 pub struct HardwarePrefetchStats {
     pub prefetch_requests: u64,
     pub l1_prefetches: u64,
@@ -203,6 +216,7 @@ pub struct HardwarePrefetchStats {
 
 impl HardwarePrefetchStats {
     /// Record a prefetch operation
+    #[allow(dead_code)] // Hot tier prefetch - Statistics recording for hardware prefetch performance tracking
     pub fn record_prefetch(&mut self, hint: PrefetchHint) {
         self.prefetch_requests += 1;
 
@@ -215,6 +229,7 @@ impl HardwarePrefetchStats {
     }
 
     /// Get prefetch efficiency ratio
+    #[allow(dead_code)] // Hot tier prefetch - Efficiency calculation for hardware prefetch optimization
     pub fn efficiency_ratio(&self) -> f64 {
         if self.prefetch_requests == 0 {
             return 0.0;
@@ -230,6 +245,7 @@ impl HardwarePrefetchStats {
     }
 
     /// Reset statistics
+    #[allow(dead_code)] // Hot tier prefetch - Statistics reset for periodic performance measurement
     pub fn reset(&mut self) {
         *self = Self::default();
     }

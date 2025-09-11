@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Performance Types - Complete session-based performance measurement library with operation tracking, precise timing handles, batch timing analysis, and detailed session management
+
 //! Performance measurement sessions
 //!
 //! This module provides session-based performance tracking with

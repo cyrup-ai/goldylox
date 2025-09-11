@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Hot tier thread-local - Complete thread-local storage library with service-based routing, typed channels, and performance optimization
+
 //! Hot tier cache operations with service-based routing
 //!
 //! This module provides blazing-fast cache operations using a service thread
@@ -173,10 +175,8 @@ impl HotTierCoordinator {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         
         // Try to get existing tier
-        if let Some(handle_ops) = self.hot_tiers.get(&type_key) {
-            if let Some(handle) = handle_ops.as_any().downcast_ref::<HotTierHandle<K, V>>() {
-                return Ok(handle.clone());
-            }
+        if let Some(handle_ops) = self.hot_tiers.get(&type_key) && let Some(handle) = handle_ops.as_any().downcast_ref::<HotTierHandle<K, V>>() {
+            return Ok(handle.clone());
         }
         
         // Create new tier if doesn't exist
@@ -211,17 +211,15 @@ impl HotTierCoordinator {
                             let batch_end = (batch_start + 32).min(256);
                             
                             for slot_idx in batch_start..batch_end {
-                                if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) {
-                                    if metadata.is_occupied() {
-                                        // Get the actual cache slot to check timestamp
-                                        if let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
-                                            // Proper time-based TTL: check if entry has expired
-                                            let age_ns = current_time.saturating_sub(slot.last_access_ns);
-                                            if age_ns > ttl_ns {
-                                                // Entry has exceeded TTL - clear it
-                                                tier.memory_pool_mut().clear_slot(slot_idx);
-                                                cleaned_count += 1;
-                                            }
+                                if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) && metadata.is_occupied() {
+                                    // Get the actual cache slot to check timestamp
+                                    if let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
+                                        // Proper time-based TTL: check if entry has expired
+                                        let age_ns = current_time.saturating_sub(slot.last_access_ns);
+                                        if age_ns > ttl_ns {
+                                            // Entry has exceeded TTL - clear it
+                                            tier.memory_pool_mut().clear_slot(slot_idx);
+                                            cleaned_count += 1;
                                         }
                                     }
                                 }
@@ -268,16 +266,12 @@ impl HotTierCoordinator {
                         let _window_start = current_time.saturating_sub(window_ns);
 
                         for slot_idx in 0..256 {
-                            if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) {
-                                if metadata.is_occupied()
-                                    && metadata.access_count >= threshold as u8
-                                    && metadata.generation > 0
-                                {
-                                    if let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
-                                        frequent_keys.push(slot.key.clone());
-                                    }
+                            if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) && metadata.is_occupied()
+                                && metadata.access_count >= threshold as u8
+                                && metadata.generation > 0
+                                && let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
+                                    frequent_keys.push(slot.key.clone());
                                 }
-                            }
                         }
                         let _ = response.send(frequent_keys);
                     }
@@ -287,13 +281,10 @@ impl HotTierCoordinator {
                         let _current_time = timestamp::now_nanos();
 
                         for slot_idx in 0..256 {
-                            if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) {
-                                if metadata.is_occupied() && metadata.access_count < 5 {
-                                    if let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
-                                        idle_keys.push(slot.key.clone());
-                                    }
+                            if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx) && metadata.is_occupied() && metadata.access_count < 5
+                                && let Some(slot) = tier.memory_pool().get_slot(slot_idx) {
+                                    idle_keys.push(slot.key.clone());
                                 }
-                            }
                         }
                         let _ = response.send(idle_keys);
                     }
@@ -386,7 +377,7 @@ pub fn simd_hot_get<K: CacheKey + Default + 'static, V: CacheValue + 'static>(ke
     };
     
     handle.sender.send(message).ok()?;
-    response_rx.recv_timeout(Duration::from_millis(10)).ok()?
+    response_rx.recv_timeout(Duration::from_millis(100)).ok()?
 }
 
 /// Put value in hot tier cache  
@@ -406,7 +397,7 @@ pub fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     
     handle.sender.send(message)
         .map_err(|_| CacheOperationError::resource_exhausted("Worker queue full"))?;
-    response_rx.recv_timeout(Duration::from_millis(10))
+    response_rx.recv_timeout(Duration::from_millis(100))
         .map_err(|_| CacheOperationError::TimeoutError)?
 }
 
@@ -425,11 +416,12 @@ pub fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>
     
     handle.sender.send(message)
         .map_err(|_| CacheOperationError::resource_exhausted("Worker queue full"))?;
-    response_rx.recv_timeout(Duration::from_millis(10))
+    response_rx.recv_timeout(Duration::from_millis(100))
         .map_err(|_| CacheOperationError::TimeoutError)
 }
 
 /// Get statistics from hot tier
+#[allow(dead_code)] // Hot tier SIMD - Statistics collection function for SIMD hot tier performance monitoring
 pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> TierStatistics {
     let coordinator = HotTierCoordinator::get().ok();
     let coordinator = match coordinator {
@@ -518,10 +510,7 @@ pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 /// Remove entry from hot tier using service-based routing
 pub fn remove_entry<K: CacheKey + Default + 'static, V: CacheValue + 'static>(key: &K) -> Option<V> {
     // Use the standard remove operation which properly routes to service
-    match simd_hot_remove::<K, V>(key) {
-        Ok(result) => result,
-        Err(_) => None,
-    }
+    simd_hot_remove::<K, V>(key).unwrap_or_default()
 }
 
 /// Insert entry promoted from warm tier using service-based routing
@@ -744,7 +733,7 @@ pub fn hot_tier_prefetch_stats<K: CacheKey + Default + 'static, V: CacheValue + 
 }
 
 /// Get configuration used by hot tier
-pub fn hot_tier_config<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>() -> HotTierConfig {
+pub fn hot_tier_config() -> HotTierConfig {
     // Return default configuration - in a full implementation, this would be stored globally
     // and shared across all service workers during initialization.
     HotTierConfig::default()

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Worker System - Complete async worker infrastructure with task coordination, command queues, background maintenance, tier transitions, statistics tracking, and NUMA-aware coordination for comprehensive cache lifecycle management
+
 //! Cache worker coordination and async infrastructure
 //!
 //! This module provides high-performance async worker infrastructure for cache operations,

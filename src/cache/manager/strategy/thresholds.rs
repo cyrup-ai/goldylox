@@ -13,15 +13,21 @@ pub struct StrategyThresholds {
     #[allow(dead_code)] // Strategy management - min_hit_rate_improvement used in strategy switching decisions
     min_hit_rate_improvement: AtomicU32,
     /// Maximum acceptable access time increase (nanoseconds)
-    
+    #[allow(dead_code)] // Strategy management - max access time thresholds used in performance-based strategy switching
     max_access_time_increase: AtomicU64,
     /// Minimum evaluation period before strategy switch
-    
+    #[allow(dead_code)] // Strategy management - evaluation periods used in strategy switching timing
     min_evaluation_period: Duration,
     /// Strategy switching cooldown period
     switch_cooldown: Duration,
     /// Performance degradation threshold for emergency switch
     emergency_threshold: AtomicU32,
+}
+
+impl Default for StrategyThresholds {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StrategyThresholds {

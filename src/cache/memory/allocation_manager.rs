@@ -53,8 +53,10 @@ pub mod global_stats {
         }
     }
     
+    #[allow(dead_code)] // Memory management - global allocation statistics for system-wide monitoring
     pub static ALLOCATION_STATS: GlobalAllocationStats = GlobalAllocationStats::new();
     
+    #[allow(dead_code)] // Memory management - global pool statistics structure with atomic counters
     pub struct GlobalPoolStats {
         pub pool_utilizations: [CachePadded<AtomicU32>; 3], // Small, Medium, Large
         pub pool_allocations: [CachePadded<AtomicU64>; 3],
@@ -84,6 +86,29 @@ pub mod global_stats {
     }
     
     pub static POOL_STATS: GlobalPoolStats = GlobalPoolStats::new();
+}
+
+/// Global allocation statistics snapshot
+#[allow(dead_code)] // Memory management - global allocation snapshot for memory monitoring
+#[derive(Debug, Clone)]
+pub struct GlobalAllocationSnapshot {
+    pub total_allocated: u64,
+    pub peak_allocation: u64,
+    pub active_allocations: usize,
+    pub allocation_operations: u64,
+    pub deallocation_operations: u64,
+    pub allocation_failures: u64,
+    pub fragmentation_level: u32,
+    pub avg_allocation_size: usize,
+}
+
+/// Global pool statistics snapshot  
+#[allow(dead_code)] // Memory management - global pool snapshot for pool monitoring
+#[derive(Debug, Clone)]
+pub struct GlobalPoolSnapshot {
+    pub pool_utilizations: [u32; 3], // Small, Medium, Large
+    pub pool_allocations: [u64; 3],
+    pub pool_hit_rates: [u32; 3],
 }
 
 /// Advanced memory manager with atomic allocation tracking
@@ -216,6 +241,7 @@ impl PoolCleanupWorker {
     }
 }
 
+#[allow(dead_code)] // Memory management - comprehensive allocation manager methods for memory pool coordination
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> AllocationManager<K, V> {
     /// Create new allocation manager with configuration
     #[allow(dead_code)] // Memory management - new used in allocation manager initialization
@@ -338,7 +364,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
                 self.update_avg_allocation_size(size);
 
                 // Trigger cleanup if memory pressure is high
-                if let Err(e) = self.cleanup_manager.try_sophisticated_cleanup(&self.pool_manager.small_pool()) {
+                if let Err(e) = self.cleanup_manager.try_sophisticated_cleanup(self.pool_manager.small_pool()) {
                     log::warn!("Cleanup check failed: {:?}", e);
                 }
 
@@ -417,7 +443,77 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
 
     /// Get pool manager reference
     pub fn pool_manager(&self) -> &MemoryPoolManager {
-        &*self.pool_manager
+        &self.pool_manager
+    }
+
+    /// Perform emergency cleanup coordination across memory pools
+    pub fn try_emergency_pool_cleanup(&self) -> Result<bool, CacheOperationError> {
+        let pools = vec![
+            self.pool_manager.small_pool(),
+            self.pool_manager.medium_pool(), 
+            self.pool_manager.large_pool()
+        ];
+        
+        self.cleanup_manager.try_emergency_cleanup_coordination(&pools)
+    }
+
+    /// Get memory pool cleanup statistics
+    pub fn get_pool_cleanup_stats(&self) -> (u64, u64, f64) {
+        self.cleanup_manager.get_cleanup_stats()
+    }
+
+    /// Check if pool cleanup is available
+    pub fn is_pool_cleanup_available(&self) -> bool {
+        self.cleanup_manager.is_cleanup_available()
+    }
+
+    /// Get global allocation statistics  
+    pub fn get_global_allocation_stats(&self) -> GlobalAllocationSnapshot {
+        GlobalAllocationSnapshot {
+            total_allocated: global_stats::ALLOCATION_STATS.total_allocated.load(Ordering::Relaxed),
+            peak_allocation: global_stats::ALLOCATION_STATS.peak_allocation.load(Ordering::Relaxed),
+            active_allocations: global_stats::ALLOCATION_STATS.active_allocations.load(Ordering::Relaxed),
+            allocation_operations: global_stats::ALLOCATION_STATS.allocation_operations.load(Ordering::Relaxed),
+            deallocation_operations: global_stats::ALLOCATION_STATS.deallocation_operations.load(Ordering::Relaxed),
+            allocation_failures: global_stats::ALLOCATION_STATS.allocation_failures.load(Ordering::Relaxed),
+            fragmentation_level: global_stats::ALLOCATION_STATS.fragmentation_level.load(Ordering::Relaxed),
+            avg_allocation_size: global_stats::ALLOCATION_STATS.avg_allocation_size.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Get global pool statistics
+    pub fn get_global_pool_stats(&self) -> GlobalPoolSnapshot {
+        GlobalPoolSnapshot {
+            pool_utilizations: [
+                global_stats::POOL_STATS.pool_utilizations[0].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_utilizations[1].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_utilizations[2].load(Ordering::Relaxed),
+            ],
+            pool_allocations: [
+                global_stats::POOL_STATS.pool_allocations[0].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_allocations[1].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_allocations[2].load(Ordering::Relaxed),
+            ],
+            pool_hit_rates: [
+                global_stats::POOL_STATS.pool_hit_rates[0].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_hit_rates[1].load(Ordering::Relaxed),
+                global_stats::POOL_STATS.pool_hit_rates[2].load(Ordering::Relaxed),
+            ],
+        }
+    }
+
+    /// Update pool allocation statistics
+    pub fn record_pool_allocation(&self, pool_idx: usize, size: u64) {
+        if pool_idx < 3 {
+            global_stats::POOL_STATS.pool_allocations[pool_idx].fetch_add(size, Ordering::Relaxed);
+        }
+    }
+
+    /// Update pool hit rate statistics
+    pub fn record_pool_hit_rate(&self, pool_idx: usize, hit_rate: u32) {
+        if pool_idx < 3 {
+            global_stats::POOL_STATS.pool_hit_rates[pool_idx].store(hit_rate, Ordering::Relaxed);
+        }
     }
 
     /// Update peak allocation atomically
@@ -595,7 +691,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
 
         // Add jitter to prevent thundering herd using simple deterministic approach
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
-        let jitter = (nanos % (backoff_ms / 4 + 1)) as u32;
+        let jitter = nanos % (backoff_ms / 4 + 1);
         Duration::from_millis((backoff_ms + jitter) as u64)
     }
 }

@@ -17,8 +17,21 @@ pub enum PredictionConfidence {
     VeryHigh,
 }
 
+impl PredictionConfidence {
+    /// Convert confidence level to numeric value for comparisons and calculations
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            PredictionConfidence::Low => 0.25,
+            PredictionConfidence::Medium => 0.50,
+            PredictionConfidence::High => 0.75,
+            PredictionConfidence::VeryHigh => 0.95,
+        }
+    }
+}
+
 /// Enhanced prefetch request with metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Hot tier prefetch - Core prefetch request structure with pattern prediction and priority scheduling
 pub struct PrefetchRequest<K: CacheKey> {
     pub key: K,
     pub confidence: PredictionConfidence,
@@ -28,8 +41,10 @@ pub struct PrefetchRequest<K: CacheKey> {
     /// Request timestamp
     pub timestamp_ns: u64,
     /// Expected access pattern
+    #[allow(dead_code)] // Hot tier prefetch - Access pattern prediction for intelligent prefetching
     pub access_pattern: Option<AccessPattern>,
     /// Estimated value size in bytes
+    #[allow(dead_code)] // Hot tier prefetch - Size estimation for memory planning and cache capacity management
     pub estimated_size: Option<usize>,
 }
 
@@ -40,7 +55,9 @@ pub enum AccessPattern {
     Temporal,
     Spatial,
     Periodic,
+    #[allow(dead_code)] // Hot tier prefetch - Contextual pattern for semantic access relationships
     Contextual,
+    #[allow(dead_code)] // Hot tier prefetch - Random pattern for unpredictable access behavior
     Random,
 }
 
@@ -100,6 +117,7 @@ impl From<PatternDetectionError> for HotTierError {
 #[derive(Debug, Clone)]
 pub struct PrefetchConfig {
     pub history_size: usize,
+    #[allow(dead_code)] // Hot tier prefetch - Maximum lookahead distance for sequential prefetching
     pub max_prefetch_distance: usize,
     pub min_confidence_threshold: f64,
     pub pattern_detection_window: Duration,
@@ -132,23 +150,29 @@ pub struct PrefetchStats {
     pub queue_size: usize,
     pub avg_confidence: f64,
     // Enhanced fields from policy engine version for performance tracking
+    #[allow(dead_code)] // Hot tier prefetch - Average latency tracking for performance optimization
     pub average_latency_ns: u64,
+    #[allow(dead_code)] // Hot tier prefetch - Success count for hit rate calculation and effectiveness metrics
     pub successful_count: u64,
+    #[allow(dead_code)] // Hot tier prefetch - Failure count for accuracy analysis and error monitoring
     pub failed_count: u64,
 }
 
 impl PrefetchStats {
     /// Check if prefetching is effective
+    #[allow(dead_code)] // Hot tier prefetch - Effectiveness evaluation for adaptive prefetching strategies
     pub fn is_effective(&self, threshold: f64) -> bool {
         self.hit_rate >= threshold && self.accuracy >= threshold
     }
 
     /// Get overall prefetch score
+    #[allow(dead_code)] // Hot tier prefetch - Overall effectiveness scoring for algorithm comparison
     pub fn effectiveness_score(&self) -> f64 {
         (self.hit_rate + self.accuracy) / 2.0
     }
 
     /// Merge statistics from another PrefetchStats
+    #[allow(dead_code)] // Hot tier prefetch - Statistics aggregation for multi-tier reporting
     pub fn merge(&mut self, other: PrefetchStats) {
 
 
@@ -191,6 +215,7 @@ impl Default for PrefetchStats {
 
 impl<K: CacheKey> PrefetchRequest<K> {
     /// Create new prefetch request with current timestamp
+    #[allow(dead_code)] // Hot tier prefetch - Core constructor for prefetch request creation
     pub fn new(key: K, confidence: PredictionConfidence, predicted_access_time: u64, pattern_type: AccessPattern, priority: u8) -> Self {
         Self {
             key,
@@ -205,12 +230,14 @@ impl<K: CacheKey> PrefetchRequest<K> {
     }
     
     /// Add access pattern prediction
+    #[allow(dead_code)] // Hot tier prefetch - Builder pattern for enhanced request metadata
     pub fn with_pattern(mut self, pattern: AccessPattern) -> Self {
         self.access_pattern = Some(pattern);
         self
     }
     
     /// Add size estimation
+    #[allow(dead_code)] // Hot tier prefetch - Builder pattern for memory capacity planning
     pub fn with_estimated_size(mut self, size: usize) -> Self {
         self.estimated_size = Some(size);
         self

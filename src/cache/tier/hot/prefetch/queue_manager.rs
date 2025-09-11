@@ -3,6 +3,8 @@
 //! This module handles the prefetch request queue, including prioritization,
 //! deduplication, and queue maintenance operations.
 
+#![allow(dead_code)] // Hot tier prefetch - Complete queue management library for prefetch request prioritization and coordination
+
 use std::collections::VecDeque;
 
 use super::types::{PredictionConfidence, PrefetchConfig, PrefetchRequest};
@@ -95,31 +97,37 @@ impl<K: CacheKey> QueueManager<K> {
     }
 
     /// Get queue status
+    #[allow(dead_code)] // Hot tier prefetch - Queue status monitoring for capacity management
     pub fn queue_status(&self) -> (usize, usize) {
         (self.prefetch_queue.len(), self.config.prefetch_queue_size)
     }
 
     /// Get queue length
+    #[allow(dead_code)] // Hot tier prefetch - Queue length monitoring for load analysis
     pub fn queue_len(&self) -> usize {
         self.prefetch_queue.len()
     }
 
     /// Check if queue is empty
+    #[allow(dead_code)] // Hot tier prefetch - Empty queue check for scheduling optimization
     pub fn is_empty(&self) -> bool {
         self.prefetch_queue.is_empty()
     }
 
     /// Check if queue is full
+    #[allow(dead_code)] // Hot tier prefetch - Full queue check for backpressure management
     pub fn is_full(&self) -> bool {
         self.prefetch_queue.len() >= self.config.prefetch_queue_size
     }
 
     /// Clear all requests from queue
+    #[allow(dead_code)] // Hot tier prefetch - Queue clearing for reset and cleanup operations
     pub fn clear(&mut self) {
         self.prefetch_queue.clear();
     }
 
     /// Get requests by confidence level
+    #[allow(dead_code)] // Hot tier prefetch - Confidence-based request filtering for priority scheduling
     pub fn get_requests_by_confidence(
         &self,
         min_confidence: PredictionConfidence,
@@ -143,6 +151,7 @@ impl<K: CacheKey> QueueManager<K> {
     }
 
     /// Get requests by priority range
+    #[allow(dead_code)] // Hot tier prefetch - Priority-based request filtering for adaptive scheduling
     pub fn get_requests_by_priority(&self, min_priority: u8) -> Vec<&PrefetchRequest<K>> {
         self.prefetch_queue
             .iter()
@@ -151,6 +160,7 @@ impl<K: CacheKey> QueueManager<K> {
     }
 
     /// Reorder queue by priority
+    #[allow(dead_code)] // Hot tier prefetch - Priority-based queue reordering for optimal scheduling
     pub fn reorder_by_priority(&mut self) {
         // Convert to Vec, sort, and convert back
         let mut requests: Vec<_> = self.prefetch_queue.drain(..).collect();
@@ -159,6 +169,7 @@ impl<K: CacheKey> QueueManager<K> {
     }
 
     /// Remove expired requests based on predicted access time
+    #[allow(dead_code)] // Hot tier prefetch - Expired request cleanup for memory management
     pub fn remove_expired_requests(
         &mut self,
         current_time_ns: u64,
@@ -246,8 +257,11 @@ impl<K: CacheKey> QueueManager<K> {
 #[derive(Debug, Clone)]
 pub struct QueueStats {
     pub total_requests: usize,
+    #[allow(dead_code)] // Hot tier prefetch - Queue capacity tracking for resource management
     pub capacity: usize,
+    #[allow(dead_code)] // Hot tier prefetch - Queue utilization metrics for performance monitoring
     pub utilization: f64,
+    #[allow(dead_code)] // Hot tier prefetch - Average priority calculation for scheduling optimization
     pub avg_priority: f64,
     pub confidence_distribution: ConfidenceDistribution,
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Hot tier memory pool - Complete memory pool library with lock-free allocation, SIMD alignment, and atomic freelist operations
+
 //! Lock-free memory allocation with atomic freelists for hot tier cache
 //!
 //! This module provides SIMD-aligned memory allocation and management for

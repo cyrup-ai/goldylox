@@ -3,6 +3,8 @@
 //! This module implements statistical analysis of memory usage trends to predict
 //! future behavior and detect anomalies.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete trend analysis library for memory usage patterns
+
 use std::sync::atomic::Ordering;
 
 use crate::cache::tier::warm::atomic_float::AtomicF64;
@@ -22,6 +24,12 @@ pub struct TrendAnalysis {
     pub time_to_breach_sec: AtomicF64,
     /// Trend analysis confidence
     pub analysis_confidence: AtomicF64,
+}
+
+impl Default for TrendAnalysis {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TrendAnalysis {

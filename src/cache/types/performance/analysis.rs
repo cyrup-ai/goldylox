@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Performance Types - Complete performance analysis library with statistical analysis, percentile calculations, performance reports, operation tier classification, and comprehensive metrics analysis
+
 //! Performance analysis and reporting
 //!
 //! This module provides statistical analysis of performance data
@@ -198,9 +200,7 @@ impl PerformanceAnalysis {
 
     /// Get performance summary using canonical PerformanceSummary
     pub fn summary(&self) -> PerformanceSummary {
-        let mut summary = PerformanceSummary::default();
-        summary.avg_access_time_ns = self.avg_duration_ns;
-        summary.max_access_time_ns = self.p99_duration_ns;
+        let mut summary = PerformanceSummary { avg_access_time_ns: self.avg_duration_ns, max_access_time_ns: self.p99_duration_ns, ..Default::default() };
         summary.update_qualitative_analysis(
             self.std_deviation_ns,
             self.p99_duration_ns,
@@ -215,7 +215,7 @@ impl PerformanceAnalysis {
 pub use crate::telemetry::performance_history::PerformanceSummary;
 
 /// Operations grouped by performance tiers
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct OperationTiers<'a> {
     /// Fast operations (bottom 25%)
     pub fast: Vec<&'a OperationTiming>,
@@ -225,12 +225,4 @@ pub struct OperationTiers<'a> {
     pub slow: Vec<&'a OperationTiming>,
 }
 
-impl<'a> Default for OperationTiers<'a> {
-    fn default() -> Self {
-        Self {
-            fast: Vec::new(),
-            medium: Vec::new(),
-            slow: Vec::new(),
-        }
-    }
-}
+

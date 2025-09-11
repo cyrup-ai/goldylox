@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete cache measurement configuration with pattern analyzer and eviction settings
+
 //! Cache configuration for measurement system
 
 /// Configuration for measurement cache

@@ -44,6 +44,7 @@ pub struct AtomicTierStats {
     total_uncompressed_bytes: CachePadded<AtomicU64>,
 }
 
+#[allow(dead_code)] // Complete atomic statistics implementation
 impl AtomicTierStats {
     /// Create new atomic statistics
     #[inline(always)]

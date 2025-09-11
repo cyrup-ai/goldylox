@@ -16,12 +16,16 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 #[derive(Debug)]
 pub struct PromotionCriteria {
     /// Access frequency thresholds per tier (atomic for thread safety)
+    #[allow(dead_code)] // Tier criteria - Access frequency thresholds for promotion scoring
     pub frequency_thresholds: CachePadded<[AtomicU32; 3]>, // Hot, Warm, Cold
     /// Recency weight factors for temporal locality scoring
+    #[allow(dead_code)] // Tier criteria - Recency weight factors for temporal locality scoring
     pub recency_weights: CachePadded<[AtomicU32; 3]>, // Packed as u32 * 1000
     /// Size penalty factors for memory efficiency
+    #[allow(dead_code)] // Tier criteria - Size penalty factors for memory efficiency calculations
     pub size_penalties: CachePadded<[AtomicU32; 3]>, // Bytes per promotion cost
     /// Access pattern correlation thresholds
+    #[allow(dead_code)] // Tier criteria - Access pattern correlation thresholds for pattern analysis
     pub correlation_thresholds: CachePadded<[AtomicU32; 3]>, // Pattern strength * 1000
     /// Adaptive learning rate for threshold adjustment
     pub learning_rate: AtomicU32, // Rate * 10000 for precision
@@ -30,6 +34,7 @@ pub struct PromotionCriteria {
 }
 
 /// Graceful demotion criteria with data preservation strategies
+#[allow(dead_code)] // Tier criteria - comprehensive demotion criteria structure with SIMD optimization
 #[derive(Debug)]
 pub struct DemotionCriteria {
     /// Idle time thresholds before demotion (nanoseconds)
@@ -43,6 +48,7 @@ pub struct DemotionCriteria {
 }
 
 /// SIMD-aligned scoring coefficients for vectorized promotion scoring
+#[allow(dead_code)] // Tier criteria - SIMD scoring coefficients for AVX2-optimized promotion scoring
 #[derive(Debug)]
 #[repr(align(32))] // AVX2 alignment
 pub struct SIMDScoringCoefficients {
@@ -57,6 +63,7 @@ pub struct SIMDScoringCoefficients {
 }
 
 /// Access characteristics for promotion scoring
+#[allow(dead_code)] // Tier criteria - access characteristics structure for comprehensive promotion analysis
 #[derive(Debug, Clone, Copy)]
 pub struct AccessCharacteristics {
     /// Access frequency (accesses per second)
@@ -186,13 +193,14 @@ impl PromotionCriteria {
     }
 }
 
+#[allow(dead_code)] // Tier criteria - comprehensive demotion criteria methods for intelligent tier management
 impl DemotionCriteria {
     pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize with adaptive demotion thresholds
         let idle_thresholds = CachePadded::new([
             AtomicU64::new(60_000_000_000),   // Hot->Warm: 60 seconds
             AtomicU64::new(300_000_000_000),  // Warm->Cold: 5 minutes
-            AtomicU64::new(3600_000_000_000), // Cold->Evict: 1 hour
+            AtomicU64::new(3_600_000_000_000), // Cold->Evict: 1 hour
         ]);
 
         let memory_pressure_thresholds = CachePadded::new([

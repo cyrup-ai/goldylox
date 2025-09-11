@@ -3,6 +3,8 @@
 //! This module implements the core ML eviction policy with linear regression
 //! and gradient optimization training for optimal cache performance.
 
+#![allow(dead_code)] // Warm tier eviction ML - Complete machine learning eviction policy with regression and gradient optimization
+
 use std::sync::atomic::Ordering;
 
 use crossbeam_skiplist::SkipMap;
@@ -119,9 +121,9 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
         let mut score = 0.0;
 
         // Linear combination of features and weights
-        for i in 0..FEATURE_COUNT {
+        for (i, &feature_value) in feature_values.iter().enumerate().take(FEATURE_COUNT) {
             let weight = self.regression_weights[i].load();
-            score += weight * feature_values[i];
+            score += weight * feature_value;
         }
 
         // Apply sigmoid to get probability
@@ -138,9 +140,9 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
 
             // Update weights using gradient optimization
             let learning_rate = self.learning_rate.load();
-            for i in 0..FEATURE_COUNT {
+            for (i, &feature_value) in feature_values.iter().enumerate().take(FEATURE_COUNT) {
                 let current_weight = self.regression_weights[i].load();
-                let gradient = error * feature_values[i];
+                let gradient = error * feature_value;
                 let new_weight = current_weight + learning_rate * gradient;
                 self.regression_weights[i].store(new_weight);
             }
@@ -188,8 +190,8 @@ impl<K: crate::cache::traits::CacheKey> MachineLearningEvictionPolicy<K> {
     #[allow(dead_code)] // ML system - used in machine learning eviction policy implementation
     pub fn get_weights(&self) -> [f64; FEATURE_COUNT] {
         let mut weights = [0.0; FEATURE_COUNT];
-        for i in 0..FEATURE_COUNT {
-            weights[i] = self.regression_weights[i].load();
+        for (i, weight) in weights.iter_mut().enumerate().take(FEATURE_COUNT) {
+            *weight = self.regression_weights[i].load();
         }
         weights
     }
@@ -305,8 +307,10 @@ impl<K: crate::cache::traits::CacheKey> EvictionPolicy<WarmCacheKey<K>>
         use crate::telemetry::types::MonitorConfig;
         
         if let Ok(history) = PerformanceHistory::new(MonitorConfig::default()) {
-            let summary = history.get_performance_summary();
-            summary.avg_access_time_ns  // This is real data from line 173
+            use crate::cache::manager::error_recovery::FallbackErrorProvider;
+            let fallback_provider = FallbackErrorProvider::new();
+            let summary = history.get_performance_summary(&fallback_provider);
+            summary.avg_access_time_ns
         } else {
             1000 // Fallback
         }
@@ -353,7 +357,7 @@ impl<K: crate::cache::traits::CacheKey> EvictionPolicy<WarmCacheKey<K>>
             // Apply aging to feature importance using existing aging system
             let time_seconds = (current_time / 1_000_000_000) as f64;
             let half_life_seconds = 300.0; // 5 minute half-life
-            let aging_factor = ((-time_seconds / half_life_seconds).exp()).max(0.1).min(1.0);
+            let aging_factor = ((-time_seconds / half_life_seconds).exp()).clamp(0.1, 1.0);
             feature_vector_mut.apply_aging(aging_factor);
             
             // Update temporal patterns using existing pattern analysis

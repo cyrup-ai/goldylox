@@ -46,4 +46,113 @@ impl MaintenanceStats {
             0.0
         }
     }
+    
+    /// Record a successful maintenance operation
+    pub fn record_operation_success(&self, task: &super::types::CanonicalMaintenanceTask, execution_time_ns: u64) {
+        use std::time::Instant;
+        
+        // Update counters atomically
+        self.operations_executed.fetch_add(1, Ordering::Relaxed);
+        self.total_maintenance_time_ns.fetch_add(execution_time_ns, Ordering::Relaxed);
+        self.last_maintenance.store(Some(Instant::now()));
+        
+        // Update operation-specific counters based on task type
+        match task {
+            crate::cache::tier::warm::maintenance::MaintenanceTask::CleanupExpired { .. } => {
+                self.cleanup_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::CompactStorage { .. } => {
+                self.defrag_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::AnalyzePatterns { .. } => {
+                self.rebuild_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::PerformEviction { .. } => {
+                self.validation_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::OptimizeStructure { .. } => {
+                self.optimization_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::UpdateStatistics { .. } |
+            crate::cache::tier::warm::maintenance::MaintenanceTask::Evict { .. } |
+            crate::cache::tier::warm::maintenance::MaintenanceTask::SyncTiers { .. } => {
+                self.pattern_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::ValidateIntegrity { .. } => {
+                self.validation_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::DefragmentMemory { .. } => {
+                self.defrag_operations.fetch_add(1, Ordering::Relaxed);
+            }
+            crate::cache::tier::warm::maintenance::MaintenanceTask::UpdateMLModels { .. } => {
+                self.optimization_operations.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    
+    /// Record a failed maintenance operation
+    pub fn record_operation_failure(&self, _task: &super::types::CanonicalMaintenanceTask) {
+        self.failed_operations.fetch_add(1, Ordering::Relaxed);
+        self.operations_executed.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    /// Get total operations count
+    #[allow(dead_code)] // Background statistics - total operation count API for monitoring
+    pub fn get_total_operations(&self) -> u64 {
+        self.operations_executed.load(Ordering::Relaxed)
+    }
+    
+    /// Get average execution time in nanoseconds
+    #[allow(dead_code)] // Background statistics - average execution time API for performance analysis
+    pub fn get_average_execution_time_ns(&self) -> u64 {
+        let total_ops = self.operations_executed.load(Ordering::Relaxed);
+        let total_time = self.total_maintenance_time_ns.load(Ordering::Relaxed);
+        if total_ops > 0 {
+            total_time / total_ops
+        } else {
+            0
+        }
+    }
+    
+    /// Get operation breakdown statistics
+    #[allow(dead_code)] // Background statistics - operation breakdown API for detailed maintenance analysis
+    pub fn get_operation_breakdown(&self) -> OperationBreakdown {
+        OperationBreakdown {
+            cleanup_count: self.cleanup_operations.load(Ordering::Relaxed),
+            defrag_count: self.defrag_operations.load(Ordering::Relaxed),
+            rebuild_count: self.rebuild_operations.load(Ordering::Relaxed),
+            validation_count: self.validation_operations.load(Ordering::Relaxed),
+            optimization_count: self.optimization_operations.load(Ordering::Relaxed),
+            pattern_count: self.pattern_operations.load(Ordering::Relaxed),
+            failed_count: self.failed_operations.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Operation breakdown statistics for detailed monitoring
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Background statistics - operation breakdown fields for comprehensive maintenance monitoring
+pub struct OperationBreakdown {
+    pub cleanup_count: u64,
+    pub defrag_count: u64,
+    pub rebuild_count: u64,
+    pub validation_count: u64,
+    pub optimization_count: u64,
+    pub pattern_count: u64,
+    pub failed_count: u64,
+}
+
+impl Default for OperationBreakdown {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            cleanup_count: 0,
+            defrag_count: 0,
+            rebuild_count: 0,
+            validation_count: 0,
+            optimization_count: 0,
+            pattern_count: 0,
+            failed_count: 0,
+        }
+    }
 }

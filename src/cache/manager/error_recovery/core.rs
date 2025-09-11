@@ -29,6 +29,7 @@ pub struct ErrorRecoverySystem<K: CacheKey, V: CacheValue> {
     pub error_stats: ErrorStatistics,
 }
 
+#[allow(dead_code)] // Library API - methods may be used by external consumers
 impl<K: CacheKey, V: CacheValue> ErrorRecoverySystem<K, V> {
     /// Create new error recovery system
     pub fn new() -> Self {
@@ -207,6 +208,51 @@ impl<K: CacheKey, V: CacheValue> ErrorRecoverySystem<K, V> {
         self.error_stats.reset_statistics();
         self.circuit_breaker.reset();
         self.recovery_strategies.reset_success_rates();
+    }
+
+    /// Configure recovery strategy for error type
+    pub fn configure_recovery_strategy(&mut self, error_type: ErrorType, strategy: RecoveryStrategy) {
+        self.recovery_strategies.set_strategy(error_type, strategy);
+    }
+
+    /// Get success rate for specific recovery strategy
+    pub fn get_strategy_success_rate(&self, strategy: RecoveryStrategy) -> u32 {
+        self.recovery_strategies.get_success_rate(strategy)
+    }
+
+    /// Configure retry limit for recovery strategy
+    pub fn configure_retry_limit(&mut self, strategy: RecoveryStrategy, limit: u32) {
+        self.recovery_strategies.set_retry_limit(strategy, limit);
+    }
+
+    /// Get recovery configuration
+    pub fn get_recovery_config(&self) -> &super::types::RecoveryConfig {
+        self.recovery_strategies.get_config()
+    }
+
+    /// Update recovery configuration
+    pub fn update_recovery_config(&mut self, config: super::types::RecoveryConfig) {
+        self.recovery_strategies.update_config(config);
+    }
+
+    /// Get all configured recovery strategies
+    pub fn get_all_recovery_strategies(&self) -> &std::collections::HashMap<ErrorType, RecoveryStrategy> {
+        self.recovery_strategies.get_all_strategies()
+    }
+
+    /// Remove recovery strategy for error type
+    pub fn remove_recovery_strategy(&mut self, error_type: ErrorType) -> Option<RecoveryStrategy> {
+        self.recovery_strategies.remove_strategy(error_type)
+    }
+
+    /// Clear all recovery strategies
+    pub fn clear_all_recovery_strategies(&mut self) {
+        self.recovery_strategies.clear_strategies();
+    }
+
+    /// Get recovery strategy count
+    pub fn get_recovery_strategy_count(&self) -> usize {
+        self.recovery_strategies.strategy_count()
     }
 
     /// Get system performance summary using canonical PerformanceSummary

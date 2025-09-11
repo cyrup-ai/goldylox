@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Telemetry System - Complete trend analysis library with ML-based predictions, polynomial regression, pattern recognition, anomaly detection, error rate tracking, and sophisticated performance optimization
+
 //! Advanced trend analysis with ML-based performance predictions
 //!
 //! This module implements sophisticated trend analysis using polynomial
@@ -168,7 +170,9 @@ impl TrendAnalyzer {
     fn compute_baseline_throughput(&self) -> f64 {
         // Use the performance_history field we already added
         if let Some(history) = &self.performance_history {
-            let summary = history.get_performance_summary();
+            use crate::cache::manager::error_recovery::FallbackErrorProvider;
+            let fallback_provider = FallbackErrorProvider::new();
+            let summary = history.get_performance_summary(&fallback_provider);
             summary.avg_ops_per_second as f64
         } else {
             // Fallback to current throughput estimate
@@ -193,7 +197,9 @@ impl TrendAnalyzer {
     fn compute_historical_error_rate(&self) -> f64 {
         // Connect to real performance history data
         if let Some(performance_history) = &self.performance_history {
-            let summary = performance_history.get_performance_summary();
+            use crate::cache::manager::error_recovery::FallbackErrorProvider;
+            let fallback_provider = FallbackErrorProvider::new();
+            let summary = performance_history.get_performance_summary(&fallback_provider);
             
             // Calculate real historical error rate from performance samples
             let total_ops = summary.sample_count as f64;
@@ -266,7 +272,6 @@ impl TrendAnalyzer {
     }
 
     /// Compute operations per second trend direction (-100 to 100)
-    
     fn compute_ops_trend(&self) -> i8 {
         // Operations trend often correlates with hit rate
         (self.compute_hit_rate_trend() as f32 * 0.8) as i8

@@ -2,6 +2,8 @@
 //!
 //! This module defines the core data structures used throughout the monitoring system.
 
+#![allow(dead_code)] // Warm tier monitoring - Complete type definitions library for monitoring subsystem
+
 use std::sync::atomic::AtomicU64;
 
 use crossbeam_utils::CachePadded;
@@ -96,6 +98,12 @@ pub struct MemoryMonitoringStats {
     pub oom_near_misses: CachePadded<AtomicU64>,
 }
 
+impl Default for MemoryMonitoringStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryMonitoringStats {
     pub fn new() -> Self {
         Self {
@@ -163,6 +171,12 @@ impl From<crate::cache::types::statistics::tier_stats::TierStatistics> for TierS
             memory_pressure: 0.0,
             evictions: 0,
         }
+    }
+}
+
+impl Default for TierStatsSnapshot {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
