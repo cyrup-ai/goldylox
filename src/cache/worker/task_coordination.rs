@@ -20,6 +20,9 @@ use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::CacheTier;
 // Task coordination is handled directly through MaintenanceScheduler
 
+/// Type alias for complex task operation function
+type TaskOperation<K, V> = Box<dyn FnOnce(TaskExecutionContext<K, V>) -> Result<(), CacheOperationError> + Send + 'static>;
+
 /// Command queue for safe cache mutations using crossbeam channels
 #[derive(Debug)]
 pub struct CacheCommandQueue<K: CacheKey, V: CacheValue> {
@@ -154,7 +157,7 @@ pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serd
 pub enum TaskCommand<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
     Execute {
         task_id: u64,
-        operation: Box<dyn FnOnce(TaskExecutionContext<K, V>) -> Result<(), CacheOperationError> + Send + 'static>,
+        operation: TaskOperation<K, V>,
         context: TaskExecutionContext<K, V>,
     },
     Cancel {
@@ -779,7 +782,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             context,
         };
 
-        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+        if self.task_worker_sender.try_send(task_command).is_err() {
             self.active_tasks.remove(&task_id);
             self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
             return Err(CacheOperationError::resource_exhausted("Task worker queue full"));
@@ -867,7 +870,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             context,
         };
 
-        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+        if self.task_worker_sender.try_send(task_command).is_err() {
             self.active_tasks.remove(&task_id);
             self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
             return Err(CacheOperationError::resource_exhausted("Task worker queue full"));
@@ -966,7 +969,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             context,
         };
 
-        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+        if self.task_worker_sender.try_send(task_command).is_err() {
             self.active_tasks.remove(&task_id);
             self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
             return Err(CacheOperationError::resource_exhausted("Task worker queue full"));

@@ -14,6 +14,11 @@ use crate::cache::traits::{CacheKey, CacheValue};
 use super::coherence_worker::CoherenceWorker;
 use super::message_types::{CoherenceRequest, CoherenceResponse};
 
+/// Type alias for coherence worker channel pair to simplify complex type signatures
+type CoherenceChannelPair<K, V> = (Sender<CoherenceRequest<K, V>>, Receiver<CoherenceResponse<K, V>>);
+
+
+
 /// External handle for sending requests to coherence worker
 #[derive(Debug)]
 pub struct CoherenceSender<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned> {
@@ -170,14 +175,14 @@ use std::any::TypeId;
 static WORKER_CHANNELS: OnceLock<std::sync::RwLock<HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>>> = OnceLock::new();
 
 /// Get worker channels for coherence communication
-pub fn get_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>() -> Option<(Sender<CoherenceRequest<K, V>>, Receiver<CoherenceResponse<K, V>>)> {
+pub fn get_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>() -> Option<CoherenceChannelPair<K, V>> {
     let channels = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
     
     if let Ok(channel_map) = channels.read() {
         let type_id = TypeId::of::<(K, V)>();
         if let Some(channel_any) = channel_map.get(&type_id) {
             // Safely downcast the boxed Any to the correct channel pair type
-            if let Some((sender, receiver)) = channel_any.downcast_ref::<(Sender<CoherenceRequest<K, V>>, Receiver<CoherenceResponse<K, V>>)>() {
+            if let Some((sender, receiver)) = channel_any.downcast_ref::<CoherenceChannelPair<K, V>>() {
                 return Some((sender.clone(), receiver.clone()));
             }
         }
@@ -186,15 +191,14 @@ pub fn get_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::De
     None
 }
 
-/// Register worker channels for a specific key-value type combination
+/// Register worker channels for a specific key-value type combination  
 pub fn register_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>(
-    sender: Sender<CoherenceRequest<K, V>>,
-    receiver: Receiver<CoherenceResponse<K, V>>,
+    channels: CoherenceChannelPair<K, V>,
 ) {
-    let channels = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
+    let registry = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
     
-    if let Ok(mut channel_map) = channels.write() {
+    if let Ok(mut channel_map) = registry.write() {
         let type_id = TypeId::of::<(K, V)>();
-        channel_map.insert(type_id, Box::new((sender, receiver)));
+        channel_map.insert(type_id, Box::new(channels));
     }
 }

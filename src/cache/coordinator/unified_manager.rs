@@ -489,7 +489,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                     Ok(_) => {},
                     Err(e) => {
                         // Use error recovery system for sophisticated retry logic
-                        let _recovery_strategy = self.error_recovery.handle_error(
+                        self.error_recovery.handle_error(
                             crate::cache::types::statistics::multi_tier::ErrorType::GenericError,
                             placement_decision.primary_tier as u8
                         );

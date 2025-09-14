@@ -61,10 +61,7 @@ pub mod signals {
         if val == 0 {
             None
         } else {
-            match Signal::try_from(val as i32) {
-                Ok(signal) => Some(signal),
-                Err(_) => None, // Invalid signal value - ignore
-            }
+            Signal::try_from(val as i32).ok()
         }
     }
 }

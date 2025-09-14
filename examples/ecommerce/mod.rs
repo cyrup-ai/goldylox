@@ -11,7 +11,6 @@ pub mod workloads;
 pub mod display;
 
 // Re-export main functions for backwards compatibility
-pub use setup::*;
 pub use seeding::*;
 pub use workloads::*;
 pub use display::*;
@@ -28,7 +27,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Set up distributed cache nodes across multiple data centers
-    let workload = setup_distributed_nodes()?;
+    let workload = setup::setup_distributed_nodes()?;
     
     // Seed the cache with realistic e-commerce data
     println!("🌱 Seeding cache with realistic e-commerce data...");

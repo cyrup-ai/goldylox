@@ -6,7 +6,7 @@
 use goldylox::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicBool};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 /// Product in e-commerce catalog - designed for realistic caching patterns
@@ -62,6 +62,7 @@ pub struct AnalyticsEvent {
 }
 
 /// Cache operation commands for worker communication
+#[allow(dead_code)]
 pub enum CacheCommand {
     ProductGet { key: String, response: oneshot::Sender<Option<Product>> },
     ProductPut { key: String, value: Product, response: oneshot::Sender<Result<(), String>> },
@@ -74,6 +75,7 @@ pub enum CacheCommand {
 }
 
 /// Cache worker that owns cache instances
+#[allow(dead_code)]
 pub struct CacheWorker {
     receiver: Receiver<CacheCommand>,
     product_cache: Goldylox<String, Product>,
@@ -85,19 +87,19 @@ impl CacheWorker {
     pub fn new(receiver: Receiver<CacheCommand>) -> Result<Self, Box<dyn std::error::Error>> {
         // Create separate builders for each cache type
         let product_config = GoldyloxBuilder::<String, Product>::new()
-            .with_hot_tier_capacity(10000)
-            .with_warm_tier_capacity(50000)
-            .with_cold_tier_capacity(100000);
+            .hot_tier_max_entries(10000)
+            .warm_tier_max_entries(50000)
+            .cold_tier_base_dir("./cache/products");
             
         let session_config = GoldyloxBuilder::<String, UserSession>::new()
-            .with_hot_tier_capacity(5000)
-            .with_warm_tier_capacity(25000)
-            .with_cold_tier_capacity(50000);
+            .hot_tier_max_entries(5000)
+            .warm_tier_max_entries(25000)
+            .cold_tier_base_dir("./cache/sessions");
             
         let analytics_config = GoldyloxBuilder::<String, AnalyticsEvent>::new()
-            .with_hot_tier_capacity(15000)
-            .with_warm_tier_capacity(75000)
-            .with_cold_tier_capacity(150000);
+            .hot_tier_max_entries(15000)
+            .warm_tier_max_entries(75000)
+            .cold_tier_base_dir("./cache/analytics");
         
         Ok(Self {
             receiver,
@@ -115,37 +117,37 @@ impl CacheWorker {
                         CacheCommand::ProductGet { key, response } => {
                             let result = self.product_cache.get(&key);
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send ProductGet response: {}", e);
+                                log::warn!("Failed to send ProductGet response: {:?}", e);
                             }
                         },
                         CacheCommand::ProductPut { key, value, response } => {
                             let result = self.product_cache.put(key, value).map_err(|e| e.to_string());
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send ProductPut response: {}", e);
+                                log::warn!("Failed to send ProductPut response: {:?}", e);
                             }
                         },
                         CacheCommand::SessionGet { key, response } => {
                             let result = self.session_cache.get(&key);
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send SessionGet response: {}", e);
+                                log::warn!("Failed to send SessionGet response: {:?}", e);
                             }
                         },
                         CacheCommand::SessionPut { key, value, response } => {
                             let result = self.session_cache.put(key, value).map_err(|e| e.to_string());
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send SessionPut response: {}", e);
+                                log::warn!("Failed to send SessionPut response: {:?}", e);
                             }
                         },
                         CacheCommand::AnalyticsGet { key, response } => {
                             let result = self.analytics_cache.get(&key);
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send AnalyticsGet response: {}", e);
+                                log::warn!("Failed to send AnalyticsGet response: {:?}", e);
                             }
                         },
                         CacheCommand::AnalyticsPut { key, value, response } => {
                             let result = self.analytics_cache.put(key, value).map_err(|e| e.to_string());
                             if let Err(e) = response.send(result) {
-                                log::warn!("Failed to send AnalyticsPut response: {}", e);
+                                log::warn!("Failed to send AnalyticsPut response: {:?}", e);
                             }
                         },
                         CacheCommand::GetStats { response } => {
@@ -175,11 +177,15 @@ impl CacheWorker {
 }
 
 /// Cache node with messaging interface (no shared ownership)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CacheNode {
     pub node_id: String,
     pub location: String,
+    #[allow(dead_code)]
     pub command_sender: Sender<CacheCommand>,
+    pub product_cache: goldylox::Goldylox<String, Product>,
+    pub session_cache: goldylox::Goldylox<String, UserSession>,
+    pub analytics_cache: goldylox::Goldylox<String, AnalyticsEvent>,
 }
 
 /// Global workload execution state (no Arc usage)

@@ -68,6 +68,45 @@ impl TrendAnalyzer {
         Self::new()
     }
 
+    /// Create trend analyzer with real system integration
+    pub fn with_real_systems(
+        error_tracker: ErrorRateTracker,
+        performance_history: Option<Box<PerformanceHistory>>,
+    ) -> Result<Self, CacheOperationError> {
+        // Create circuit breakers for the trend analyzer's error recovery
+        let circuit_breakers = vec![
+            crate::cache::manager::error_recovery::ComponentCircuitBreaker::new(5, 5000),
+            crate::cache::manager::error_recovery::ComponentCircuitBreaker::new(5, 5000),
+            crate::cache::manager::error_recovery::ComponentCircuitBreaker::new(5, 5000),
+        ];
+
+        // Create integrated fallback provider with real systems
+        let fallback_provider = crate::cache::manager::error_recovery::FallbackErrorProvider::with_real_systems(
+            std::sync::Arc::new(error_tracker),
+            std::sync::Arc::new(circuit_breakers),
+        );
+
+        Ok(Self {
+            regression_coefficients: CachePadded::new([
+                AtomicU32::new(1000), // Linear coefficient * 1000
+                AtomicU32::new(0),    // Quadratic coefficient * 1000
+                AtomicU32::new(0),    // Cubic coefficient * 1000
+                AtomicU32::new(0),    // Constant term * 1000
+            ]),
+            prediction_accuracy: CachePadded::new(AtomicU32::new(500)), // 50% initial
+            sensitivity_threshold: CachePadded::new(AtomicU32::new(100)), // 10% threshold
+            trend_history: TrendHistoryBuffer {
+                samples: arrayvec::ArrayVec::new(),
+                write_pos: AtomicUsize::new(0),
+                sample_count: AtomicUsize::new(0),
+            },
+            trend_samples: CachePadded::new(AtomicU32::new(0)),
+            performance_history,
+            error_tracker: Some(ErrorRateTracker::new()), // Create a new instance since original was moved to Arc
+            fallback_provider,
+        })
+    }
+
     /// Analyze current performance trends with ML predictions
     pub fn analyze_current_trends(&self, _history: &PerformanceHistory) -> PerformanceTrends {
         // Analyze current trends using sophisticated polynomial regression and ML predictions

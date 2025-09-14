@@ -111,9 +111,9 @@ impl ErrorStatistics {
         }
         
         let mut distribution = [0.0; 12];
-        for i in 0..12 {
+        for (i, dist_item) in distribution.iter_mut().enumerate() {
             let count = self.error_counts[i].load(Ordering::Relaxed);
-            distribution[i] = count as f64 / total as f64;
+            *dist_item = count as f64 / total as f64;
         }
         distribution
     }
