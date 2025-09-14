@@ -220,10 +220,61 @@ impl StateTransitionValidator {
                     to: request.to_state,
                 })
             }
-            TransitionResult::RequiresSteps { .. } => {
-                // For now, reject multi-step transitions
-                // In a full implementation, this would handle the required steps
-                Err(CoherenceError::ProtocolViolation)
+            TransitionResult::RequiresSteps { steps } => {
+                // Execute multi-step transitions sequentially
+                let mut current_state = request.from_state;
+                
+                for step_state in steps {
+                    // Create intermediate transition request
+                    let step_request = StateTransitionRequest {
+                        from_state: current_state,
+                        to_state: step_state,
+                        reason: request.reason,
+                        tier: request.tier,
+                        version: request.version,
+                        timestamp_ns: request.timestamp_ns,
+                    };
+                    
+                    // Validate each intermediate step
+                    match self.validate_transition(&step_request) {
+                        TransitionResult::Valid => {
+                            // Record the successful intermediate transition
+                            self.record_transition_stats(current_state, step_state);
+                            current_state = step_state;
+                        },
+                        TransitionResult::Invalid { reason: _ } => {
+                            return Err(CoherenceError::InvalidStateTransition {
+                                from: current_state,
+                                to: step_state,
+                            });
+                        },
+                        TransitionResult::RequiresSteps { steps: _nested_steps } => {
+                            // Handle nested multi-step transitions recursively
+                            let nested_request = StateTransitionRequest {
+                                from_state: current_state,
+                                to_state: step_state,
+                                reason: request.reason,
+                                tier: request.tier,
+                                version: request.version,
+                                timestamp_ns: request.timestamp_ns,
+                            };
+                            
+                            // Recursive call to handle nested steps
+                            self.execute_transition(&nested_request)?;
+                            current_state = step_state;
+                        }
+                    }
+                }
+                
+                // Verify we reached the target state
+                if current_state == request.to_state {
+                    Ok(())
+                } else {
+                    Err(CoherenceError::InvalidStateTransition {
+                        from: current_state,
+                        to: request.to_state,
+                    })
+                }
             }
         }
     }

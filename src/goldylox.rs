@@ -18,7 +18,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Summary of batch operation results with timing and success metrics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BatchOperationSummary<T> {
     /// Successfully retrieved/processed items
     pub successful_results: Vec<T>,
@@ -126,6 +126,7 @@ pub struct MaintenanceBreakdown {
 /// 
 /// Users specify both key and value types for full type safety and direct access
 /// to all sophisticated cache features: ML eviction, SIMD optimization, coherence protocols.
+#[derive(Clone)]
 pub struct Goldylox<K, V> 
 where 
     K: Serialize + DeserializeOwned + Clone + Hash + Eq + Ord + Send + Sync + Debug + Default + 'static,
@@ -325,7 +326,7 @@ where
     }
 
     /// Get current cold tier compression algorithm
-    pub fn get_cold_tier_compression_algorithm(&self) -> String {
+    pub fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
         self.manager.get_cold_tier_compression_algorithm()
     }
 
@@ -540,12 +541,14 @@ where
         // Convert from internal TaskInfo to public ActiveTask format
         self.manager.get_active_tasks()
             .into_iter()
-            .map(|task_info| ActiveTask {
-                id: task_info.task_id(),
-                task_type: task_info.task_type().to_string(),
-                started_at: 0, // Started at timestamp not available in current TaskInfo API
-                status: "running".to_string(), // Default status since TaskInfo doesn't expose status
-                progress: 0.0, // Progress not available in current TaskInfo API
+            .map(|task_info| {
+                ActiveTask {
+                    id: task_info.task_id(),
+                    task_type: task_info.task_type().to_string(),
+                    started_at: task_info.start_timestamp(),
+                    status: task_info.status().as_str().to_string(),
+                    progress: task_info.progress() as f64,
+                }
             })
             .collect()
     }
@@ -562,42 +565,86 @@ where
 
     /// Get maintenance configuration information
     pub fn get_maintenance_config_info(&self) -> String {
-        // For now, return basic config info. In a real implementation, this would
-        // return detailed configuration from the maintenance subsystem
-        "MaintenanceConfig { enabled: true, interval_ms: 60000, cleanup_threshold: 0.8 }".to_string()
+        let breakdown = self.manager.get_maintenance_stats();
+        let total_time_ms = breakdown.compaction_time_ms + breakdown.eviction_time_ms + 
+                          breakdown.stats_collection_time_ms + breakdown.memory_management_time_ms;
+        
+        format!(
+            "MaintenanceConfig {{ enabled: true, total_cycles: {}, total_time_ms: {}, avg_time_ms: {:.2}, last_maintenance_ago_ms: {} }}",
+            breakdown.total_cycles,
+            total_time_ms,
+            if breakdown.total_cycles > 0 { total_time_ms as f64 / breakdown.total_cycles as f64 } else { 0.0 },
+            (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64).saturating_sub(breakdown.last_maintenance_ns) / 1_000_000
+        )
     }
 
     /// Start background processor for maintenance tasks
     pub fn start_background_processor(&self) -> Result<(), CacheOperationError> {
-        // For now, just return success. In a real implementation, this would
-        // start the background processing system
-        Ok(())
+        self.manager.start_background_processor()
     }
 
-    /// Schedule an async operation (placeholder for async support)
-    pub async fn schedule_async_operation<F, T, C>(&self, operation: F, _context_name: String, _context_data: Vec<C>) -> Result<T, CacheOperationError>
+    /// Schedule an async operation with proper task coordination
+    pub async fn schedule_async_operation<F, T, C>(&self, operation: F, context_name: String, _context_data: Vec<C>) -> Result<T, CacheOperationError>
     where
         F: FnOnce(&str) -> Result<T, CacheOperationError> + Send + 'static,
         T: Send + 'static,
         C: Send + 'static,
     {
-        // For now, execute the operation directly with a dummy context
-        // Real implementation would schedule this on the async runtime
-        operation("async_context")
+        // Input validation
+        if context_name.is_empty() {
+            return Err(CacheOperationError::InvalidArgument("Context name cannot be empty".to_string()));
+        }
+        if context_name.len() > 256 {
+            return Err(CacheOperationError::InvalidArgument("Context name too long (max 256 chars)".to_string()));
+        }
+        
+        // Create result tracker and get task ID first for proper coordination
+        use crate::cache::worker::task_coordination::TaskResultTracker;
+        use std::time::Duration;
+        
+        let result_tracker = TaskResultTracker::<T>::new();
+        
+        // Generate task ID first using TaskCoordinator's ID generator
+        let task_id = self.manager.task_coordinator().next_task_id();
+        let result_sender = result_tracker.register_task_result(task_id);
+        
+        // Adapt operation to work with enhanced TaskExecutionContext
+        let context_name_clone = context_name.clone();
+        let enhanced_operation = move |_task_context: crate::cache::worker::task_coordination::TaskExecutionContext<SerdeCacheKey<K>, SerdeCacheValue<V>, T>| {
+            // Call the original operation with the context name
+            operation(&context_name_clone)
+        };
+        
+        // Schedule with result coordination using the same task_id
+        let scheduled_task_id = self.manager.schedule_async_operation_with_task_id(
+            enhanced_operation,
+            context_name,
+            Vec::<SerdeCacheKey<K>>::new(),
+            Some(result_sender),
+            task_id, // Use the same task_id for coordination
+        ).await?;
+        
+        // Verify task IDs match (production safety check)
+        if task_id != scheduled_task_id {
+            return Err(CacheOperationError::InvalidState(format!(
+                "Task ID mismatch: expected {}, got {}", task_id, scheduled_task_id
+            )));
+        }
+        
+        // Wait for result with the correct task_id
+        result_tracker.wait_for_result(task_id, Duration::from_secs(30))
     }
 
     /// Shutdown the policy engine gracefully
     pub fn shutdown_policy_engine(&self) -> Result<(), CacheOperationError> {
-        // For now, just return success. In a real implementation, this would
-        // gracefully shutdown the ML policy engine
-        Ok(())
+        // Policy engine shutdown is handled as part of graceful system shutdown
+        // The sophisticated policy engine cleanup is integrated into the unified shutdown process
+        self.manager.shutdown_gracefully()
     }
 
     /// Shutdown the cache system gracefully
     pub fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
-        // For now, just return success. In a real implementation, this would
-        // gracefully shutdown all cache subsystems
-        Ok(())
+        self.manager.shutdown_gracefully()
     }
 
 }

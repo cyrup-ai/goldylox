@@ -32,12 +32,22 @@ where
         _active_tasks: &AtomicU32,  // Now uses global static
         config: MaintenanceConfig,
     ) {
-        let mut worker_state = BackgroundWorkerState::new(worker_id);
+        let worker_state = BackgroundWorkerState::new(worker_id);
+        
+        // Create channel for worker status updates to monitoring system
+        let (status_sender, status_receiver) = crossbeam_channel::unbounded();
+        
+        // Register worker status channel in global registry for monitoring
+        BackgroundWorkerState::register_worker_channel(worker_id, status_receiver);
+        
+        // Send initial status update
+        let _ = status_sender.try_send(worker_state.create_status_snapshot());
 
         loop {
             // Check for shutdown signal
             if shutdown_receiver.try_recv().is_ok() {
                 worker_state.status.store(WorkerStatus::Shutdown);
+                let _ = status_sender.try_send(worker_state.create_status_snapshot());
                 break;
             }
 
@@ -46,12 +56,13 @@ where
                 Ok(task) => {
                     worker_state.status.store(WorkerStatus::Processing);
                     worker_state.current_task_discriminant.store(task.priority as u8, Ordering::Relaxed);
+                    let _ = status_sender.try_send(worker_state.create_status_snapshot());
                     GLOBAL_ACTIVE_TASKS.fetch_add(1, Ordering::Relaxed);
 
                     let start_time = Instant::now();
 
                     // Process the task with error handling
-                    match Self::try_process_maintenance_task(&task, &mut worker_state) {
+                    match Self::try_process_maintenance_task(&task, &worker_state) {
                         Ok(_) => {
                             let processing_time = start_time.elapsed().as_nanos() as u64;
                             worker_state
@@ -62,11 +73,13 @@ where
                             // If worker was in error state, attempt recovery
                             if matches!(worker_state.status(), WorkerStatus::Error) {
                                 worker_state.attempt_recovery();
+                                let _ = status_sender.try_send(worker_state.create_status_snapshot());
                             }
                         }
                         Err(e) => {
                             // Record error and update status
                             worker_state.record_error(&format!("Task processing failed: {:?}", e));
+                            let _ = status_sender.try_send(worker_state.create_status_snapshot());
                         }
                     }
 
@@ -76,6 +89,7 @@ where
                     // Only set to Idle if not in Error state
                     if !matches!(worker_state.status(), WorkerStatus::Error) {
                         worker_state.status.store(WorkerStatus::Idle);
+                        let _ = status_sender.try_send(worker_state.create_status_snapshot());
                     }
                 }
                 Err(TryRecvError::Empty) => {
@@ -106,6 +120,7 @@ where
                     } else {
                         // No tasks available, sleep briefly
                         worker_state.status.store(WorkerStatus::Idle);
+                        let _ = status_sender.try_send(worker_state.create_status_snapshot());
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
@@ -115,15 +130,22 @@ where
                 }
             }
 
-            // Update heartbeat
+            // Update heartbeat and send periodic status update
             worker_state.last_heartbeat.store(Instant::now());
+            // Send status update every few iterations to keep monitoring current
+            if worker_state.tasks_processed.load(Ordering::Relaxed).is_multiple_of(10) {
+                let _ = status_sender.try_send(worker_state.create_status_snapshot());
+            }
         }
+        
+        // Unregister worker state from global registry on shutdown
+        BackgroundWorkerState::unregister_worker(worker_id);
     }
 
     /// Process canonical maintenance task with error handling
     pub fn try_process_maintenance_task(
         task: &MaintenanceTask,
-        worker_state: &mut BackgroundWorkerState,
+        worker_state: &BackgroundWorkerState,
     ) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Check for task timeout
         if task.created_at.elapsed().as_secs() > 30 { // 30 second timeout
@@ -138,7 +160,7 @@ where
     /// Process canonical maintenance task
     pub fn process_maintenance_task(
         task: &MaintenanceTask,
-        worker_state: &mut BackgroundWorkerState,
+        worker_state: &BackgroundWorkerState,
     ) {
         match &task.task {
             CanonicalMaintenanceTask::CompactStorage { .. } => {

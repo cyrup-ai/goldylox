@@ -19,6 +19,33 @@ pub struct PoolStatistics {
     pub efficiency_scores: [AtomicU32; 3], // Score * 1000
 }
 
+impl Clone for PoolStatistics {
+    fn clone(&self) -> Self {
+        Self {
+            pool_allocations: [
+                AtomicU64::new(self.pool_allocations[0].load(Ordering::Relaxed)),
+                AtomicU64::new(self.pool_allocations[1].load(Ordering::Relaxed)),
+                AtomicU64::new(self.pool_allocations[2].load(Ordering::Relaxed)),
+            ],
+            pool_hit_rates: [
+                AtomicU32::new(self.pool_hit_rates[0].load(Ordering::Relaxed)),
+                AtomicU32::new(self.pool_hit_rates[1].load(Ordering::Relaxed)),
+                AtomicU32::new(self.pool_hit_rates[2].load(Ordering::Relaxed)),
+            ],
+            pool_utilizations: [
+                AtomicU32::new(self.pool_utilizations[0].load(Ordering::Relaxed)),
+                AtomicU32::new(self.pool_utilizations[1].load(Ordering::Relaxed)),
+                AtomicU32::new(self.pool_utilizations[2].load(Ordering::Relaxed)),
+            ],
+            efficiency_scores: [
+                AtomicU32::new(self.efficiency_scores[0].load(Ordering::Relaxed)),
+                AtomicU32::new(self.efficiency_scores[1].load(Ordering::Relaxed)),
+                AtomicU32::new(self.efficiency_scores[2].load(Ordering::Relaxed)),
+            ],
+        }
+    }
+}
+
 impl PoolStatistics {
     pub fn new() -> Self {
         Self {

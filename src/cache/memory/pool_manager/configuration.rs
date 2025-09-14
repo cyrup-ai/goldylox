@@ -4,7 +4,7 @@
 //! sizing policies, growth factors, and maintenance scheduling.
 
 /// Pool configuration parameters
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PoolConfiguration {
     /// Pool size limits (objects)
     #[allow(dead_code)] // Memory management - size_limits used in pool size configuration management

@@ -144,7 +144,7 @@ impl Default for HistoryCompressionConfig {
     fn default() -> Self {
         Self {
             compression_active: true,
-            compression_threshold: Duration::from_hours(1),
+            compression_threshold: Duration::from_secs(3600), // 1 hour
             compression_ratio: 0.1,
         }
     }

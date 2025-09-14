@@ -107,6 +107,27 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
                     Err(error) => CoherenceResponse::Error { request_id, error },
                 }
             }
+            CoherenceRequest::RecordRead { key, tier, request_id } => {
+                // Record read access using existing coherence infrastructure
+                match self.controller.handle_read_request(&key, tier) {
+                    Ok(_) => CoherenceResponse::AccessRecorded { request_id },
+                    Err(error) => CoherenceResponse::Error { request_id, error },
+                }
+            }
+            CoherenceRequest::RecordWrite { key, data, tier, request_id } => {
+                // Record write access using proper write request handler
+                match self.controller.handle_write_request(&key, tier, data) {
+                    Ok(_write_response) => CoherenceResponse::AccessRecorded { request_id },
+                    Err(error) => CoherenceResponse::Error { request_id, error },
+                }
+            }
+            CoherenceRequest::RecordPrefetch { key, tier, request_id } => {
+                // Record prefetch access - treated as read request for coherence purposes
+                match self.controller.handle_read_request(&key, tier) {
+                    Ok(_) => CoherenceResponse::AccessRecorded { request_id },
+                    Err(error) => CoherenceResponse::Error { request_id, error },
+                }
+            }
         }
     }
     

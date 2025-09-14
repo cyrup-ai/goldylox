@@ -6,7 +6,7 @@
 pub type CacheResult<T> = Result<T, crate::cache::traits::CacheOperationError>;
 
 /// Alert severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum AlertSeverity {
     Info = 0,

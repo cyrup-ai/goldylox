@@ -5,8 +5,7 @@
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use crossbeam_channel::{unbounded, Sender, Receiver, RecvTimeoutError};
 
 use crate::cache::coherence::data_structures::ProtocolConfiguration;
@@ -21,7 +20,7 @@ pub struct CoherenceSender<K: CacheKey + Default + bincode::Encode + bincode::De
     request_tx: Sender<CoherenceRequest<K, V>>,
     response_rx: Receiver<CoherenceResponse<K, V>>,
     shutdown_tx: Sender<()>,
-    response_buffer: Arc<Mutex<HashMap<u64, CoherenceResponse<K, V>>>>,
+    response_buffer: DashMap<u64, CoherenceResponse<K, V>>,
     buffer_limit: usize,
 }
 
@@ -66,7 +65,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
             request_tx,
             response_rx,
             shutdown_tx,
-            response_buffer: Arc::new(Mutex::new(HashMap::new())),
+            response_buffer: DashMap::new(),
             buffer_limit: 1000, // Prevent unbounded growth
         })
     }
@@ -89,9 +88,8 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
     /// Receive response with timeout
     pub fn receive_response(&self, request_id: u64, timeout: Duration) -> Result<CoherenceResponse<K, V>, CoherenceError> {
         // Check buffer first for previously received responses
-        if let Ok(mut buffer) = self.response_buffer.lock()
-            && let Some(response) = buffer.remove(&request_id) {
-                return Ok(response);
+        if let Some(response) = self.response_buffer.remove(&request_id) {
+            return Ok(response.1); // DashMap::remove returns (key, value) tuple
         }
         
         // Receive responses until we find the target or timeout
@@ -110,17 +108,16 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
                         return Ok(response);
                     } else {
                         // Buffer out-of-order response for later retrieval
-                        if let Ok(mut buffer) = self.response_buffer.lock() {
-                            // Prevent unbounded growth by limiting buffer size
-                            if buffer.len() < self.buffer_limit {
-                                buffer.insert(response_id, response);
-                            } else {
-                                // Buffer full - remove oldest entry to make room
-                                if let Some(&oldest_id) = buffer.keys().min() {
-                                    buffer.remove(&oldest_id);
-                                }
-                                buffer.insert(response_id, response);
+                        // Prevent unbounded growth by limiting buffer size
+                        if self.response_buffer.len() < self.buffer_limit {
+                            self.response_buffer.insert(response_id, response);
+                        } else {
+                            // Buffer full - remove oldest entry to make room
+                            if let Some(entry) = self.response_buffer.iter().next() {
+                                let oldest_id = *entry.key();
+                                self.response_buffer.remove(&oldest_id);
                             }
+                            self.response_buffer.insert(response_id, response);
                         }
                     }
                 }
@@ -136,6 +133,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
             CoherenceResponse::WriteSuccess { request_id, .. } |
             CoherenceResponse::Statistics { request_id, .. } |
             CoherenceResponse::SerializeSuccess { request_id, .. } |
+            CoherenceResponse::AccessRecorded { request_id, .. } |
             CoherenceResponse::Error { request_id, .. } => *request_id,
         }
     }
@@ -148,12 +146,55 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
     /// Clear response buffer to prevent memory leaks
     #[allow(dead_code)] // MESI coherence - used in worker maintenance and memory management
     pub fn clear_buffer(&self) -> Result<usize, CoherenceError> {
-        if let Ok(mut buffer) = self.response_buffer.lock() {
-            let cleared_count = buffer.len();
-            buffer.clear();
-            Ok(cleared_count)
-        } else {
-            Err(CoherenceError::CommunicationFailure)
+        let cleared_count = self.response_buffer.len();
+        self.response_buffer.clear();
+        Ok(cleared_count)
+    }
+    
+    /// Get sender for direct channel access
+    pub fn get_request_sender(&self) -> Sender<CoherenceRequest<K, V>> {
+        self.request_tx.clone()
+    }
+    
+    /// Get receiver for direct channel access
+    pub fn get_response_receiver(&self) -> Receiver<CoherenceResponse<K, V>> {
+        self.response_rx.clone()
+    }
+}
+
+/// Global worker channel registry
+use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::any::TypeId;
+
+static WORKER_CHANNELS: OnceLock<std::sync::RwLock<HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>>> = OnceLock::new();
+
+/// Get worker channels for coherence communication
+pub fn get_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>() -> Option<(Sender<CoherenceRequest<K, V>>, Receiver<CoherenceResponse<K, V>>)> {
+    let channels = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
+    
+    if let Ok(channel_map) = channels.read() {
+        let type_id = TypeId::of::<(K, V)>();
+        if let Some(channel_any) = channel_map.get(&type_id) {
+            // Safely downcast the boxed Any to the correct channel pair type
+            if let Some((sender, receiver)) = channel_any.downcast_ref::<(Sender<CoherenceRequest<K, V>>, Receiver<CoherenceResponse<K, V>>)>() {
+                return Some((sender.clone(), receiver.clone()));
+            }
         }
+    }
+    
+    None
+}
+
+/// Register worker channels for a specific key-value type combination
+pub fn register_worker_channels<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>(
+    sender: Sender<CoherenceRequest<K, V>>,
+    receiver: Receiver<CoherenceResponse<K, V>>,
+) {
+    let channels = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
+    
+    if let Ok(mut channel_map) = channels.write() {
+        let type_id = TypeId::of::<(K, V)>();
+        channel_map.insert(type_id, Box::new((sender, receiver)));
     }
 }

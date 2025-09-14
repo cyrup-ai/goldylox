@@ -13,7 +13,7 @@ pub mod write_propagation;
 pub mod worker;
 
 // Worker types available through direct submodule access only  
-pub use data_structures::{CacheTier, ProtocolConfiguration};
+pub use data_structures::{CacheTier, ProtocolConfiguration, CoherenceController};
 // Worker manager and protocol API exports removed - not used in current implementation
 
 
@@ -22,7 +22,7 @@ pub(crate) use communication::{
     CoherenceError, CoherenceMessage,
 };
 pub(crate) use data_structures::{
-    CacheLineState, CoherenceController, CoherenceKey,
+    CacheLineState, CoherenceKey,
     InvalidationReason, MesiState,
 };
 pub(crate) use invalidation::InvalidationStatistics;

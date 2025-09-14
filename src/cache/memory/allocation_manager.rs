@@ -4,7 +4,7 @@
 //! statistics tracking and optimal pool selection for high-performance allocation.
 
 use std::ptr::NonNull;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use log;
 
@@ -116,7 +116,7 @@ pub struct GlobalPoolSnapshot {
 #[derive(Debug)]
 pub struct AllocationManager<K: CacheKey + Default, V: CacheValue> {
     /// Memory pool manager for efficient allocation
-    pool_manager: Arc<MemoryPoolManager>,
+    pool_manager: MemoryPoolManager,
     /// Cleanup manager owned directly
     cleanup_manager: PoolCleanupManager,
     /// Error recovery system for sophisticated retry mechanisms
@@ -209,7 +209,7 @@ where
 /// Pool cleanup worker that owns pools
 pub struct PoolCleanupWorker {
     receiver: Receiver<PoolCleanupRequest>,
-    pool_manager: Arc<MemoryPoolManager>,
+    pool_manager: MemoryPoolManager,
 }
 
 impl PoolCleanupWorker {
@@ -297,7 +297,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
         );
         
         // Create pool manager
-        let pool_manager = Arc::new(MemoryPoolManager::new(config)?);
+        let pool_manager = MemoryPoolManager::new(config)?;
         
         // Create pool cleanup channel
         let (pool_cleanup_sender, pool_cleanup_receiver) = bounded::<PoolCleanupRequest>(256);
@@ -307,8 +307,8 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
         PoolCoordinator::initialize(pool_cleanup_sender)
             .map_err(|e| CacheOperationError::initialization_failed(format!("Pool coordinator: {:?}", e)))?;
 
-        // Clone Arc reference for worker ownership
-        let worker_pool_manager = Arc::clone(&pool_manager);
+        // Clone pool manager for worker ownership
+        let worker_pool_manager = pool_manager.clone();
 
         // Spawn pool cleanup worker
         std::thread::Builder::new()

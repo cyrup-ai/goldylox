@@ -13,7 +13,7 @@ use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
-impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> PersistentColdTier<K, V> {
+impl<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> PersistentColdTier<K, V> {
     /// Create new persistent cold tier cache
     pub fn new(config: ColdTierConfig, cache_id: &str) -> io::Result<Self> {
         let base_dir = Path::new(config.base_dir.as_str());
@@ -59,6 +59,7 @@ impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::Deseri
             config,
             sync_state,
             recovery_system,
+            maintenance_sender: None, // Will be set by factory
             _phantom: std::marker::PhantomData,
         };
 
@@ -75,5 +76,10 @@ impl<K: CacheKey + Default, V: CacheValue + serde::Serialize + serde::de::Deseri
         let _ = self
             .compaction_system
             .schedule_compaction(CompactionTask::OptimizeCompression);
+    }
+    
+    /// Set maintenance task sender for scheduling maintenance operations
+    pub fn set_maintenance_sender(&mut self, sender: crossbeam_channel::Sender<crate::cache::manager::background::types::MaintenanceTask>) {
+        self.maintenance_sender = Some(sender);
     }
 }

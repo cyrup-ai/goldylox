@@ -383,13 +383,8 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                 crate::cache::tier::warm::global_api::clear_all_warm_tiers()
             }
             CacheTier::Cold => {
-                // For cold tier, we need to add a clear method to PersistentColdTier first
-                // For now, use a simpler approach that matches the existing pattern
-                let coordinator = crate::cache::tier::cold::ColdTierCoordinator::get()?;
-                
-                // Trigger maintenance operation to clear the cold tier storage
-                coordinator.trigger_maintenance::<K, V>("clear")?;
-                Ok(())
+                // Use the production-ready cold tier clear function
+                crate::cache::tier::cold::clear::<K, V>()
             }
         }
     }

@@ -7,6 +7,7 @@
 
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+// Arc removed - using crossbeam messaging instead
 use std::time::{Duration, Instant};
 use crossbeam_channel::{bounded, Sender, Receiver};
 
@@ -116,12 +117,189 @@ pub struct TaskCoordinator<K: CacheKey + Default, V: CacheValue + Default + serd
     command_queue: CacheCommandQueue<K, V>,
     /// Active task tracking
     active_tasks: DashMap<u64, TaskInfo<K>>,
+    /// Task execution worker communication channel
+    task_worker_sender: crossbeam_channel::Sender<TaskCommand<K, V>>,
     /// Task ID generator
     next_task_id: AtomicU64,
     /// Coordination statistics
     stats: CoordinatorStats,
     /// Shutdown flag
     shutdown: AtomicBool,
+}
+
+/// Commands for the task execution worker
+pub enum TaskCommand<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
+    Execute {
+        task_id: u64,
+        operation: Box<dyn FnOnce(TaskExecutionContext<K, V>) -> Result<(), CacheOperationError> + Send + 'static>,
+        context: TaskExecutionContext<K, V>,
+    },
+    Cancel {
+        task_id: u64,
+        response: crossbeam_channel::Sender<bool>
+    },
+    GetActiveCount {
+        response: crossbeam_channel::Sender<usize>
+    },
+    Shutdown,
+}
+
+/// Worker that executes tasks synchronously using crossbeam messaging
+pub struct TaskExecutionWorker<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> {
+    receiver: crossbeam_channel::Receiver<TaskCommand<K, V>>,
+    active_tasks: std::collections::HashMap<u64, TaskExecutionState>,
+    stats: TaskWorkerStats,
+    startup_time: Instant,
+    active_tasks_tracker: DashMap<u64, TaskInfo<K>>,
+    coordinator_stats: CoordinatorStats,
+}
+
+#[derive(Debug)]
+struct TaskExecutionState {
+    start_time: Instant,
+    task_type: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskWorkerStats {
+    pub total_commands_processed: u64,
+    pub total_executed: u64,
+    pub total_successful: u64,
+    pub total_cancelled: u64,
+    pub worker_start_time: Instant,
+}
+
+impl TaskWorkerStats {
+    pub fn new() -> Self {
+        Self {
+            total_commands_processed: 0,
+            total_executed: 0,
+            total_successful: 0,
+            total_cancelled: 0,
+            worker_start_time: Instant::now(),
+        }
+    }
+}
+
+impl<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> TaskExecutionWorker<K, V> {
+    pub fn new(
+        receiver: crossbeam_channel::Receiver<TaskCommand<K, V>>,
+        active_tasks_tracker: DashMap<u64, TaskInfo<K>>,
+        coordinator_stats: CoordinatorStats,
+    ) -> Self {
+        Self {
+            receiver,
+            active_tasks: std::collections::HashMap::new(),
+            stats: TaskWorkerStats::new(),
+            startup_time: Instant::now(),
+            active_tasks_tracker,
+            coordinator_stats,
+        }
+    }
+
+    pub fn run(mut self) {
+        log::info!("TaskExecutionWorker starting up at {:?}", self.startup_time);
+
+        while let Ok(command) = self.receiver.recv() {
+            self.stats.total_commands_processed += 1;
+
+            match command {
+                TaskCommand::Execute { task_id, operation, context } => {
+                    log::debug!("Executing task_id: {}", task_id);
+
+                    let execution_state = TaskExecutionState {
+                        start_time: context.start_time,
+                        task_type: context.metadata.task_type.clone(),
+                    };
+
+                    self.active_tasks.insert(task_id, execution_state);
+
+                    let result = operation(context);
+                    let task_duration = self.active_tasks.get(&task_id).unwrap().start_time.elapsed();
+
+                    self.coordinator_stats.update_task_completion(task_duration, result.is_ok());
+                    self.active_tasks_tracker.remove(&task_id);
+                    self.coordinator_stats.active_task_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+
+                    self.active_tasks.remove(&task_id);
+                    self.stats.total_executed += 1;
+                    if result.is_ok() {
+                        self.stats.total_successful += 1;
+                    }
+
+                    log::debug!("Completed task_id: {} with result: {:?}", task_id, result.is_ok());
+                }
+
+                TaskCommand::Cancel { task_id, response } => {
+                    let cancelled = self.active_tasks.remove(&task_id).is_some();
+                    if cancelled {
+                        self.active_tasks_tracker.remove(&task_id);
+                        self.coordinator_stats.active_task_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        self.stats.total_cancelled += 1;
+                        log::debug!("Cancelled task_id: {}", task_id);
+                    } else {
+                        log::warn!("Attempted to cancel non-existent task_id: {}", task_id);
+                    }
+
+                    if let Err(e) = response.send(cancelled) {
+                        log::error!("Failed to send cancel response for task_id: {}. Error: {:?}", task_id, e);
+                    }
+                }
+
+                TaskCommand::GetActiveCount { response } => {
+                    let count = self.active_tasks.len();
+                    if let Err(e) = response.send(count) {
+                        log::error!("Failed to send active count response. Error: {:?}", e);
+                    }
+                }
+
+                TaskCommand::Shutdown => {
+                    log::info!("TaskExecutionWorker received shutdown command");
+                    break;
+                }
+            }
+        }
+
+        let remaining_count = self.active_tasks.len();
+        if remaining_count > 0 {
+            log::info!("TaskExecutionWorker shutting down with {} remaining tasks", remaining_count);
+            for task_id in self.active_tasks.keys() {
+                self.active_tasks_tracker.remove(task_id);
+            }
+        }
+
+        let total_runtime = self.startup_time.elapsed();
+        log::info!("TaskExecutionWorker shutdown complete. Runtime: {:?}, Stats: executed={}, successful={}, cancelled={}",
+                   total_runtime, self.stats.total_executed, self.stats.total_successful, self.stats.total_cancelled);
+    }
+}
+
+/// Task execution status
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaskStatus {
+    /// Task is waiting to be executed
+    Pending,
+    /// Task is currently running
+    Running,
+    /// Task completed successfully
+    Completed,
+    /// Task failed with an error
+    Failed,
+    /// Task was cancelled
+    Cancelled,
+}
+
+impl TaskStatus {
+    /// Convert status to string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskStatus::Pending => "pending",
+            TaskStatus::Running => "running", 
+            TaskStatus::Completed => "completed",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Cancelled => "cancelled",
+        }
+    }
 }
 
 /// Information about active tasks
@@ -142,6 +320,12 @@ pub struct TaskInfo<K: CacheKey> {
     /// Estimated completion time
     
     estimated_completion: Option<Instant>,
+    /// Current task status
+    
+    status: TaskStatus,
+    /// Task progress (0.0 to 1.0)
+    
+    progress: f32,
     /// Associated cache keys
     
     keys: Vec<K>, // Generic keys for tracking
@@ -157,10 +341,46 @@ impl<K: CacheKey> TaskInfo<K> {
     pub fn task_type(&self) -> &str {
         &self.task_type
     }
+
+    /// Get current task status
+    pub fn status(&self) -> &TaskStatus {
+        &self.status
+    }
+
+    /// Get task progress (0.0 to 1.0)
+    pub fn progress(&self) -> f32 {
+        self.progress
+    }
+
+    /// Update task status
+    pub fn update_status(&mut self, status: TaskStatus) {
+        self.status = status;
+    }
+
+    /// Update task progress
+    pub fn update_progress(&mut self, progress: f32) {
+        self.progress = progress.clamp(0.0, 1.0);
+    }
     
     /// Get task priority
     pub fn priority(&self) -> u16 {
         self.priority
+    }
+    
+    /// Get task start time as elapsed duration since creation
+    pub fn elapsed_time(&self) -> std::time::Duration {
+        self.started_at.elapsed()
+    }
+    
+    /// Get approximate start timestamp (current time - elapsed time)
+    pub fn start_timestamp(&self) -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let elapsed_secs = self.started_at.elapsed().as_secs();
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(elapsed_secs)
     }
 }
 
@@ -181,7 +401,7 @@ pub struct CoordinatorStats {
 
 /// Task execution context for cache operations
 #[derive(Debug)]
-pub struct TaskExecutionContext<K: CacheKey, V: CacheValue> {
+pub struct TaskExecutionContext<K: CacheKey, V: CacheValue, T = ()> {
     /// Command queue for mutations
     command_sender: Sender<CacheCommand<K, V>>,
     /// Task ID for tracking
@@ -190,6 +410,8 @@ pub struct TaskExecutionContext<K: CacheKey, V: CacheValue> {
     start_time: Instant,
     /// Task metadata
     metadata: TaskMetadata,
+    /// Result coordination channel (NEW for task result integration)
+    pub result_sender: Option<crossbeam_channel::Sender<Result<T, CacheOperationError>>>,
 }
 
 /// Task metadata for execution tracking
@@ -348,21 +570,40 @@ impl<K: CacheKey, V: CacheValue> Clone for CacheCommandQueue<K, V> {
 }
 
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> TaskCoordinator<K, V> {
-    /// Create new task coordinator
+    /// Create new task coordinator with pure crossbeam task execution
     pub fn new_direct(max_command_queue_size: usize) -> Self {
         let command_queue = CacheCommandQueue::new(max_command_queue_size);
+        let active_tasks = DashMap::new();
+        let stats = CoordinatorStats::new();
+
+        let (task_worker_sender, task_worker_receiver) = bounded(1000);
+        let task_worker = TaskExecutionWorker::new(
+            task_worker_receiver,
+            active_tasks.clone(),
+            stats.clone(),
+        );
+
+        std::thread::Builder::new()
+            .name("task-execution-worker".to_string())
+            .spawn(move || {
+                task_worker.run();
+            })
+            .expect("Failed to spawn TaskExecutionWorker thread");
+
+        log::info!("TaskCoordinator initialized with dedicated TaskExecutionWorker thread");
 
         Self {
             command_queue,
-            active_tasks: DashMap::new(),
+            active_tasks,
+            task_worker_sender,
             next_task_id: AtomicU64::new(1),
-            stats: CoordinatorStats::new(),
+            stats,
             shutdown: AtomicBool::new(false),
         }
     }
 
     /// Schedule cache operation task
-    pub async fn schedule_cache_operation<F, T>(
+    pub fn schedule_cache_operation<F, T>(
         &self,
         operation: F,
         task_type: String,
@@ -376,21 +617,20 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
         let task_id = self.next_task_id.fetch_add(1, Ordering::Relaxed);
         let start_time = Instant::now();
 
-        // Create task info
         let task_info = TaskInfo::<K> {
             id: task_id,
             task_type: task_type.clone(),
             priority,
             started_at: start_time,
             estimated_completion: None,
+            status: TaskStatus::Running,
+            progress: 0.0,
             keys,
         };
 
-        // Track active task
         self.active_tasks.insert(task_id, task_info);
         self.stats.active_task_count.fetch_add(1, Ordering::Relaxed);
 
-        // Create execution context
         let context = TaskExecutionContext {
             command_sender: self.command_queue.get_sender(),
             task_id,
@@ -398,36 +638,207 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             metadata: TaskMetadata {
                 task_type,
                 priority,
-                expected_duration: Duration::from_millis(100), // Default estimate
+                expected_duration: Duration::from_millis(100),
                 retry_count: 0,
                 numa_node: None,
             },
+            result_sender: None,
         };
 
-        // Schedule task
-        let active_tasks = self.active_tasks.clone();
-        let stats = self.stats.clone();
+        let wrapped_operation = Box::new(move |ctx: TaskExecutionContext<K, V>| -> Result<(), CacheOperationError> {
+            operation(ctx).map(|_| ())
+        });
 
-        let _future = async move {
-            let result = operation(context);
-
-            // Update statistics
-            let task_duration = start_time.elapsed();
-            stats.update_task_completion(task_duration, result.is_ok());
-
-            // Remove from active tasks
-            active_tasks.remove(&task_id);
-            stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
-
-            result
+        let task_command = TaskCommand::Execute {
+            task_id,
+            operation: wrapped_operation,
+            context,
         };
 
-        // Task coordination complete - direct CacheCommandQueue routing used
-        // Real work goes through CacheCommandQueue directly
+        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+            self.active_tasks.remove(&task_id);
+            self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
+            return Err(CacheOperationError::resource_exhausted("Task worker queue full"));
+        }
+
+        self.stats.total_tasks.fetch_add(1, Ordering::Relaxed);
+        Ok(task_id)
+    }
+
+    /// Schedule cache operation task with result coordination
+    pub fn schedule_cache_operation_with_result<F, T>(
+        &self,
+        operation: F,
+        task_type: String,
+        priority: u16,
+        keys: Vec<K>,
+        result_sender: Option<crossbeam_channel::Sender<Result<T, CacheOperationError>>>,
+    ) -> Result<u64, CacheOperationError>
+    where
+        F: FnOnce(TaskExecutionContext<K, V, T>) -> Result<T, CacheOperationError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let task_id = self.next_task_id.fetch_add(1, Ordering::Relaxed);
+        let start_time = Instant::now();
+
+        let task_info = TaskInfo::<K> {
+            id: task_id,
+            task_type: task_type.clone(),
+            priority,
+            started_at: start_time,
+            estimated_completion: None,
+            status: TaskStatus::Running,
+            progress: 0.0,
+            keys,
+        };
+
+        self.active_tasks.insert(task_id, task_info);
+        self.stats.active_task_count.fetch_add(1, Ordering::Relaxed);
+
+        let wrapped_operation = Box::new(move |ctx: TaskExecutionContext<K, V>| -> Result<(), CacheOperationError> {
+            let result = operation(TaskExecutionContext {
+                command_sender: ctx.command_sender,
+                task_id: ctx.task_id,
+                start_time: ctx.start_time,
+                metadata: ctx.metadata,
+                result_sender: result_sender.clone(),
+            });
+            
+            if let Some(sender) = result_sender {
+                if let Err(send_error) = sender.send(result) {
+                    log::error!("Failed to send task result for task {}: {:?}", ctx.task_id, send_error);
+                } else {
+                    log::debug!("Successfully sent result for task {}", ctx.task_id);
+                }
+            }
+            
+            Ok(())
+        });
+
+        let context = TaskExecutionContext {
+            command_sender: self.command_queue.get_sender(),
+            task_id,
+            start_time,
+            metadata: TaskMetadata {
+                task_type,
+                priority,
+                expected_duration: Duration::from_millis(100),
+                retry_count: 0,
+                numa_node: None,
+            },
+            result_sender: None,
+        };
+
+        let task_command = TaskCommand::Execute {
+            task_id,
+            operation: wrapped_operation,
+            context,
+        };
+
+        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+            self.active_tasks.remove(&task_id);
+            self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
+            return Err(CacheOperationError::resource_exhausted("Task worker queue full"));
+        }
         
         self.stats.total_tasks.fetch_add(1, Ordering::Relaxed);
-
         Ok(task_id)
+    }
+
+    /// Schedule cache operation with predetermined task ID for coordination
+    pub fn schedule_cache_operation_with_task_id<F, T>(
+        &self,
+        operation: F,
+        task_type: String,
+        priority: u16,
+        keys: Vec<K>,
+        result_sender: Option<crossbeam_channel::Sender<Result<T, CacheOperationError>>>,
+        predetermined_task_id: u64,
+    ) -> Result<u64, CacheOperationError>
+    where
+        F: FnOnce(TaskExecutionContext<K, V, T>) -> Result<T, CacheOperationError> + Send + 'static,
+        T: Send + 'static,
+    {
+        if predetermined_task_id == 0 {
+            return Err(CacheOperationError::InvalidArgument("Task ID cannot be zero".to_string()));
+        }
+        if keys.len() > 10000 {
+            return Err(CacheOperationError::InvalidArgument("Too many keys (max 10000)".to_string()));
+        }
+        if task_type.is_empty() {
+            return Err(CacheOperationError::InvalidArgument("Task type cannot be empty".to_string()));
+        }
+        
+        let task_id = predetermined_task_id;
+        let start_time = Instant::now();
+        
+        let task_info = TaskInfo::<K> {
+            id: task_id,
+            task_type: task_type.clone(),
+            priority,
+            started_at: start_time,
+            estimated_completion: None,
+            status: TaskStatus::Running,
+            progress: 0.0,
+            keys,
+        };
+
+        self.active_tasks.insert(task_id, task_info);
+        self.stats.active_task_count.fetch_add(1, Ordering::Relaxed);
+
+        let wrapped_operation = Box::new(move |ctx: TaskExecutionContext<K, V>| -> Result<(), CacheOperationError> {
+            let result = operation(TaskExecutionContext {
+                command_sender: ctx.command_sender,
+                task_id: ctx.task_id,
+                start_time: ctx.start_time,
+                metadata: ctx.metadata,
+                result_sender: result_sender.clone(),
+            });
+            
+            if let Some(sender) = result_sender {
+                if let Err(send_error) = sender.send(result) {
+                    log::error!("Failed to send task result for task {}: {:?}", ctx.task_id, send_error);
+                } else {
+                    log::debug!("Successfully sent result for task {}", ctx.task_id);
+                }
+            }
+            
+            Ok(())
+        });
+
+        let context = TaskExecutionContext {
+            command_sender: self.command_queue.get_sender(),
+            task_id,
+            start_time,
+            metadata: TaskMetadata {
+                task_type,
+                priority,
+                expected_duration: Duration::from_millis(100),
+                retry_count: 0,
+                numa_node: None,
+            },
+            result_sender: None,
+        };
+
+        let task_command = TaskCommand::Execute {
+            task_id,
+            operation: wrapped_operation,
+            context,
+        };
+
+        if let Err(_) = self.task_worker_sender.try_send(task_command) {
+            self.active_tasks.remove(&task_id);
+            self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
+            return Err(CacheOperationError::resource_exhausted("Task worker queue full"));
+        }
+
+        self.stats.total_tasks.fetch_add(1, Ordering::Relaxed);
+        Ok(task_id)
+    }
+    
+    /// Get next task ID without incrementing (for external coordination)
+    pub fn next_task_id(&self) -> u64 {
+        self.next_task_id.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Execute all pending commands
@@ -463,16 +874,52 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
             .collect()
     }
 
-    /// Cancel active task
+    /// Cancel active task using crossbeam messaging to TaskHandleWorker
     pub fn cancel_task(&self, task_id: u64) -> Result<bool, CacheOperationError> {
-        // Remove from active tasks
+        // Send cancel command to the TaskHandleWorker through crossbeam channel
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        
+        let task_cancelled = match self.task_worker_sender.try_send(TaskCommand::Cancel {
+            task_id,
+            response: response_sender,
+        }) {
+            Ok(()) => {
+                // Successfully sent command, wait for response with reasonable timeout
+                match response_receiver.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(cancelled) => {
+                        log::debug!("TaskExecutionWorker responded: task_id {} cancel result = {}", task_id, cancelled);
+                        cancelled
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        log::error!("Timeout waiting for cancel response from TaskExecutionWorker for task_id: {}", task_id);
+                        false
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        log::error!("TaskExecutionWorker channel disconnected while canceling task_id: {}", task_id);
+                        false
+                    }
+                }
+            }
+            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                log::error!("TaskExecutionWorker command queue is full, cannot cancel task_id: {}", task_id);
+                return Err(CacheOperationError::ResourceExhausted("Task execution worker queue is full".to_string()));
+            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                log::error!("TaskExecutionWorker channel disconnected, cannot cancel task_id: {}", task_id);
+                return Err(CacheOperationError::InvalidState("Task execution worker is not available".to_string()));
+            }
+        };
+
+        // Remove from active tasks tracking
         let was_active = self.active_tasks.remove(&task_id).is_some();
 
-        if was_active {
+        if was_active || task_cancelled {
             self.stats.active_task_count.fetch_sub(1, Ordering::Relaxed);
+            log::debug!("Task cancellation completed: task_id={}, was_active={}, task_cancelled={}", 
+                       task_id, was_active, task_cancelled);
         }
 
-        Ok(was_active)
+        Ok(was_active || task_cancelled)
     }
 
     /// Shutdown coordinator gracefully
@@ -492,7 +939,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()>, V: CacheValu
     }
 }
 
-impl<K: CacheKey, V: CacheValue> TaskExecutionContext<K, V> {
+impl<K: CacheKey, V: CacheValue, T> TaskExecutionContext<K, V, T> {
     /// Enqueue command for deferred execution
     pub fn enqueue_command(&self, command: CacheCommand<K, V>) -> Result<(), CacheOperationError> {
         self.command_sender.try_send(command)
@@ -587,5 +1034,72 @@ impl Clone for CoordinatorStats {
             avg_task_duration: AtomicU64::new(self.avg_task_duration.load(Ordering::Relaxed)),
             success_rate: AtomicU64::new(self.success_rate.load(Ordering::Relaxed)),
         }
+    }
+}
+
+/// Task result tracker for async operation result coordination using crossbeam channels
+#[derive(Debug)]
+pub struct TaskResultTracker<T> {
+    /// Result channels keyed by task ID
+    result_channels: DashMap<u64, crossbeam_channel::Receiver<Result<T, CacheOperationError>>>,
+    /// Channel cleanup tracker
+    next_cleanup_id: AtomicU64,
+}
+
+impl<T> TaskResultTracker<T> {
+    /// Create new task result tracker
+    pub fn new() -> Self {
+        Self {
+            result_channels: DashMap::new(),
+            next_cleanup_id: AtomicU64::new(1),
+        }
+    }
+
+    /// Register a result channel for a task
+    pub fn register_task_result(&self, task_id: u64) -> crossbeam_channel::Sender<Result<T, CacheOperationError>> {
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        self.result_channels.insert(task_id, receiver);
+        sender
+    }
+
+    /// Wait for task result with timeout
+    pub fn wait_for_result(&self, task_id: u64, timeout: Duration) -> Result<T, CacheOperationError> {
+        let receiver = self.result_channels.remove(&task_id)
+            .ok_or_else(|| CacheOperationError::InvalidState(format!("Task {} not found in result tracker", task_id)))?
+            .1; // Get the value from the (key, value) tuple
+
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                Err(CacheOperationError::TimeoutError)
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                Err(CacheOperationError::InvalidState("Task result channel disconnected".to_string()))
+            }
+        }
+    }
+
+    /// Cleanup expired result channels
+    pub fn cleanup_expired_results(&self, _max_age: Duration) -> usize {
+        // For simplicity, just clean up all channels older than next_cleanup_id - 100
+        let current_id = self.next_cleanup_id.load(Ordering::Relaxed);
+        let cleanup_threshold = current_id.saturating_sub(100);
+        
+        let mut cleaned = 0;
+        self.result_channels.retain(|&task_id, _| {
+            if task_id < cleanup_threshold {
+                cleaned += 1;
+                false // Remove this entry
+            } else {
+                true // Keep this entry
+            }
+        });
+        
+        cleaned
+    }
+
+    /// Get number of pending results
+    pub fn pending_results_count(&self) -> usize {
+        self.result_channels.len()
     }
 }

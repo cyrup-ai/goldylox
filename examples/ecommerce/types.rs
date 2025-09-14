@@ -5,7 +5,9 @@
 
 use goldylox::prelude::*;
 use std::collections::BTreeMap;
-use std::sync::{Arc, atomic::{AtomicU64, AtomicBool}};
+use std::sync::atomic::{AtomicU64, AtomicBool};
+use crossbeam_channel::{Receiver, Sender, bounded};
+use tokio::sync::oneshot;
 
 /// Product in e-commerce catalog - designed for realistic caching patterns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -59,20 +61,131 @@ pub struct AnalyticsEvent {
     pub raw_data: Vec<u8>,
 }
 
-/// Cache node representing a data center
+/// Cache operation commands for worker communication
+pub enum CacheCommand {
+    ProductGet { key: String, response: oneshot::Sender<Option<Product>> },
+    ProductPut { key: String, value: Product, response: oneshot::Sender<Result<(), String>> },
+    SessionGet { key: String, response: oneshot::Sender<Option<UserSession>> },
+    SessionPut { key: String, value: UserSession, response: oneshot::Sender<Result<(), String>> },
+    AnalyticsGet { key: String, response: oneshot::Sender<Option<AnalyticsEvent>> },
+    AnalyticsPut { key: String, value: AnalyticsEvent, response: oneshot::Sender<Result<(), String>> },
+    GetStats { response: oneshot::Sender<String> },
+    Shutdown,
+}
+
+/// Cache worker that owns cache instances
+pub struct CacheWorker {
+    receiver: Receiver<CacheCommand>,
+    product_cache: Goldylox<String, Product>,
+    session_cache: Goldylox<String, UserSession>,
+    analytics_cache: Goldylox<String, AnalyticsEvent>,
+}
+
+impl CacheWorker {
+    pub fn new(receiver: Receiver<CacheCommand>) -> Result<Self, Box<dyn std::error::Error>> {
+        // Create separate builders for each cache type
+        let product_config = GoldyloxBuilder::<String, Product>::new()
+            .with_hot_tier_capacity(10000)
+            .with_warm_tier_capacity(50000)
+            .with_cold_tier_capacity(100000);
+            
+        let session_config = GoldyloxBuilder::<String, UserSession>::new()
+            .with_hot_tier_capacity(5000)
+            .with_warm_tier_capacity(25000)
+            .with_cold_tier_capacity(50000);
+            
+        let analytics_config = GoldyloxBuilder::<String, AnalyticsEvent>::new()
+            .with_hot_tier_capacity(15000)
+            .with_warm_tier_capacity(75000)
+            .with_cold_tier_capacity(150000);
+        
+        Ok(Self {
+            receiver,
+            product_cache: product_config.build()?,
+            session_cache: session_config.build()?,
+            analytics_cache: analytics_config.build()?,
+        })
+    }
+
+    pub fn run(self) {
+        loop {
+            match self.receiver.recv() {
+                Ok(command) => {
+                    match command {
+                        CacheCommand::ProductGet { key, response } => {
+                            let result = self.product_cache.get(&key);
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send ProductGet response: {}", e);
+                            }
+                        },
+                        CacheCommand::ProductPut { key, value, response } => {
+                            let result = self.product_cache.put(key, value).map_err(|e| e.to_string());
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send ProductPut response: {}", e);
+                            }
+                        },
+                        CacheCommand::SessionGet { key, response } => {
+                            let result = self.session_cache.get(&key);
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send SessionGet response: {}", e);
+                            }
+                        },
+                        CacheCommand::SessionPut { key, value, response } => {
+                            let result = self.session_cache.put(key, value).map_err(|e| e.to_string());
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send SessionPut response: {}", e);
+                            }
+                        },
+                        CacheCommand::AnalyticsGet { key, response } => {
+                            let result = self.analytics_cache.get(&key);
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send AnalyticsGet response: {}", e);
+                            }
+                        },
+                        CacheCommand::AnalyticsPut { key, value, response } => {
+                            let result = self.analytics_cache.put(key, value).map_err(|e| e.to_string());
+                            if let Err(e) = response.send(result) {
+                                log::warn!("Failed to send AnalyticsPut response: {}", e);
+                            }
+                        },
+                        CacheCommand::GetStats { response } => {
+                            let product_stats = self.product_cache.stats().unwrap_or_else(|_| "error".to_string());
+                            let session_stats = self.session_cache.stats().unwrap_or_else(|_| "error".to_string());
+                            let analytics_stats = self.analytics_cache.stats().unwrap_or_else(|_| "error".to_string());
+                            let combined_stats = format!("Product: {}, Session: {}, Analytics: {}", 
+                                product_stats, session_stats, analytics_stats);
+                            if let Err(e) = response.send(combined_stats) {
+                                log::warn!("Failed to send GetStats response: {}", e);
+                            }
+                        },
+                        CacheCommand::Shutdown => {
+                            log::info!("Cache worker shutting down gracefully");
+                            break;
+                        }
+                    }
+                },
+                Err(e) => {
+                    log::error!("Cache worker receiver error: {}", e);
+                    break;
+                }
+            }
+        }
+        log::info!("Cache worker thread terminated");
+    }
+}
+
+/// Cache node with messaging interface (no shared ownership)
 #[derive(Debug)]
 pub struct CacheNode {
     pub node_id: String,
     pub location: String,
-    pub product_cache: Arc<Goldylox<String, Product>>,
-    pub session_cache: Arc<Goldylox<String, UserSession>>,
-    pub analytics_cache: Arc<Goldylox<String, AnalyticsEvent>>,
+    pub command_sender: Sender<CacheCommand>,
 }
 
-/// Global workload execution state
+/// Global workload execution state (no Arc usage)
 #[derive(Debug)]
 pub struct WorkloadState {
-    pub nodes: Vec<Arc<CacheNode>>,
+    pub nodes: Vec<CacheNode>,
     pub start_time: std::time::Instant,
     pub phase: AtomicU64,
     pub running: AtomicBool,

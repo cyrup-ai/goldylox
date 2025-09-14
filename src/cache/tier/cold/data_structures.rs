@@ -58,7 +58,7 @@ pub enum SerializationCompression {
 
 /// Persistent cold tier cache with memory-mapped storage
 #[derive(Debug)]
-pub struct PersistentColdTier<K: CacheKey, V: CacheValue> {
+pub struct PersistentColdTier<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>> {
     /// Memory-mapped storage files
     pub storage_manager: StorageManager,
     /// Compression engine for value serialization
@@ -77,6 +77,8 @@ pub struct PersistentColdTier<K: CacheKey, V: CacheValue> {
     pub sync_state: SyncState,
     /// Recovery system for crash resilience
     pub recovery_system: RecoverySystem,
+    /// Background maintenance task sender for scheduling maintenance operations
+    pub maintenance_sender: Option<crossbeam_channel::Sender<crate::cache::manager::background::types::MaintenanceTask>>,
     /// Phantom data for unused type parameter
     pub _phantom: PhantomData<V>,
 }

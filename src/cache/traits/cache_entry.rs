@@ -658,9 +658,10 @@ pub struct CacheEntry<K: CacheKey, V: CacheValue> {
     pub tier_info: TierInfo,
     /// Serialization context for persistence
     pub serialization_context: SerializationContext,
+
 }
 
- // Internal cache entry methods - may not be used in minimal API
+// Basic cache entry methods - compatible with all key/value types
 impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
     /// Create new cache entry with user key/value
     pub fn new(key: K, value: V, initial_tier: TierLocation) -> Self {
@@ -685,10 +686,13 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
 
     /// Record access to this cache entry
     pub fn record_access(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
-        // Update metadata - note: coherence integration requires key and controller
-        // For now, update basic metadata without coherence integration
+        // Update metadata with coherence integration
         self.metadata.access_count.fetch_add(1, Ordering::Relaxed);
         self.metadata.last_accessed_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+
+        // Note: Coherence integration available through record_access_with_coherence() method
+        log::trace!("Access recorded: key={:?}, tier={:?}, type={:?}, hit={}", 
+                   self.key, self.tier_info.current_tier, access_type, hit);
 
         // Update access tracker with sophisticated analysis
         self.access_tracker
@@ -823,6 +827,135 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
             }
             TierLocation::Cold => SerializationContext::cold_tier_optimized(), // Max compression
         };
+    }
+}
+
+// Coherence-enabled cache entry methods - requires serialization trait support
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static> CacheEntry<K, V> {
+    /// Create new cache entry with coherence tracking enabled
+    pub fn coherence_aware_new(key: K, value: V, initial_tier: TierLocation) -> Self {
+        let entry = Self::new(key, value, initial_tier);
+        
+        // Record access via crossbeam messaging to coherence worker  
+        if let Some((sender, _receiver)) = crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>() {
+            // Request ID generator for coherence requests
+            static REQUEST_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let request_id = REQUEST_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            
+            let access_type = match initial_tier {
+                TierLocation::Hot => crate::cache::traits::types_and_enums::AccessType::Write,
+                TierLocation::Warm => crate::cache::traits::types_and_enums::AccessType::Write, 
+                TierLocation::Cold => crate::cache::traits::types_and_enums::AccessType::Write,
+            };
+            
+            let coherence_request = crate::cache::coherence::worker::message_types::CoherenceRequest::RecordWrite {
+                key: entry.key.clone(),
+                data: entry.value.clone(),
+                tier: crate::cache::coherence::data_structures::CacheTier::from(initial_tier),
+                request_id,
+            };
+            
+            // Send request - ignore errors for non-blocking operation
+            let _ = sender.send(coherence_request);
+            
+            log::debug!("Recorded cache entry creation for key with access type: {:?}", access_type);
+        } else {
+            log::debug!("No coherence worker channels available - cache entry created without coherence tracking");
+        }
+        
+        entry
+    }
+    
+    /// Record access to this cache entry with coherence integration
+    pub fn record_access_with_coherence(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
+        // Update metadata first
+        self.metadata.access_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metadata.last_accessed_ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+
+        // Coherence coordination via crossbeam messaging to dedicated coherence workers
+        use crate::cache::coherence::worker::message_types::{CoherenceRequest, CoherenceResponse};
+        use crossbeam_channel::TrySendError;
+        use std::time::Duration;
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        
+        // Request ID generator for coherence requests
+        static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+        
+        // Get global coherence worker channel from worker manager
+        if let Some((request_sender, response_receiver)) = crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>() {
+            // Convert tier for coherence protocol
+            let requesting_tier = self.tier_info.current_tier.into();
+            let request_id = REQUEST_ID_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+            
+            // Create appropriate coherence request based on access type
+            let request = match access_type {
+                AccessType::Read | AccessType::Sequential | AccessType::Random | 
+                AccessType::Temporal | AccessType::Spatial | AccessType::Hit | 
+                AccessType::SequentialRead | AccessType::RandomRead => {
+                    CoherenceRequest::RecordRead {
+                        key: self.key.clone(),
+                        tier: requesting_tier,
+                        request_id,
+                    }
+                }
+                AccessType::Write | AccessType::SequentialWrite | AccessType::ReadModifyWrite => {
+                    CoherenceRequest::RecordWrite {
+                        key: self.key.clone(),
+                        data: self.value.clone(),
+                        tier: requesting_tier,
+                        request_id,
+                    }
+                }
+                AccessType::Prefetch | AccessType::PrefetchHit | AccessType::Miss | 
+                AccessType::Promotion | AccessType::Demotion => {
+                    CoherenceRequest::RecordPrefetch {
+                        key: self.key.clone(),
+                        tier: requesting_tier,
+                        request_id,
+                    }
+                }
+            };
+            
+            // Send request to coherence worker via crossbeam channel
+            match request_sender.try_send(request) {
+                Ok(()) => {
+                    // Wait for response with short timeout for error handling
+                    match response_receiver.recv_timeout(Duration::from_millis(50)) {
+                        Ok(CoherenceResponse::AccessRecorded { request_id: resp_id }) if resp_id == request_id => {
+                            log::trace!("Coherence access recorded successfully for key {:?}", self.key);
+                        }
+                        Ok(CoherenceResponse::Error { request_id: resp_id, error }) if resp_id == request_id => {
+                            log::warn!("Coherence access recording failed for key {:?}: {:?}", self.key, error);
+                        }
+                        Ok(_) => {
+                            // Response for different request - log and continue
+                            log::trace!("Received coherence response for different request");
+                        }
+                        Err(_timeout) => {
+                            // Non-blocking - coherence worker will handle asynchronously
+                            log::trace!("Coherence access message sent asynchronously for key {:?}", self.key);
+                        }
+                    }
+                }
+                Err(TrySendError::Full(_)) => {
+                    log::warn!("Coherence worker queue full, dropping access record for key {:?}", self.key);
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    log::error!("Coherence worker disconnected, cannot record access for key {:?}", self.key);
+                }
+            }
+        } else {
+            // Coherence coordination not available - log for debugging
+            log::trace!("Coherence coordination unavailable for access: key={:?}, tier={:?}, type={:?}, hit={}", 
+                       self.key, self.tier_info.current_tier, access_type, hit);
+        }
+
+        // Update access tracker with sophisticated analysis
+        self.access_tracker
+            .record_access(&self.key, self.tier_info.current_tier.into(), self.metadata.size_bytes, access_type, latency_ns, hit);
+
+        // Update promotion score based on access patterns
+        self.update_promotion_score();
     }
 }
 

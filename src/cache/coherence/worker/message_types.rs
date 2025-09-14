@@ -36,6 +36,25 @@ pub enum CoherenceRequest<K: CacheKey + Default + bincode::Encode + bincode::Dec
         target_tier: CacheTier,
         request_id: u64,
     },
+    /// Record read access for coherence tracking
+    RecordRead {
+        key: K,
+        tier: CacheTier,
+        request_id: u64,
+    },
+    /// Record write access for coherence tracking
+    RecordWrite {
+        key: K,
+        data: V,
+        tier: CacheTier,
+        request_id: u64,
+    },
+    /// Record prefetch access for coherence tracking
+    RecordPrefetch {
+        key: K,
+        tier: CacheTier,
+        request_id: u64,
+    },
 }
 
 /// Response message from coherence worker
@@ -61,6 +80,10 @@ pub enum CoherenceResponse<K: CacheKey + Default + bincode::Encode + bincode::De
     SerializeSuccess {
         request_id: u64,
         envelope: Box<SerializationEnvelope<K, V>>,
+    },
+    /// Successful access record response
+    AccessRecorded {
+        request_id: u64,
     },
     /// Error response for any operation
     Error {

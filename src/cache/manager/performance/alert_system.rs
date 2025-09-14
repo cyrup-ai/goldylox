@@ -19,6 +19,33 @@ use super::types::{
 };
 use crate::cache::types::performance_thresholds::AlertThresholds;
 use crate::telemetry::data_structures::ThresholdAdaptationState;
+
+// Email notification dependencies
+#[cfg(feature = "lettre")]
+use lettre::{Message, SmtpTransport, Transport};
+#[cfg(feature = "lettre")]
+use lettre::transport::smtp::authentication::Credentials;
+
+use serde::{Deserialize, Serialize};
+
+/// Configuration for notification delivery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    pub email: Option<EmailConfig>,
+    pub rate_limit_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    pub smtp_server: String,
+    pub smtp_port: u16,
+    pub username: String,
+    pub password: String,
+    pub from_address: String,
+    pub to_addresses: Vec<String>,
+    pub min_severity: AlertSeverity,
+    pub use_tls: bool,
+}
 use crate::telemetry::types::{MonitorConfig, PerformanceSample};
 use crate::telemetry::data_structures::AlertHistoryBuffer;
 
@@ -114,6 +141,13 @@ pub struct AlertSystem {
     /// Threshold adaptation state with ML learning
     #[allow(dead_code)] // Performance monitoring - adaptation_state used in ML-based threshold adaptation
     adaptation_state: ThresholdAdaptationState,
+    /// Notification configuration and delivery system
+    notification_config: Option<NotificationConfig>,
+    /// SMTP transport for email notifications
+    #[cfg(feature = "lettre")]
+    email_transport: Option<SmtpTransport>,
+    /// Last notification timestamp for rate limiting
+    last_notification_time: AtomicU64,
 }
 
 #[allow(dead_code)] // Performance alert system - comprehensive alert management library with SIMD optimization and ML-based threshold adaptation
@@ -142,6 +176,10 @@ impl AlertSystem {
                 3,  // EfficiencyDegradation
             ]),
             adaptation_state: ThresholdAdaptationState::new(),
+            notification_config: None,
+            #[cfg(feature = "lettre")]
+            email_transport: None,
+            last_notification_time: AtomicU64::new(0),
         }
     }
 
@@ -152,6 +190,24 @@ impl AlertSystem {
         // Use canonical AlertThresholds with default values
         alert_system.thresholds = CachePadded::new(AlertThresholds::default());
         Ok(alert_system)
+    }
+    
+    /// Configure notification system with email settings
+    pub fn configure_notifications(&mut self, config: NotificationConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        #[cfg(feature = "lettre")]
+        if let Some(email_config) = &config.email {
+            let transport = SmtpTransport::relay(&email_config.smtp_server)?
+                .port(email_config.smtp_port)
+                .credentials(Credentials::new(
+                    email_config.username.clone(),
+                    email_config.password.clone(),
+                ))
+                .build();
+            self.email_transport = Some(transport);
+        }
+        
+        self.notification_config = Some(config);
+        Ok(())
     }
 
     /// Evaluate alerts based on performance snapshot
@@ -519,8 +575,78 @@ impl AlertSystem {
     }
 
     fn send_notification(&self, alert: &PerformanceAlert) {
-        // In a real implementation, this would send notifications via email, Slack, etc.
+        // Rate limiting to prevent notification spam
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let last_sent = self.last_notification_time.load(Ordering::Relaxed);
+        let rate_limit_seconds = self.notification_config
+            .as_ref()
+            .map(|c| c.rate_limit_seconds)
+            .unwrap_or(300); // Default 5 minutes
+        
+        if now - last_sent < rate_limit_seconds {
+            log::debug!("Rate limiting notification for alert: {}", alert.message);
+            return;
+        }
+        
+        // Try to send email notification if configured
+        if let Some(config) = &self.notification_config
+            && let Some(email_config) = &config.email
+            && alert.severity >= email_config.min_severity {
+                if let Err(e) = self.send_email_notification(alert, email_config) {
+                    log::error!("Failed to send email notification: {}", e);
+                } else {
+                    self.last_notification_time.store(now, Ordering::Relaxed);
+                    log::info!("Successfully sent email notification for alert: {}", alert.message);
+                }
+        }
+        
+        // Always log as fallback
         log::warn!("ALERT: {:?} - {}", alert.severity, alert.message);
+    }
+    
+    #[cfg(feature = "lettre")]
+    fn send_email_notification(&self, alert: &PerformanceAlert, config: &EmailConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let transport = self.email_transport.as_ref()
+            .ok_or("Email transport not configured")?;
+        
+        let subject = format!("🚨 Goldylox Alert: {:?} - {:?}", alert.severity, alert.alert_type);
+        let body = format!(
+            "Alert Details:\n\n\
+            Severity: {:?}\n\
+            Alert Type: {:?}\n\
+            Message: {}\n\
+            Timestamp: {:?}\n\
+            Current Value: {:.3}\n\
+            Threshold: {:.3}\n\n\
+            This alert was generated by the Goldylox cache monitoring system.",
+            alert.severity, 
+            alert.alert_type, 
+            alert.message,
+            alert.triggered_at,
+            alert.current_value,
+            alert.threshold_value
+        );
+        
+        for to_address in &config.to_addresses {
+            let email = Message::builder()
+                .from(config.from_address.parse()?)
+                .to(to_address.parse()?)
+                .subject(&subject)
+                .body(body.clone())?;
+            
+            transport.send(&email)?;
+        }
+        
+        Ok(())
+    }
+    
+    #[cfg(not(feature = "lettre"))]
+    fn send_email_notification(&self, _alert: &PerformanceAlert, _config: &EmailConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err("Email notifications require the 'lettre' feature to be enabled".into())
     }
 
     fn trim_alert_history(&mut self) {

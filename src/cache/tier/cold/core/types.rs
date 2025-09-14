@@ -3,16 +3,12 @@
 //! This module provides essential types and utility functions used throughout
 //! the persistent cold tier cache implementation.
 
-use std::time::Instant;
+
 
 // PrecisionTimer moved to canonical location: crate::cache::types::performance::timer::PrecisionTimer
 
-/// Convert Instant to nanoseconds timestamp
-pub fn timestamp_nanos(instant: Instant) -> u64 {
-    // This is a simplified implementation
-    // In practice, you'd want a more robust timestamp system
-    instant.elapsed().as_nanos() as u64
-}
+/// Convert Instant to nanoseconds timestamp (re-export from production timer infrastructure)
+pub use crate::cache::types::performance::timer::timestamp_nanos;
 
 /// Statistics for cold tier cache performance
 #[allow(dead_code)] // Cold tier - ColdTierStats used in cold tier statistics reporting

@@ -89,10 +89,10 @@ pub struct PrefetchPredictor<K: CacheKey> {
     // Enhanced features from policy engine version for ML-based predictions and SIMD optimization
     /// Polynomial regression coefficients (updated via atomic swaps for thread safety)
     #[allow(dead_code)] // ML system - used in machine learning regression and prefetch prediction
-    regression_coefficients: std::sync::Arc<[crossbeam_utils::atomic::AtomicCell<f32>; 8]>,
+    regression_coefficients: [crossbeam_utils::atomic::AtomicCell<f32>; 8],
     /// Prediction confidence scores per pattern type with atomic updates
     #[allow(dead_code)] // ML system - used in machine learning confidence tracking and prediction
-    confidence_scores: std::sync::Arc<[std::sync::atomic::AtomicU32; 4]>, // Sequential, Temporal, Spatial, Random
+    confidence_scores: [std::sync::atomic::AtomicU32; 4], // Sequential, Temporal, Spatial, Random
     /// SIMD-optimized prediction computation buffers (AVX2-aligned for parallel computation)
     #[allow(dead_code)] // ML system - used in machine learning SIMD-optimized prediction computation
     prediction_buffer: [f32; 16],
@@ -107,14 +107,14 @@ pub struct PrefetchPredictor<K: CacheKey> {
     learning_rate: crossbeam_utils::atomic::AtomicCell<f32>,
     /// Pattern correlation matrix for complex predictions (atomic for thread safety)
     #[allow(dead_code)] // ML system - used in machine learning pattern correlation analysis
-    correlation_matrix: std::sync::Arc<[[std::sync::atomic::AtomicU32; 4]; 4]>,
+    correlation_matrix: [[std::sync::atomic::AtomicU32; 4]; 4],
 }
 
 impl<K: CacheKey> PrefetchPredictor<K> {
     /// Create new enhanced prefetch predictor with ML and SIMD optimizations
     pub fn new(config: PrefetchConfig) -> Self {
         // Initialize atomic correlation matrix
-        let correlation_matrix = std::sync::Arc::new([
+        let correlation_matrix = [
             [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0), 
              std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)],
             [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0), 
@@ -123,7 +123,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
              std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)],
             [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0), 
              std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)],
-        ]);
+        ];
         
         Self {
             access_history: VecDeque::with_capacity(config.history_size),
@@ -135,7 +135,7 @@ impl<K: CacheKey> PrefetchPredictor<K> {
             config,
             
             // Enhanced ML and SIMD features
-            regression_coefficients: std::sync::Arc::new([
+            regression_coefficients: [
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
@@ -144,13 +144,13 @@ impl<K: CacheKey> PrefetchPredictor<K> {
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
                 crossbeam_utils::atomic::AtomicCell::new(0.0),
-            ]),
-            confidence_scores: std::sync::Arc::new([
+            ],
+            confidence_scores: [
                 std::sync::atomic::AtomicU32::new(0), // Sequential
                 std::sync::atomic::AtomicU32::new(0), // Temporal  
                 std::sync::atomic::AtomicU32::new(0), // Spatial
                 std::sync::atomic::AtomicU32::new(0), // Random
-            ]),
+            ],
             prediction_buffer: [0.0; 16], // AVX2-aligned buffer
             feature_buffer: [0.0; 16],    // Feature extraction buffer
             success_tracker: EnhancedPrefetchSuccessTracker::new(),

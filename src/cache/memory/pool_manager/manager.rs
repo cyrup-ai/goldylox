@@ -11,7 +11,7 @@ use crate::cache::config::CacheConfig;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Memory pool manager for efficient allocation patterns
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryPoolManager {
     /// Small object pool (< 1KB)
     small_pool: MemoryPool,

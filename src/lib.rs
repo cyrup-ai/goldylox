@@ -18,6 +18,14 @@
 pub mod goldylox;
 pub mod prelude;
 
+// CLI module (for binary)
+#[cfg(feature = "cli")]
+pub mod cli;
+
+// Daemon module (for loxd binary)
+#[cfg(feature = "daemon")]
+pub mod daemon;
+
 // Cache implementation modules - traits are public for user implementations
 pub mod cache;
 pub(crate) mod telemetry;

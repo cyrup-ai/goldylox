@@ -9,7 +9,8 @@ use super::*;
 use rand::prelude::*;
 use rand::{Rng, thread_rng};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use std::sync::Arc;
+use crossbeam_channel::bounded;
+use tokio::sync::oneshot;
 use std::time::{Duration, Instant};
 use std::collections::BTreeMap;
 use tokio::time::sleep;
@@ -228,7 +229,7 @@ fn generate_operation(config: &WorkloadConfig, rng: &mut ThreadRng) -> Operation
 }
 
 /// Select which node should handle the operation (implements load balancing)
-fn select_node_for_operation(operation: &Operation, nodes: &[Arc<CacheNode>]) -> usize {
+fn select_node_for_operation(operation: &Operation, nodes: &[CacheNode]) -> usize {
     match operation {
         Operation::ProductLookup(product_id) | Operation::ProductUpdate(product_id) => {
             (*product_id as usize) % nodes.len()
@@ -253,40 +254,137 @@ async fn execute_operation(node: &CacheNode, operation: Operation) -> Result<(),
     match operation {
         Operation::ProductLookup(product_id) => {
             let cache_key = format!("product:{}", product_id);
-            // REAL cache operation - ML algorithms track hits/misses internally
-            let _ = node.product_cache.get(&cache_key);
+            let (response_tx, response_rx) = oneshot::channel();
+            let command = CacheCommand::ProductGet { key: cache_key, response: response_tx };
+            
+            match node.command_sender.send(command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(100), response_rx).await {
+                        Ok(Ok(_result)) => {
+                            // Operation completed successfully
+                        },
+                        Ok(Err(_)) => {
+                            return Err("Worker response channel closed".into());
+                        },
+                        Err(_) => {
+                            return Err("Operation timeout".into());
+                        }
+                    }
+                },
+                Err(e) => {
+                    return Err(format!("Failed to send command to worker: {}", e).into());
+                }
+            }
         },
         
         Operation::ProductUpdate(product_id) => {
             let cache_key = format!("product:{}", product_id);
-            if let Some(mut product) = node.product_cache.get(&cache_key) {
-                // REAL inventory update using actual cache operations
-                product.inventory_count = product.inventory_count.saturating_sub(1);
-                product.last_updated = current_timestamp();
-                node.product_cache.put(cache_key, product)?;
+            // First get the product
+            let (get_response_tx, get_response_rx) = oneshot::channel();
+            let get_command = CacheCommand::ProductGet { key: cache_key.clone(), response: get_response_tx };
+            
+            match node.command_sender.send(get_command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(100), get_response_rx).await {
+                        Ok(Ok(Some(mut product))) => {
+                            // Update product
+                            product.inventory_count = product.inventory_count.saturating_sub(1);
+                            product.last_updated = current_timestamp();
+                            
+                            // Send updated product back
+                            let (put_response_tx, put_response_rx) = oneshot::channel();
+                            let put_command = CacheCommand::ProductPut { key: cache_key, value: product, response: put_response_tx };
+                            
+                            match node.command_sender.send(put_command) {
+                                Ok(_) => {
+                                    match tokio::time::timeout(Duration::from_millis(100), put_response_rx).await {
+                                        Ok(Ok(_)) => { /* Success */ },
+                                        Ok(Err(e)) => return Err(format!("Product update failed: {}", e).into()),
+                                        Err(_) => return Err("Product update timeout".into()),
+                                    }
+                                },
+                                Err(e) => return Err(format!("Failed to send update command: {}", e).into()),
+                            }
+                        },
+                        Ok(Ok(None)) => {
+                            // Product not found, skip update
+                        },
+                        Ok(Err(_)) => return Err("Worker response channel closed".into()),
+                        Err(_) => return Err("Product get timeout".into()),
+                    }
+                },
+                Err(e) => return Err(format!("Failed to send get command: {}", e).into()),
             }
         },
         
         Operation::SessionRead(session_id) => {
             let cache_key = format!("session:{}", session_id);
-            // REAL session cache operation - ML tracks access patterns internally
-            let _ = node.session_cache.get(&cache_key);
+            let (response_tx, response_rx) = oneshot::channel();
+            let command = CacheCommand::SessionGet { key: cache_key, response: response_tx };
+            
+            match node.command_sender.send(command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(100), response_rx).await {
+                        Ok(Ok(_result)) => {
+                            // Operation completed successfully
+                        },
+                        Ok(Err(_)) => {
+                            return Err("Worker response channel closed".into());
+                        },
+                        Err(_) => {
+                            return Err("Operation timeout".into());
+                        }
+                    }
+                },
+                Err(e) => {
+                    return Err(format!("Failed to send command to worker: {}", e).into());
+                }
+            }
         },
         
         Operation::SessionUpdate(session_id) => {
             let cache_key = format!("session:{}", session_id);
-            if let Some(mut session) = node.session_cache.get(&cache_key) {
-                // REAL session update - adding item to cart
-                session.last_activity = current_timestamp();
-                let new_item = CartItem {
-                    product_id: thread_rng().gen_range(1..=10000),
-                    quantity: 1,
-                    added_at: current_timestamp(),
-                    price_at_add: thread_rng().gen_range(9.99..999.99),
-                };
-                session.shopping_cart.push(new_item);
-                
-                node.session_cache.put(cache_key, session)?;
+            // First get the session
+            let (get_response_tx, get_response_rx) = oneshot::channel();
+            let get_command = CacheCommand::SessionGet { key: cache_key.clone(), response: get_response_tx };
+            
+            match node.command_sender.send(get_command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(100), get_response_rx).await {
+                        Ok(Ok(Some(mut session))) => {
+                            // Update session
+                            session.last_activity = current_timestamp();
+                            let new_item = CartItem {
+                                product_id: thread_rng().gen_range(1..=10000),
+                                quantity: 1,
+                                added_at: current_timestamp(),
+                                price_at_add: thread_rng().gen_range(9.99..999.99),
+                            };
+                            session.shopping_cart.push(new_item);
+                            
+                            // Send updated session back
+                            let (put_response_tx, put_response_rx) = oneshot::channel();
+                            let put_command = CacheCommand::SessionPut { key: cache_key, value: session, response: put_response_tx };
+                            
+                            match node.command_sender.send(put_command) {
+                                Ok(_) => {
+                                    match tokio::time::timeout(Duration::from_millis(100), put_response_rx).await {
+                                        Ok(Ok(_)) => { /* Success */ },
+                                        Ok(Err(e)) => return Err(format!("Session update failed: {}", e).into()),
+                                        Err(_) => return Err("Session update timeout".into()),
+                                    }
+                                },
+                                Err(e) => return Err(format!("Failed to send update command: {}", e).into()),
+                            }
+                        },
+                        Ok(Ok(None)) => {
+                            // Session not found, skip update
+                        },
+                        Ok(Err(_)) => return Err("Worker response channel closed".into()),
+                        Err(_) => return Err("Session get timeout".into()),
+                    }
+                },
+                Err(e) => return Err(format!("Failed to send get command: {}", e).into()),
             }
         },
         
@@ -310,15 +408,54 @@ async fn execute_operation(node: &CacheNode, operation: Operation) -> Result<(),
                 raw_data: vec![0u8; rng.gen_range(1024..8192)], // 1-8KB of data
             };
             
-            node.analytics_cache.put(cache_key, analytics_event)?;
+            let (response_tx, response_rx) = oneshot::channel();
+            let command = CacheCommand::AnalyticsPut { key: cache_key, value: analytics_event, response: response_tx };
+            
+            match node.command_sender.send(command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(100), response_rx).await {
+                        Ok(Ok(_result)) => {
+                            // Operation completed successfully
+                        },
+                        Ok(Err(e)) => {
+                            return Err(format!("Analytics write failed: {}", e).into());
+                        },
+                        Err(_) => {
+                            return Err("Analytics write timeout".into());
+                        }
+                    }
+                },
+                Err(e) => {
+                    return Err(format!("Failed to send command to worker: {}", e).into());
+                }
+            }
         },
         
         Operation::BulkProductSearch(product_ids) => {
-            // REAL bulk search leverages SIMD benefits with batch operations
+            // REAL bulk search using messaging pattern with async handling
             for product_id in product_ids {
                 let cache_key = format!("product:{}", product_id);
-                // REAL cache operations - ML learns from bulk access patterns
-                let _ = node.product_cache.get(&cache_key);
+                let (response_tx, response_rx) = oneshot::channel();
+                let command = CacheCommand::ProductGet { key: cache_key, response: response_tx };
+                
+                match node.command_sender.send(command) {
+                    Ok(_) => {
+                        match tokio::time::timeout(Duration::from_millis(50), response_rx).await {
+                            Ok(Ok(_result)) => {
+                                // Operation completed successfully
+                            },
+                            Ok(Err(_)) => {
+                                return Err("Worker response channel closed during bulk search".into());
+                            },
+                            Err(_) => {
+                                return Err("Bulk search operation timeout".into());
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        return Err(format!("Failed to send bulk search command: {}", e).into());
+                    }
+                }
             }
         }
     }
@@ -362,15 +499,21 @@ async fn background_session_maintenance(workload: &WorkloadState) {
     while workload.running.load(Ordering::Relaxed) {
         interval.tick().await;
         
-        // REAL session cleanup and maintenance
+        // Request session cache statistics via messaging
         for node in &workload.nodes {
-            // This triggers REAL ML eviction decisions
-            let _stats = match node.session_cache.stats() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+            let (response_tx, response_rx) = oneshot::channel();
+            let command = CacheCommand::GetStats { response: response_tx };
             
-            // ML analyzes session access patterns internally
+            if node.command_sender.send(command).is_ok() {
+                match tokio::time::timeout(Duration::from_millis(500), response_rx).await {
+                    Ok(Ok(_stats)) => {
+                        // Session maintenance based on stats could be implemented here
+                    },
+                    Ok(Err(_)) | Err(_) => {
+                        log::warn!("Failed to get stats for session maintenance");
+                    }
+                }
+            }
         }
     }
 }
@@ -382,31 +525,53 @@ async fn background_analytics_aggregation(workload: &WorkloadState) {
     while workload.running.load(Ordering::Relaxed) {
         interval.tick().await;
         
-        // REAL analytics queries that benefit from ML tier placement
+        // Analytics queries via messaging pattern
         for node in &workload.nodes {
-            // Large analytical queries that ML learns are infrequent
             for i in 0..10 {
                 let event_key = format!("analytics:aggregation_{}_{}", current_timestamp(), i);
-                let _ = node.analytics_cache.get(&event_key);
+                let (response_tx, response_rx) = oneshot::channel();
+                let command = CacheCommand::AnalyticsGet { key: event_key, response: response_tx };
+                
+                if node.command_sender.send(command).is_ok() {
+                    // Don't block on response for background aggregation
+                    tokio::spawn(async move {
+                        let _ = response_rx.await;
+                    });
+                }
             }
         }
     }
 }
 
-/// Background statistics reporting using REAL cache stats
+/// Background statistics reporting using async messaging pattern
 async fn background_statistics_reporting(workload: &WorkloadState) {
     let mut interval = tokio::time::interval(Duration::from_secs(10));
     
     while workload.running.load(Ordering::Relaxed) {
         interval.tick().await;
         
-        // Use REAL cache statistics from Goldylox API
+        // Use async messaging to get cache statistics
         for (i, node) in workload.nodes.iter().enumerate() {
-            if let Ok(product_stats) = node.product_cache.stats() {
-                println!("📊 Node {}: Product Cache: {}", i, product_stats);
-            }
-            if let Ok(session_stats) = node.session_cache.stats() {
-                println!("📊 Node {}: Session Cache: {}", i, session_stats);
+            let (response_tx, response_rx) = oneshot::channel();
+            let command = CacheCommand::GetStats { response: response_tx };
+            
+            match node.command_sender.send(command) {
+                Ok(_) => {
+                    match tokio::time::timeout(Duration::from_millis(1000), response_rx).await {
+                        Ok(Ok(stats)) => {
+                            println!("📊 Node {}: Cache Stats: {}", i, stats);
+                        },
+                        Ok(Err(_)) => {
+                            eprintln!("⚠️ Node {}: Stats channel closed", i);
+                        },
+                        Err(_) => {
+                            eprintln!("⚠️ Node {}: Stats request timeout", i);
+                        }
+                    }
+                },
+                Err(e) => {
+                    eprintln!("⚠️ Node {}: Failed to send stats command: {}", i, e);
+                }
             }
         }
     }
@@ -427,13 +592,10 @@ fn generate_event_properties(rng: &mut ThreadRng) -> BTreeMap<String, String> {
 impl WorkloadState {
     pub fn clone_for_background(&self) -> WorkloadState {
         WorkloadState {
-            nodes: self.nodes.clone(),
+            nodes: self.nodes.clone(), // Now cloning CacheNode which contains only Sender (cheaply cloneable)
             start_time: self.start_time,
             phase: AtomicU64::new(self.phase.load(Ordering::Relaxed)),
             running: AtomicBool::new(self.running.load(Ordering::Relaxed)),
-            dashboard: Arc::clone(&self.dashboard),
-            ml_visualizer: Arc::clone(&self.ml_visualizer),
-            coherence_monitor: Arc::clone(&self.coherence_monitor),
         }
     }
 }

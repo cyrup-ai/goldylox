@@ -42,6 +42,42 @@ struct PoolEntry {
     
     data: [u8; 0], // Flexible array member
 }
+impl Clone for MemoryPool {
+    /// Create a new MemoryPool with the same configuration but fresh state
+    fn clone(&self) -> Self {
+        // Clone by recreating with same parameters (atomic fields get fresh state)
+        match Self::new(
+            self.pool_name,
+            self.object_size,
+            self.max_capacity.load(Ordering::Relaxed)
+        ) {
+            Ok(pool) => pool,
+            Err(_) => {
+                // Fallback: create with minimal safe configuration if original parameters fail
+                match Self::new("cloned_pool", 64, 100) {
+                    Ok(fallback_pool) => fallback_pool,
+                    Err(_) => {
+                        // Emergency fallback with absolute minimum configuration
+                        let emergency_layout = match Layout::from_size_align(64, std::mem::align_of::<PoolEntry>()) {
+                            Ok(layout) => layout,
+                            Err(_) => Layout::new::<u64>(), // Safe fallback layout
+                        };
+                        Self {
+                            pool_name: "emergency_pool",
+                            object_size: 64,
+                            max_capacity: AtomicUsize::new(100),
+                            current_utilization: CachePadded::new(AtomicUsize::new(0)),
+                            free_list_head: AtomicPtr::new(null_mut()),
+                            pool_allocation_stats: PoolAllocationStats::new(),
+                            memory_layout: emergency_layout,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl MemoryPool {
     pub fn new(
         name: &'static str,

@@ -120,7 +120,7 @@ pub fn initialize_worker_system_with_config<K: CacheKey + Default + bincode::Enc
     info!("Worker system initialized with complete production configuration - all 6 parameters configured: thread_pool_size: {}, maintenance_interval: {}ns, cpu_affinity: 0x{:x}, priority: {}, batch_size: {}", 
           thread_pool_size, maintenance_interval_ns, cpu_affinity_mask, priority_level, batch_size);
     
-    Ok(task_coordinator)
+    Ok(task_coordinator?)
 }
 
 

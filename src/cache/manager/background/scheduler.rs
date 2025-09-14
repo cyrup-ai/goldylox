@@ -355,51 +355,22 @@ where
     /// Get task processing statistics from all workers
     #[allow(dead_code)] // Background scheduler - worker task count monitoring for load balancing
     pub fn get_worker_task_counts(&self) -> Vec<(u32, u64)> {
-        // In a complete implementation, this would track worker states
-        // For now, we'll create a simple interface that can be expanded
-        let mut task_counts = Vec::new();
-        
-        // This demonstrates the usage of BackgroundWorkerState::tasks_processed()
-        // In practice, workers would register their states or be tracked centrally
-        for worker_id in 0..self.config.worker_count {
-            let worker_state = super::types::BackgroundWorkerState::new(worker_id);
-            let task_count = worker_state.tasks_processed();
-            task_counts.push((worker_id, task_count));
-        }
-        
-        task_counts
+        // Use the global worker registry to get real worker task counts
+        super::types::BackgroundWorkerState::get_all_worker_task_counts()
     }
     
     /// Check health status of all workers
     #[allow(dead_code)] // Background scheduler - worker health monitoring for operational visibility
     pub fn check_worker_health(&self) -> Vec<(u32, bool)> {
-        let mut health_status = Vec::new();
-        
-        // This demonstrates the usage of BackgroundWorkerState::is_healthy()
-        for worker_id in 0..self.config.worker_count {
-            let worker_state = super::types::BackgroundWorkerState::new(worker_id);
-            let is_healthy = worker_state.is_healthy();
-            health_status.push((worker_id, is_healthy));
-        }
-        
-        health_status
+        // Use the global worker registry to get real worker health statuses
+        super::types::BackgroundWorkerState::get_all_worker_health()
     }
     
     /// Perform graceful shutdown of workers with proper cleanup
     #[allow(dead_code)] // Background scheduler - graceful worker shutdown with proper cleanup
     pub fn graceful_worker_shutdown(&self) -> Result<(), CacheOperationError> {
-        // This demonstrates the usage of BackgroundWorkerState::shutdown_workers()
-        let worker_state = super::types::BackgroundWorkerState::new(0); // Representative worker
-        worker_state.shutdown_workers(self)?;
-        
-        // Additional cleanup after worker shutdown
-        // Note: Can't call self.shutdown() here since it consumes self
-        // Instead, signal shutdown through channels
-        if self.shutdown_sender.try_send(()).is_err() {
-            // Channel might be full or closed, that's ok during shutdown
-        }
-        
-        Ok(())
+        // Signal shutdown to all workers through the scheduler's shutdown mechanism
+        self.stop_maintenance()
     }
 
     /// Shutdown maintenance scheduler

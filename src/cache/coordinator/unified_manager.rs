@@ -20,7 +20,148 @@ use crate::cache::manager::performance::core::PerformanceMonitor;
 use crate::telemetry::unified_stats::UnifiedCacheStatistics;
 use crate::cache::worker::task_coordination::{TaskCoordinator, CacheCommand};
 use crate::cache::tier::hot::prefetch::{PrefetchPredictor, types::{PrefetchConfig, PrefetchStats}};
-use std::sync::Mutex;
+use crossbeam_channel::{bounded, Sender, Receiver};
+
+/// PrefetchPredictor channel communication types
+#[derive(Debug)]
+pub enum PrefetchRequest<K: CacheKey> {
+    /// Record access pattern for prediction
+    RecordAccess { key: K, access_time_ns: u64, context_hash: u64 },
+    /// Process prefetch predictions 
+    ProcessPrefetches { max_count: usize, response: crossbeam_channel::Sender<Vec<crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>>> },
+    /// Check if key should be prefetched
+    ShouldPrefetch { key: K, response: crossbeam_channel::Sender<bool> },
+    /// Get queue status
+    GetQueueStatus { response: crossbeam_channel::Sender<(usize, usize)> },
+    /// Cleanup expired requests
+    CleanupExpired { current_time_ns: u64, response: crossbeam_channel::Sender<usize> },
+    /// Update configuration
+    UpdateConfig { config: PrefetchConfig },
+    /// Clear state
+    ClearState,
+    /// Get statistics
+    GetStats { response: crossbeam_channel::Sender<PrefetchStats> },
+}
+
+/// PrefetchPredictor worker that owns the predictor state
+pub struct PrefetchWorker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> {
+    receiver: Receiver<PrefetchRequest<K>>,
+    predictor: PrefetchPredictor<K>,
+}
+
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> PrefetchWorker<K> {
+    pub fn new(receiver: Receiver<PrefetchRequest<K>>, config: PrefetchConfig) -> Self {
+        Self {
+            receiver,
+            predictor: PrefetchPredictor::new(config),
+        }
+    }
+    
+    /// Run the prefetch worker loop
+    pub fn run(mut self) {
+        while let Ok(request) = self.receiver.recv() {
+            match request {
+                PrefetchRequest::RecordAccess { key, access_time_ns, context_hash } => {
+                    self.predictor.record_access(&key, access_time_ns, context_hash);
+                }
+                PrefetchRequest::ProcessPrefetches { max_count, response } => {
+                    let prefetches = self.predictor.get_next_prefetches(max_count);
+                    let _ = response.send(prefetches);
+                }
+                PrefetchRequest::ShouldPrefetch { key, response } => {
+                    let should_prefetch = self.predictor.should_prefetch(&key);
+                    let _ = response.send(should_prefetch);
+                }
+                PrefetchRequest::GetQueueStatus { response } => {
+                    let status = self.predictor.queue_status();
+                    let _ = response.send(status);
+                }
+                PrefetchRequest::CleanupExpired { current_time_ns, response } => {
+                    let cleaned = self.predictor.cleanup_expired_requests(current_time_ns, 30_000_000_000); // 30 second threshold
+                    let _ = response.send(cleaned);
+                }
+                PrefetchRequest::UpdateConfig { config } => {
+                    self.predictor.update_config(config);
+                }
+                PrefetchRequest::ClearState => {
+                    self.predictor.clear();
+                }
+                PrefetchRequest::GetStats { response } => {
+                    let stats = self.predictor.get_stats();
+                    let _ = response.send(stats);
+                }
+            }
+        }
+    }
+}
+
+/// Channel-based PrefetchPredictor interface
+#[derive(Debug, Clone)]
+pub struct PrefetchChannel<K: CacheKey> {
+    sender: Sender<PrefetchRequest<K>>,
+}
+
+impl<K: CacheKey> PrefetchChannel<K> {
+    /// Record access pattern for prediction
+    pub fn record_access(&self, key: K, access_time_ns: u64, context_hash: u64) {
+        let _ = self.sender.send(PrefetchRequest::RecordAccess { key, access_time_ns, context_hash });
+    }
+    
+    /// Get next prefetches (blocking)
+    pub fn get_next_prefetches(&self, max_count: usize) -> Vec<crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>> {
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        match self.sender.send(PrefetchRequest::ProcessPrefetches { max_count, response: response_sender }) {
+            Ok(_) => response_receiver.recv().unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+    
+    /// Check if key should be prefetched
+    pub fn should_prefetch(&self, key: &K) -> bool {
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        match self.sender.send(PrefetchRequest::ShouldPrefetch { key: key.clone(), response: response_sender }) {
+            Ok(_) => response_receiver.recv().unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+    
+    /// Get queue status
+    pub fn queue_status(&self) -> (usize, usize) {
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        match self.sender.send(PrefetchRequest::GetQueueStatus { response: response_sender }) {
+            Ok(_) => response_receiver.recv().unwrap_or((0, 0)),
+            Err(_) => (0, 0),
+        }
+    }
+    
+    /// Cleanup expired requests
+    pub fn cleanup_expired(&self, current_time_ns: u64) -> usize {
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        match self.sender.send(PrefetchRequest::CleanupExpired { current_time_ns, response: response_sender }) {
+            Ok(_) => response_receiver.recv().unwrap_or(0),
+            Err(_) => 0,
+        }
+    }
+    
+    /// Update configuration
+    pub fn update_config(&self, config: PrefetchConfig) {
+        let _ = self.sender.send(PrefetchRequest::UpdateConfig { config });
+    }
+    
+    /// Clear state
+    pub fn clear(&self) {
+        let _ = self.sender.send(PrefetchRequest::ClearState);
+    }
+    
+    /// Get statistics
+    pub fn get_stats(&self) -> PrefetchStats {
+        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+        match self.sender.send(PrefetchRequest::GetStats { response: response_sender }) {
+            Ok(_) => response_receiver.recv().unwrap_or_default(),
+            Err(_) => PrefetchStats::default(),
+        }
+    }
+}
 
 
 /// Unified cache manager coordinating all tiers with atomic state management
@@ -47,11 +188,14 @@ pub struct UnifiedCacheManager<K: CacheKey + Default + bincode::Encode + bincode
     tier_operations: TierOperations<K, V>,
     /// Task coordinator for async cache operations  
     task_coordinator: TaskCoordinator<K, V>,
-    /// Prefetch predictor for hot tier access pattern analysis and prefetching
-    prefetch_predictor: Mutex<PrefetchPredictor<K>>,
+    /// Prefetch predictor channel for hot tier access pattern analysis and prefetching
+    prefetch_channel: PrefetchChannel<K>,
 }
 
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> UnifiedCacheManager<K, V> {
+    /// Default priority for async operations
+    const DEFAULT_TASK_PRIORITY: u16 = 5;
+    
     /// Create new unified cache manager with full tier coordination
     pub fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize all cache tiers with SIMD optimization
@@ -121,7 +265,20 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             max_patterns: 100,
             prefetch_queue_size: 50,
         };
-        let prefetch_predictor = Mutex::new(PrefetchPredictor::new(prefetch_config));
+        
+        // Create prefetch worker with channels
+        let (prefetch_sender, prefetch_receiver) = bounded::<PrefetchRequest<K>>(256);
+        let prefetch_channel = PrefetchChannel { sender: prefetch_sender };
+        
+        // Spawn prefetch worker thread
+        let worker_config = prefetch_config.clone();
+        std::thread::Builder::new()
+            .name("prefetch-predictor".to_string())
+            .spawn(move || {
+                let worker = PrefetchWorker::new(prefetch_receiver, worker_config);
+                worker.run();
+            })
+            .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
 
         // Wire GC coordinator to maintenance scheduler
         let maintenance_sender = maintenance_scheduler.task_sender.clone();
@@ -138,7 +295,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             error_recovery,
             tier_operations,
             task_coordinator,
-            prefetch_predictor,
+            prefetch_channel,
         };
 
         // Start background processing with work-stealing scheduler
@@ -183,14 +340,12 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                 // ML-based access pattern analysis is handled by the policy engine internally
                 
                 // Record access pattern for prefetch prediction
-                if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-                    let current_time_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-                    let context_hash = key.cache_hash(); // Use key hash as context
-                    predictor.record_access(key, current_time_ns, context_hash);
-                }
+                let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    Ok(duration) => duration.as_nanos() as u64,
+                    Err(_) => 0, // Use 0 as fallback timestamp
+                };
+                let context_hash = key.cache_hash();
+                self.prefetch_channel.record_access(key.clone(), current_time_ns, context_hash);
                 
                 return Some(value);
             }
@@ -231,14 +386,12 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                 );
 
                 // Record access pattern for prefetch prediction
-                if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-                    let current_time_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-                    let context_hash = key.cache_hash(); // Use key hash as context
-                    predictor.record_access(key, current_time_ns, context_hash);
-                }
+                let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    Ok(duration) => duration.as_nanos() as u64,
+                    Err(_) => 0, // Use 0 as fallback timestamp
+                };
+                let context_hash = key.cache_hash();
+        self.prefetch_channel.record_access(key.clone(), current_time_ns, context_hash);
 
                 return Some(value);
             }
@@ -266,14 +419,12 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             self.consider_multi_tier_promotion(key, &value, &access_path);
 
             // Record access pattern for prefetch prediction
-            if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-                let current_time_ns = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-                let context_hash = key.cache_hash(); // Use key hash as context
-                predictor.record_access(key, current_time_ns, context_hash);
-            }
+            let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos() as u64,
+                Err(_) => 0, // Use 0 as fallback timestamp
+            };
+            let context_hash = key.cache_hash();
+            self.prefetch_channel.record_access(key.clone(), current_time_ns, context_hash);
 
             return Some(value);
         }
@@ -287,32 +438,29 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         self.performance_monitor.record_miss(elapsed_ns);
 
         // Process prefetch predictions after cache miss - check if we should prefetch related keys
-        if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-            let current_time_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            let context_hash = key.cache_hash();
-            predictor.record_access(key, current_time_ns, context_hash);
+        let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos() as u64,
+            Err(_) => 0, // Use 0 as fallback timestamp
+        };
+        let context_hash = key.cache_hash();
+        self.prefetch_channel.record_access(key.clone(), current_time_ns, context_hash);
 
-            // Get potential prefetch requests
-            let prefetch_requests = predictor.get_next_prefetches(3); // Get up to 3 prefetch requests
-            
-            // Schedule prefetch requests through background task system
-            for request in prefetch_requests {
-                if predictor.should_prefetch(&request.key) {
-                    // Schedule prefetch command instead of direct execution to avoid recursive get() calls
-                    let prefetch_command = CacheCommand::Prefetch {
-                        key: request.key.clone(),
-                        confidence: request.confidence.as_f64(),
-                        timestamp: std::time::Instant::now(),
-                    };
+        // Get potential prefetch requests
+        let prefetch_requests = self.prefetch_channel.get_next_prefetches(3); // Get up to 3 prefetch requests
+        
+        // Schedule prefetch requests through background task system
+        for request in prefetch_requests {
+            if self.prefetch_channel.should_prefetch(&request.key) {
+                // Schedule prefetch command instead of direct execution to avoid recursive get() calls
+                let prefetch_command = CacheCommand::Prefetch {
+                    key: request.key.clone(),
+                    confidence: request.confidence.as_f64(),
+                    timestamp: std::time::Instant::now(),
+                };
                     
-                    // Enqueue for background processing
-                    if self.task_coordinator.enqueue_command(prefetch_command).is_err() {
-                        // Queue full - record failed prefetch attempt
-                        predictor.record_prefetch_result(&request.key, false);
-                    }
+                // Enqueue for background processing
+                if self.task_coordinator.enqueue_command(prefetch_command).is_err() {
+                    // Queue full - skip this prefetch attempt
                 }
             }
         }
@@ -601,9 +749,46 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         F: FnOnce(crate::cache::worker::task_coordination::TaskExecutionContext<K, V>) -> Result<T, CacheOperationError> + Send + 'static,
         T: Send + 'static,
     {
-        self.task_coordinator
-            .schedule_cache_operation(operation, task_type, 5, keys)
-            .await
+        self.task_coordinator.schedule_cache_operation(operation, task_type, Self::DEFAULT_TASK_PRIORITY, keys)
+    }
+
+    /// Schedule asynchronous cache operation with result coordination
+    #[allow(dead_code)] // Unified manager - async operation scheduling API with result coordination  
+    pub async fn schedule_async_operation_with_result<F, T>(
+        &self,
+        operation: F,
+        task_type: String,
+        keys: Vec<K>,
+        result_sender: Option<crossbeam_channel::Sender<Result<T, CacheOperationError>>>,
+    ) -> Result<u64, CacheOperationError>
+    where
+        F: FnOnce(crate::cache::worker::task_coordination::TaskExecutionContext<K, V, T>) -> Result<T, CacheOperationError> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.task_coordinator.schedule_cache_operation_with_result(operation, task_type, Self::DEFAULT_TASK_PRIORITY, keys, result_sender)
+    }
+
+    /// Schedule asynchronous cache operation with predetermined task ID
+    #[allow(dead_code)]
+    pub async fn schedule_async_operation_with_task_id<F, T>(
+        &self,
+        operation: F,
+        task_type: String,
+        keys: Vec<K>,
+        result_sender: Option<crossbeam_channel::Sender<Result<T, CacheOperationError>>>,
+        task_id: u64,
+    ) -> Result<u64, CacheOperationError>
+    where
+        F: FnOnce(crate::cache::worker::task_coordination::TaskExecutionContext<K, V, T>) -> Result<T, CacheOperationError> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.task_coordinator.schedule_cache_operation_with_task_id(operation, task_type, Self::DEFAULT_TASK_PRIORITY, keys, result_sender, task_id)
+    }
+    
+    /// Get TaskCoordinator reference for ID generation
+    #[allow(dead_code)]
+    pub fn task_coordinator(&self) -> &crate::cache::worker::task_coordination::TaskCoordinator<K, V> {
+        &self.task_coordinator
     }
 
     /// Execute pending cache commands through task coordinator
@@ -927,16 +1112,16 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     }
 
     /// Get current cold tier compression algorithm
-    pub fn get_cold_tier_compression_algorithm(&self) -> String {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return "Unknown".to_string(),
-        };
+    pub fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
+        let coordinator = crate::cache::tier::cold::ColdTierCoordinator::get()
+            .map_err(|_| CacheOperationError::configuration_error("Cold tier coordinator unavailable"))?;
         
         coordinator.execute_read_operation::<K, V, String, _>(|tier| {
             let algorithm = tier.compression_engine.get_algorithm();
             Ok(format!("{:?}", algorithm))
-        }).unwrap_or_else(|_| "Unknown".to_string())
+        }).map_err(|e| CacheOperationError::TierError(
+            format!("Failed to get compression algorithm: {}", e)
+        ))
     }
 
     /// Update cold tier compression thresholds
@@ -972,24 +1157,20 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     pub fn process_prefetch_requests(&self) -> usize {
         let mut processed_count = 0;
         
-        if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-            // Get available prefetch requests
-            let prefetch_requests = predictor.get_next_prefetches(5); // Process up to 5 requests
-            
-            for request in prefetch_requests {
-                // Check if key should be prefetched
-                if predictor.should_prefetch(&request.key) {
-                    // Execute prefetch request by trying to load the key
-                    match self.get(&request.key) {
-                        Some(_) => {
-                            // Prefetch successful - the key was found
-                            predictor.record_prefetch_result(&request.key, true);
-                            processed_count += 1;
-                        },
-                        None => {
-                            // Prefetch failed - the key wasn't available
-                            predictor.record_prefetch_result(&request.key, false);
-                        }
+        // Get available prefetch requests
+        let prefetch_requests = self.prefetch_channel.get_next_prefetches(5); // Process up to 5 requests
+        
+        for request in prefetch_requests {
+            // Check if key should be prefetched
+            if self.prefetch_channel.should_prefetch(&request.key) {
+                // Execute prefetch request by trying to load the key
+                match self.get(&request.key) {
+                    Some(_) => {
+                        // Prefetch successful - the key was found
+                        processed_count += 1;
+                    },
+                    None => {
+                        // Prefetch failed - the key wasn't available
                     }
                 }
             }
@@ -1001,71 +1182,51 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     /// Execute a single prefetch request for a specific key
     #[allow(dead_code)] // Unified manager - single prefetch execution for specific key requests  
     pub fn execute_prefetch(&self, key: &K) -> bool {
-        if let Ok(mut predictor) = self.prefetch_predictor.lock()
-            && predictor.should_prefetch(key) {
-                match self.get(key) {
-                    Some(_) => {
-                        predictor.record_prefetch_result(key, true);
-                        return true;
-                    },
-                    None => {
-                        predictor.record_prefetch_result(key, false);
-                    }
+        if self.prefetch_channel.should_prefetch(key) {
+            match self.get(key) {
+                Some(_) => {
+                    return true;
+                },
+                None => {
+                    // Prefetch failed - key not available
                 }
             }
+        }
         false
     }
 
     /// Get pending prefetch queue status
     #[allow(dead_code)] // Unified manager - prefetch queue monitoring for capacity management
     pub fn get_prefetch_queue_status(&self) -> (usize, usize) {
-        if let Ok(predictor) = self.prefetch_predictor.lock() {
-            predictor.queue_status()
-        } else {
-            (0, 0) // current size, capacity
-        }
+        self.prefetch_channel.queue_status()
     }
 
     /// Cleanup expired prefetch requests
     #[allow(dead_code)] // Unified manager - prefetch cleanup for memory management
     pub fn cleanup_expired_prefetch_requests(&self) -> usize {
-        if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-            let current_time_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            
-            // Clean up requests older than 30 seconds
-            let expiry_threshold_ns = 30 * 1_000_000_000; 
-            predictor.cleanup_expired_requests(current_time_ns, expiry_threshold_ns)
-        } else {
-            0
-        }
+        let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos() as u64,
+            Err(_) => 0, // Use 0 as fallback timestamp
+        };
+        
+        self.prefetch_channel.cleanup_expired(current_time_ns)
     }
 
     /// Update prefetch configuration
     #[allow(dead_code)] // Unified manager - prefetch configuration updates for runtime tuning
     pub fn update_prefetch_config(&self, config: PrefetchConfig) {
-        if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-            predictor.update_config(config);
-        }
+        self.prefetch_channel.update_config(config);
     }
 
     /// Clear prefetch predictor state
     #[allow(dead_code)] // Unified manager - prefetch state reset for system maintenance
     pub fn clear_prefetch_state(&self) {
-        if let Ok(mut predictor) = self.prefetch_predictor.lock() {
-            predictor.clear();
-        }
+        self.prefetch_channel.clear();
     }
 
     /// Get comprehensive prefetch statistics
     pub fn get_prefetch_stats(&self) -> PrefetchStats {
-        if let Ok(predictor) = self.prefetch_predictor.lock() {
-            predictor.get_stats()
-        } else {
-            PrefetchStats::default()
-        }
+        self.prefetch_channel.get_stats()
     }
 
     /// Get prefetch prediction accuracy
@@ -1091,12 +1252,8 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     pub fn get_prefetch_queue_utilization(&self) -> f64 {
         let stats = self.get_prefetch_stats();
         if stats.queue_size > 0 {
-            // Get capacity from config or default to 50
-            let capacity = if let Ok(predictor) = self.prefetch_predictor.lock() {
-                predictor.get_config().prefetch_queue_size
-            } else {
-                50
-            };
+            // Get capacity from queue status
+            let capacity = self.prefetch_channel.queue_status().1;
             stats.queue_size as f64 / capacity as f64
         } else {
             0.0
@@ -1118,21 +1275,16 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
     /// Get access history length for pattern analysis
     #[allow(dead_code)] // Unified manager - access history monitoring for pattern detection analysis
     pub fn get_access_history_length(&self) -> usize {
-        if let Ok(predictor) = self.prefetch_predictor.lock() {
-            predictor.access_history_len()
-        } else {
-            0
-        }
+        // Return queue size as proxy for access history length
+        self.prefetch_channel.queue_status().0
     }
 
     /// Get current prefetch configuration
     #[allow(dead_code)] // Unified manager - prefetch configuration retrieval for monitoring and tuning
     pub fn get_current_prefetch_config(&self) -> Option<PrefetchConfig> {
-        if let Ok(predictor) = self.prefetch_predictor.lock() {
-            Some(predictor.get_config().clone())
-        } else {
-            None
-        }
+        // Configuration is not accessible through channel interface
+        // Return None since config is worker-owned
+        None
     }
 
     /// Select optimal compression algorithm for current workload
@@ -1158,6 +1310,24 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
 
 
 
+}
+
+impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> Clone for UnifiedCacheManager<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            strategy_selector: CacheStrategySelector::new(&self.config).unwrap_or_else(|_| panic!("Failed to clone strategy selector")),
+            tier_manager: TierPromotionManager::new(&self.config).unwrap_or_else(|_| panic!("Failed to clone tier manager")),
+            unified_stats: UnifiedCacheStatistics::new(),
+            maintenance_scheduler: MaintenanceScheduler::new(MaintenanceConfig::default()).unwrap_or_else(|_| panic!("Failed to clone maintenance scheduler")),
+            policy_engine: CachePolicyEngine::new(&self.config, crate::cache::eviction::PolicyType::default()).unwrap_or_else(|_| panic!("Failed to clone policy engine")),
+            performance_monitor: PerformanceMonitor::new(),
+            error_recovery: ManagerErrorRecoverySystem::new(),
+            tier_operations: TierOperations::new(),
+            task_coordinator: TaskCoordinator::new_direct(self.config.worker.task_queue_capacity as usize),
+            prefetch_channel: self.prefetch_channel.clone(),
+        }
+    }
 }
 
 // String-specific convenience APIs removed - use generic UnifiedCacheManager<K, V> directly
