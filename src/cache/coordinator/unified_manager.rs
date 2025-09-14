@@ -231,8 +231,8 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             strict_ordering: false,
             schema_version: 1,
         };
-        let _coherence_sender =
-            crate::cache::coherence::protocol::global_api::init_coherence_system::<K, V>().map_err(|_| CacheOperationError::InternalError)?;
+        let _coherence_sender: crate::cache::coherence::protocol::global_api::CoherenceSystem<K, V> = crate::cache::coherence::protocol::global_api::CoherenceSystem::new()
+            .map_err(|_| CacheOperationError::InternalError)?;
 
         // Initialize all subsystems with atomic state management
         let strategy_selector = CacheStrategySelector::new(&config)?;
@@ -254,7 +254,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         let tier_operations = TierOperations::new();
         
         // Initialize task coordinator directly
-        let task_coordinator = TaskCoordinator::new_direct(config.worker.task_queue_capacity as usize);
+        let task_coordinator = TaskCoordinator::new_direct(config.worker.task_queue_capacity as usize)?;
 
         // Initialize prefetch predictor with configuration
         let prefetch_config = PrefetchConfig {
@@ -352,7 +352,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         } else {
             // Hot tier unavailable, record error recovery attempt
             let _ = self.error_recovery.execute_recovery(
-                crate::cache::manager::error_recovery::types::ErrorType::ResourceExhaustion, 
+                crate::cache::types::statistics::multi_tier::ErrorType::OutOfMemory, 
                 0
             );
         }
@@ -398,7 +398,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         } else {
             // Warm tier unavailable, record error recovery attempt
             let _ = self.error_recovery.execute_recovery(
-                crate::cache::manager::error_recovery::types::ErrorType::ResourceExhaustion, 
+                crate::cache::types::statistics::multi_tier::ErrorType::OutOfMemory, 
                 1
             );
         }
@@ -490,7 +490,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
                     Err(e) => {
                         // Use error recovery system for sophisticated retry logic
                         let _recovery_strategy = self.error_recovery.handle_error(
-                            crate::cache::manager::error_recovery::types::ErrorType::DiskIOError,
+                            crate::cache::types::statistics::multi_tier::ErrorType::GenericError,
                             placement_decision.primary_tier as u8
                         );
                         return Err(e);
@@ -737,9 +737,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         }
     }
 
-    /// Schedule asynchronous cache operation using task coordinator
-    #[allow(dead_code)] // Unified manager - async operation scheduling API with task coordination
-    pub async fn schedule_async_operation<F, T>(
+    /// Schedule cache operation using task coordinator (synchronous, crossbeam-based)
+    #[allow(dead_code)] // Unified manager - synchronous operation scheduling API with task coordination
+    pub fn schedule_operation<F, T>(
         &self,
         operation: F,
         task_type: String,
@@ -752,9 +752,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         self.task_coordinator.schedule_cache_operation(operation, task_type, Self::DEFAULT_TASK_PRIORITY, keys)
     }
 
-    /// Schedule asynchronous cache operation with result coordination
-    #[allow(dead_code)] // Unified manager - async operation scheduling API with result coordination  
-    pub async fn schedule_async_operation_with_result<F, T>(
+    /// Schedule cache operation with result coordination (synchronous, crossbeam-based)
+    #[allow(dead_code)] // Unified manager - synchronous operation scheduling API with result coordination  
+    pub fn schedule_operation_with_result<F, T>(
         &self,
         operation: F,
         task_type: String,
@@ -768,9 +768,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
         self.task_coordinator.schedule_cache_operation_with_result(operation, task_type, Self::DEFAULT_TASK_PRIORITY, keys, result_sender)
     }
 
-    /// Schedule asynchronous cache operation with predetermined task ID
+    /// Schedule cache operation with predetermined task ID (synchronous, crossbeam-based)
     #[allow(dead_code)]
-    pub async fn schedule_async_operation_with_task_id<F, T>(
+    pub fn schedule_operation_with_task_id<F, T>(
         &self,
         operation: F,
         task_type: String,
@@ -1324,7 +1324,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static, V:
             performance_monitor: PerformanceMonitor::new(),
             error_recovery: ManagerErrorRecoverySystem::new(),
             tier_operations: TierOperations::new(),
-            task_coordinator: TaskCoordinator::new_direct(self.config.worker.task_queue_capacity as usize),
+            task_coordinator: TaskCoordinator::new_direct(self.config.worker.task_queue_capacity as usize).expect("Failed to clone TaskCoordinator"),
             prefetch_channel: self.prefetch_channel.clone(),
         }
     }

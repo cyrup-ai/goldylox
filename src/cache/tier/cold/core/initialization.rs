@@ -10,7 +10,7 @@ use crate::cache::config::types::ColdTierConfig;
 use crate::cache::tier::cold::data_structures::*;
 use crate::cache::tier::cold::PersistentColdTier;
 use crate::cache::traits::core::{CacheKey, CacheValue};
-use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
+use crate::cache::types::statistics::ErrorStatistics;
 use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 impl<K: CacheKey + Default, V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static> PersistentColdTier<K, V> {

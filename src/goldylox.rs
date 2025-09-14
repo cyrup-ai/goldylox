@@ -616,13 +616,13 @@ where
         };
         
         // Schedule with result coordination using the same task_id
-        let scheduled_task_id = self.manager.schedule_async_operation_with_task_id(
+        let scheduled_task_id = self.manager.schedule_operation_with_task_id(
             enhanced_operation,
             context_name,
             Vec::<SerdeCacheKey<K>>::new(),
             Some(result_sender),
             task_id, // Use the same task_id for coordination
-        ).await?;
+        )?;
         
         // Verify task IDs match (production safety check)
         if task_id != scheduled_task_id {

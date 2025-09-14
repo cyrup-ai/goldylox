@@ -12,7 +12,7 @@ use crate::cache::types::statistics::tier_stats::TierStatistics;
 use super::types::timestamp_nanos;
 use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::traits::{CacheKey, CacheValue};
-use crate::cache::manager::error_recovery::types::ErrorType;
+use crate::cache::types::statistics::multi_tier::ErrorType;
 
 use bincode;
 

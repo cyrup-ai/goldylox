@@ -21,7 +21,7 @@ use memmap2::MmapMut;
 use crate::cache::config::types::ColdTierConfig;
 use crate::cache::tier::cold::sync::SyncStatsSnapshot;
 use crate::cache::traits::*;
-use crate::cache::manager::error_recovery::statistics::ErrorStatistics;
+use crate::cache::types::statistics::ErrorStatistics;
 
 /// Binary format constants for cache value serialization
 /// These constants define a stable, versioned binary format for persistent storage

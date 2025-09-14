@@ -4,8 +4,11 @@
 //! and analysis capabilities across multiple tiers.
 
 pub mod atomic_stats;
+pub mod error_stats;
 pub mod multi_tier;
 pub mod tier_stats;
+
+pub use error_stats::ErrorStatistics;
 
 // REMOVED: Backwards compatibility re-exports that hide canonical API paths
 // Users must now import from canonical module paths:

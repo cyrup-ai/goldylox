@@ -18,6 +18,8 @@ pub enum ErrorType {
     Timeout,
     /// Memory allocation failure
     OutOfMemory,
+    /// Memory allocation failure (alias for compatibility)
+    MemoryAllocationFailure,
     /// Serialization/deserialization error
     Serialization,
     /// Cache coherence protocol violation
@@ -28,6 +30,10 @@ pub enum ErrorType {
     TierTransition,
     /// Background worker error
     WorkerFailure,
+    /// Corrupted data detected
+    CorruptedData,
+    /// Disk I/O operation failed
+    DiskIOError,
     /// Generic operation error
     GenericError,
 }

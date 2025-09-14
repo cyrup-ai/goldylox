@@ -1,9 +1,10 @@
-#![allow(dead_code)] // Worker System - Complete async worker infrastructure with task coordination, command queues, background maintenance, tier transitions, statistics tracking, and NUMA-aware coordination for comprehensive cache lifecycle management
+#![allow(dead_code)] // Worker System - Complete synchronous worker infrastructure with task coordination using crossbeam messaging, command queues, background maintenance, tier transitions, statistics tracking, and NUMA-aware coordination for comprehensive cache lifecycle management
 
-//! Cache worker coordination and async infrastructure
+//! Cache worker coordination and synchronous infrastructure
 //!
-//! This module provides high-performance async worker infrastructure for cache operations,
-//! including work-stealing task pools, command queues, and NUMA-aware coordination.
+//! This module provides high-performance synchronous worker infrastructure for cache operations
+//! using pure crossbeam messaging patterns, including dedicated task execution threads, 
+//! command queues, and NUMA-aware coordination.
 
  // Internal worker architecture - components may not be used in minimal API
 
@@ -56,7 +57,7 @@ pub fn initialize_worker_system_with_config<K: CacheKey + Default + bincode::Enc
     }
     
     // Create task coordinator with base queue capacity
-    let task_coordinator = TaskCoordinator::new_direct(queue_capacity);
+    let task_coordinator = TaskCoordinator::new_direct(queue_capacity)?;
     
     // Apply global system-wide configuration using the extracted parameters
     
@@ -120,7 +121,7 @@ pub fn initialize_worker_system_with_config<K: CacheKey + Default + bincode::Enc
     info!("Worker system initialized with complete production configuration - all 6 parameters configured: thread_pool_size: {}, maintenance_interval: {}ns, cpu_affinity: 0x{:x}, priority: {}, batch_size: {}", 
           thread_pool_size, maintenance_interval_ns, cpu_affinity_mask, priority_level, batch_size);
     
-    Ok(task_coordinator?)
+    Ok(task_coordinator)
 }
 
 

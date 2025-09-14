@@ -187,10 +187,24 @@ impl PerformanceHistory {
             avg_ops_per_second: avg_ops_per_sec,
             // Error recovery metrics - use error recovery provider data
             total_errors: error_provider.get_total_errors(),
-            error_distribution: error_provider.get_error_distribution(),
-            health_score: error_provider.get_health_score(),
+            error_distribution: {
+                let dist_map = error_provider.get_error_distribution();
+                let mut dist_array = [0.0; 16];
+                let total: u32 = dist_map.values().sum();
+                if total > 0 {
+                    let error_types = ["timeout", "out_of_memory", "serialization", "coherence_violation", 
+                                      "simd_failure", "tier_transition", "worker_failure", "generic_error"];
+                    for (i, &error_type) in error_types.iter().enumerate() {
+                        if let Some(&count) = dist_map.get(error_type) {
+                            dist_array[i] = count as f64 / total as f64;
+                        }
+                    }
+                }
+                dist_array
+            },
+            health_score: error_provider.get_health_score() as f64,
             active_recoveries: error_provider.get_active_recoveries(),
-            mttr_ms: error_provider.get_mttr_ms(),
+            mttr_ms: error_provider.get_mttr_ms() as f64,
             // Qualitative analysis flags
             is_fast: avg_access_time < 1_000_000.0, // < 1ms is fast
             is_consistent: {

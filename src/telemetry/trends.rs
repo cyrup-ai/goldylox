@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-use crate::cache::manager::performance::alert_system::AlertSystem;
+use crate::cache::manager::error_recovery::ErrorRecoveryProvider;
 use super::data_structures::{TrendHistoryBuffer, TrendSample};
 use super::performance_history::PerformanceHistory;
-use super::types::{MonitorConfig, PerformanceSample, PerformanceTrends};
+use super::types::{MonitorConfig, PerformanceTrends};
 use crate::cache::types::statistics::multi_tier::ErrorRateTracker;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
@@ -34,8 +34,8 @@ pub struct TrendAnalyzer {
     performance_history: Option<Box<PerformanceHistory>>,
     /// Error rate tracker for production error metrics
     error_tracker: Option<ErrorRateTracker>,
-    /// Alert system for anomaly detection
-    alert_system: Option<AlertSystem>,
+    /// Cached fallback provider to avoid repeated allocations
+    fallback_provider: crate::cache::manager::error_recovery::FallbackErrorProvider,
 }
 
 impl TrendAnalyzer {
@@ -58,15 +58,14 @@ impl TrendAnalyzer {
             trend_samples: CachePadded::new(AtomicU32::new(0)), // Initialize sample count
             performance_history: None, // Initialize as None, can be set later
             error_tracker: Some(ErrorRateTracker::new()),
-            alert_system: None,
+            fallback_provider: crate::cache::manager::error_recovery::FallbackErrorProvider::new(),
         })
     }
 
-    /// Create new trend analyzer with AlertSystem integration
-    pub fn new_with_alerts(_config: MonitorConfig) -> Result<Self, CacheOperationError> {
-        let mut analyzer = Self::new()?;
-        analyzer.alert_system = Some(AlertSystem::new());
-        Ok(analyzer)
+    /// Create new trend analyzer with monitoring configuration
+    pub fn new_with_config(_config: MonitorConfig) -> Result<Self, CacheOperationError> {
+        // For now, just delegate to new() - could be enhanced to use config
+        Self::new()
     }
 
     /// Analyze current performance trends with ML predictions
@@ -170,14 +169,22 @@ impl TrendAnalyzer {
     fn compute_baseline_throughput(&self) -> f64 {
         // Use the performance_history field we already added
         if let Some(history) = &self.performance_history {
-            use crate::cache::manager::error_recovery::FallbackErrorProvider;
-            let fallback_provider = FallbackErrorProvider::new();
-            let summary = history.get_performance_summary(&fallback_provider);
-            summary.avg_ops_per_second as f64
+            // Use cached fallback provider instead of creating new one
+            let summary = history.get_performance_summary(&self.fallback_provider);
+            
+            // Validate the summary data and use fallback if needed
+            let historical_throughput = summary.avg_ops_per_second as f64;
+            if self.fallback_provider.is_safe_float(historical_throughput) && historical_throughput > 0.0 {
+                historical_throughput
+            } else {
+                // Use fallback provider to get safe baseline
+                let current = self.compute_current_throughput();
+                self.fallback_provider.get_safe_baseline_throughput(current)
+            }
         } else {
-            // Fallback to current throughput estimate
+            // No historical data available - use cached fallback provider for safe defaults
             let current = self.compute_current_throughput();
-            if current > 0.0 { current * 0.8 } else { 100.0 }
+            self.fallback_provider.get_safe_baseline_throughput(current)
         }
     }
 
@@ -197,9 +204,8 @@ impl TrendAnalyzer {
     fn compute_historical_error_rate(&self) -> f64 {
         // Connect to real performance history data
         if let Some(performance_history) = &self.performance_history {
-            use crate::cache::manager::error_recovery::FallbackErrorProvider;
-            let fallback_provider = FallbackErrorProvider::new();
-            let summary = performance_history.get_performance_summary(&fallback_provider);
+            // Use cached fallback provider instead of creating new one
+            let summary = performance_history.get_performance_summary(&self.fallback_provider);
             
             // Calculate real historical error rate from performance samples
             let total_ops = summary.sample_count as f64;
@@ -314,39 +320,38 @@ impl TrendAnalyzer {
         Ok(())
     }
 
-    /// Detect anomalies using AlertSystem integration
+    /// Detect anomalies using basic statistical analysis
     pub fn detect_anomalies(&self, recent_samples: &[(u64, f32)]) -> Vec<(u64, f32, String)> {
         let mut anomalies = Vec::new();
         
-        if let Some(alert_system) = &self.alert_system {
-            // Convert samples to PerformanceSample format for AlertSystem
-            for &(timestamp, value) in recent_samples {
-                let sample = PerformanceSample {
-                    timestamp_ns: timestamp,
-                    hit_rate_x1000: (value * 1000.0) as u32,
-                    avg_access_time_ns: (value * 1000.0) as u32,
-                    memory_usage: (value * 1024.0) as u64,
-                    ops_per_second_x100: (value * 100.0) as u32,
-                    hot_utilization_x100: (value * 100.0) as u16,
-                    warm_utilization_x100: (value * 100.0) as u16,
-                    cold_utilization_x100: (value * 100.0) as u16,
-                    latency_ns: (value * 1000.0) as u64,
-                    throughput: value as f64,
-                    error_count: 0,
-                    operation_latency_ns: (value * 1000.0) as u64,
-                    tier_hit: value > 0.5,
-                    _padding: [0; 3],
+        if recent_samples.len() < 3 {
+            return anomalies; // Need at least 3 samples for basic anomaly detection
+        }
+        
+        // Calculate mean and standard deviation
+        let values: Vec<f32> = recent_samples.iter().map(|(_, v)| *v).collect();
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        let variance = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f32>() / values.len() as f32;
+        let std_dev = variance.sqrt();
+        
+        // Detect outliers using 2-sigma rule (95% confidence interval)
+        let threshold = 2.0 * std_dev;
+        
+        for &(timestamp, value) in recent_samples {
+            if (value - mean).abs() > threshold {
+                let anomaly_type = if value > mean + threshold {
+                    "High value anomaly"
+                } else {
+                    "Low value anomaly"
                 };
-                
-                // Use AlertSystem for anomaly detection
-                let alerts = alert_system.check_alerts(&sample);
-                for alert in alerts {
-                    anomalies.push((
-                        timestamp,
-                        alert.current_value as f32,
-                        alert.message
-                    ));
-                }
+                anomalies.push((
+                    timestamp,
+                    value,
+                    format!("{}: {:.2} (mean: {:.2}, threshold: {:.2})", 
+                            anomaly_type, value, mean, threshold)
+                ));
             }
         }
         

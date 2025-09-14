@@ -48,10 +48,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Seri
     }
 }
 
-/// Initialize coherence system with worker-owned architecture (legacy compatibility)
-pub fn init_coherence_system<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static, V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + serde::Serialize + serde::de::DeserializeOwned + 'static>() -> Result<CoherenceSystem<K, V>, CoherenceError> {
-    CoherenceSystem::new()
-}
+
 
 /// Perform coherent read operation using channel-based worker communication
 /// 
