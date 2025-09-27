@@ -1,0 +1,165 @@
+[package]
+name = "goldylox"
+version = "0.1.0"
+edition = "2024"
+authors = ["David Maple<david@cloudsamur.ai>"]
+description = "High-performance generic cache system with multi-tier architecture, SIMD optimizations, and intelligent eviction policies"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cyrup-ai/goldylox"
+keywords = ["cache", "performance", "simd", "async", "generic"]
+categories = ["caching", "data-structures", "algorithms"]
+
+[[bin]]
+name = "lox"
+path = "src/bin/goldylox-cli.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "loxd"
+path = "src/bin/loxd.rs"
+required-features = ["daemon"]
+
+[dependencies]
+# Core dependencies for atomic operations and concurrency
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.15"
+crossbeam-queue = "0.3.12"
+crossbeam-skiplist = "0.1.3"
+crossbeam-utils = "0.8.21"
+crossbeam-epoch = "0.9.18"
+uuid = { version = "1.18.1", features = ["v4"] }
+parking_lot = "0.12.4"
+arc-swap = "1.7.1"
+rand = "0.9.2"
+
+# SIMD and performance optimizations
+rayon = "1.11.0"
+
+# Async support
+tokio = { version = "1.47.1", features = ["sync", "time", "rt", "macros", "rt-multi-thread", "process", "fs", "signal"] }
+
+# CLI support with latest clap (optional)
+clap = { version = "4.5.47", features = ["derive", "env", "color", "suggestions"], optional = true }
+clap_complete = { version = "4.5", optional = true }
+rustyline = { version = "14.0", optional = true }
+indicatif = { version = "0.17", optional = true }
+env_logger = { version = "0.11", optional = true }
+
+# Daemon dependencies (optional)
+anyhow = { version = "1", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+nix = { version = "0.30", default-features = false, features = ["fs", "process", "signal", "user"], optional = true }
+
+# Binary integrity verification for embedded executables
+hex = { version = "0.4", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+# Email notifications for alert system
+lettre = { version = "0.11", features = ["tokio1-native-tls", "smtp-transport", "builder"], optional = true }
+once_cell = { version = "1", optional = true }
+thiserror = { version = "2.0.16", optional = true }
+cfg-if = { version = "1.0.1", optional = true }
+which = "8"
+dirs = { version = "6.0.0", optional = true }
+axum = { version = "0.8.4", optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
+base64 = { version = "0.22", optional = true }
+reqwest = { version = "0.12", features = ["json", "gzip", "stream"], optional = true }
+regex = { version = "1.11.1", optional = true }
+url = { version = "2.5.4", optional = true }
+urlencoding = { version = "2.1", optional = true }
+tracing = { version = "0.1", optional = true }
+async-stream = { version = "0.3", optional = true }
+futures-util = { version = "0.3", optional = true }
+serde_urlencoded = { version = "0.7", optional = true }
+futures = { version = "0.3.31", optional = true }
+time = { version = "0.3", features = ["macros", "serde"], optional = true }
+tokio-stream = { version = "0.1.17", optional = true }
+atomic-counter = { version = "1.0", optional = true }
+tokio-util = { version = "0.7", optional = true }
+memchr = { version = "2.7", optional = true }
+fastrand = { version = "2.3.0", optional = true }
+jwalk = { version = "0.8.1", optional = true }
+walkdir = { version = "2.5.0", optional = true }
+
+# Serialization for cold tier and configuration
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+serde_json = "1"
+bincode = { version = "2", features = ["derive", "alloc", "std", "serde"] }
+
+# ZIP handling for build system and installer
+zip = { version = "4.3", default-features = false, features = ["aes-crypto", "bzip2", "deflate64", "deflate", "time", "zstd"] }
+
+# Compression for cold tier
+lz4_flex = "0.11"
+zstd = "0.13"
+flate2 = { version = "1", features = ["zlib-ng"], default-features = false }
+snap = "1"
+brotli = "8"
+crc32fast = "1"
+
+# Memory management and metrics
+memmap2 = { version = "0.9", features = ["stable_deref_trait"] }
+arrayvec = "0.7.6"
+dashmap = "6.1.0"
+ahash = "0.8.12"
+rustc-hash = "2"
+blake3 = "1"
+siphasher = "1.0"
+log = "0.4.27"
+unicode-bidi = "0.3.18"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_SystemInformation"] }
+unicode-script = "0.5.7"
+crossbeam-deque = "0.8.6"
+futures-lite = "2.6.1"
+nix = { version = "0.30.1", features = ["sched"] }
+
+[features]
+default = []
+async = []
+cli = ["clap", "clap_complete", "rustyline", "indicatif", "env_logger", "reqwest", "url", "urlencoding", "base64"]
+daemon = [
+    "anyhow", "chrono", "nix", "once_cell", "thiserror", "cfg-if", "dirs",
+    "axum", "tower", "tower-http", "reqwest", "regex", "url", "urlencoding", "tracing", "base64",
+    "async-stream", "futures-util", "serde_urlencoded", "futures", "time", 
+    "tokio-stream", "atomic-counter", "tokio-util", "memchr", "fastrand", 
+    "jwalk", "walkdir", "clap", "env_logger",
+    "hex", "sha2", "lettre"
+]
+systemd-notify = ["systemd"]
+
+# Platform-specific dependencies for memory detection
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+plist = { version = "1.7.4", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["sysinfoapi", "processthreadsapi", "winnt", "handleapi", "securitybaseapi"] }
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security", 
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging"
+], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+users = { version = "0.11.0", optional = true }
+systemd = { version = "0.10", optional = true }
+
+[build-dependencies]
+pkg-config = "0.3.32"
+zip = { version = "4.3", default-features = false, features = ["deflate"] }
+cc = "1.2"
+which = "8.0"
+hex = "0.4"
+sha2 = "0.10"
+
+[dev-dependencies]
+criterion = "0.7"
+proptest = "1.7"
+tokio-test = "0.4"
