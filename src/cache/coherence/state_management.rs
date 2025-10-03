@@ -2,14 +2,12 @@
 //!
 //! This module implements state transition validation and management for the MESI protocol,
 //! ensuring correct state transitions and protocol compliance.
-
 // Internal coherence architecture - components may not be used in minimal API
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::cache::coherence::communication::CoherenceError;
 use crate::cache::coherence::data_structures::{CacheTier, MesiState};
-use crate::cache::coherence::statistics::core_statistics::CoherenceStatistics;
 
 /// State transition validator for protocol correctness
 #[allow(dead_code)] // MESI coherence - used in protocol state transition validation and enforcement
@@ -167,8 +165,8 @@ impl StateTransitionValidator {
 
         // Check if transition is valid in the matrix
         if !self.valid_transitions[from_idx][to_idx] {
-            // Record to global coherence statistics
-            CoherenceStatistics::global().record_violation();
+            // TODO: Record to per-instance coherence statistics when StateTransitionValidator gets stats parameter
+            // CoherenceStatistics::global().record_violation();
 
             self.transition_stats
                 .invalid_transitions
@@ -286,8 +284,8 @@ impl StateTransitionValidator {
 
     /// Record transition statistics
     fn record_transition_stats(&self, from_state: MesiState, to_state: MesiState) {
-        // Record to global coherence statistics
-        CoherenceStatistics::global().record_transition();
+        // TODO: Record to per-instance coherence statistics when StateTransitionValidator gets stats parameter
+        // CoherenceStatistics::global().record_transition();
 
         // Record local transition statistics
         // Record from-state statistics

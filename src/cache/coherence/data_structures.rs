@@ -36,6 +36,12 @@ pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     pub invalidation_manager: InvalidationManager<K>,
     /// Write propagation system
     pub write_propagation: super::write_propagation::WritePropagationSystem<K, V>,
+    /// Hot tier coordinator for tier operations
+    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    /// Warm tier coordinator for tier operations
+    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    /// Cold tier coordinator for tier operations  
+    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
 }
 
 /// Cache line state with MESI protocol tracking
@@ -382,7 +388,12 @@ impl<
 {
     /// Create new coherence controller - WORKER EXCLUSIVE ACCESS ONLY
     /// This constructor is pub(crate) to prevent external shared access
-    pub(crate) fn new(config: ProtocolConfiguration) -> Self {
+    pub(crate) fn new(
+        config: ProtocolConfiguration,
+        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    ) -> Self {
         Self {
             cache_line_states: SkipMap::new(),
             communication_hub: super::communication::CommunicationHub::new(),
@@ -390,7 +401,15 @@ impl<
             protocol_config: config,
             transition_validator: super::state_management::StateTransitionValidator::new(),
             invalidation_manager: InvalidationManager::new(1000),
-            write_propagation: super::write_propagation::WritePropagationSystem::new(1_000_000_000),
+            write_propagation: super::write_propagation::WritePropagationSystem::new(
+                1_000_000_000,
+                hot_tier_coordinator.clone(),
+                warm_tier_coordinator.clone(),
+                cold_tier_coordinator.clone(),
+            ),
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
         }
     }
 
@@ -896,26 +915,15 @@ impl<
         let write_result = match request.target_tier {
             CacheTier::Hot => {
                 // Write to hot tier using SIMD-optimized crossbeam messaging
-                crate::cache::tier::hot::thread_local::simd_hot_put(cache_key, cache_value)
+                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value)
             }
             CacheTier::Warm => {
                 // Write to warm tier using balanced crossbeam messaging
-                crate::cache::tier::warm::global_api::warm_put(cache_key, cache_value)
+                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value)
             }
             CacheTier::Cold => {
-                // Write to cold tier using coordinator crossbeam pattern
-                use crate::cache::tier::cold::ColdTierCoordinator;
-
-                let key_for_cold = cache_key.clone();
-                let value_for_cold = cache_value.clone();
-
-                match ColdTierCoordinator::get() {
-                    Ok(coordinator) => coordinator.execute_operation::<K, V, (), _>(move |tier| {
-                        tier.put(key_for_cold.original_key, value_for_cold)?;
-                        Ok(())
-                    }),
-                    Err(e) => Err(e),
-                }
+                // Write to cold tier using insert_demoted function
+                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key.original_key, cache_value)
             }
         };
 

@@ -60,6 +60,9 @@ pub struct CoherenceWorkerManager<
         + serde::de::DeserializeOwned,
 > {
     config: ProtocolConfiguration,
+    hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
     worker_handle: Option<JoinHandle<()>>,
     _phantom: PhantomData<(K, V)>,
 }
@@ -82,9 +85,17 @@ impl<
 > CoherenceWorkerManager<K, V>
 {
     /// Create new worker manager
-    pub fn new(config: ProtocolConfiguration) -> Result<Self, CoherenceError> {
+    pub fn new(
+        config: ProtocolConfiguration,
+        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    ) -> Result<Self, CoherenceError> {
         Ok(Self {
             config,
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
             worker_handle: None,
             _phantom: PhantomData,
         })
@@ -96,8 +107,15 @@ impl<
         let (response_tx, response_rx) = unbounded();
         let (shutdown_tx, shutdown_rx) = unbounded();
 
-        let worker =
-            CoherenceWorker::new(self.config.clone(), request_rx, response_tx, shutdown_rx);
+        let worker = CoherenceWorker::new(
+            self.config.clone(),
+            self.hot_tier_coordinator.clone(),
+            self.warm_tier_coordinator.clone(),
+            self.cold_tier_coordinator.clone(),
+            request_rx,
+            response_tx,
+            shutdown_rx,
+        );
 
         let handle = thread::spawn(move || {
             worker.run();
@@ -230,16 +248,7 @@ impl<
     }
 }
 
-use std::any::TypeId;
-use std::collections::HashMap;
-/// Global worker channel registry
-use std::sync::OnceLock;
-
-static WORKER_CHANNELS: OnceLock<
-    std::sync::RwLock<HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>>,
-> = OnceLock::new();
-
-/// Get worker channels for coherence communication
+/// Get worker channels for coherence communication (per-instance)
 pub fn get_worker_channels<
     K: CacheKey
         + Default
@@ -255,12 +264,14 @@ pub fn get_worker_channels<
         + serde::Serialize
         + serde::de::DeserializeOwned
         + 'static,
->() -> Option<CoherenceChannelPair<K, V>> {
-    let channels = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
-
-    if let Ok(channel_map) = channels.read() {
-        let type_id = TypeId::of::<(K, V)>();
-        if let Some(channel_any) = channel_map.get(&type_id) {
+>(
+    channel_map: &std::sync::Arc<std::sync::RwLock<
+        std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
+    >>
+) -> Option<CoherenceChannelPair<K, V>> {
+    if let Ok(map) = channel_map.read() {
+        let type_id = std::any::TypeId::of::<(K, V)>();
+        if let Some(channel_any) = map.get(&type_id) {
             // Safely downcast the boxed Any to the correct channel pair type
             if let Some((sender, receiver)) =
                 channel_any.downcast_ref::<CoherenceChannelPair<K, V>>()
@@ -273,7 +284,7 @@ pub fn get_worker_channels<
     None
 }
 
-/// Register worker channels for a specific key-value type combination  
+/// Register worker channels for a specific key-value type combination (per-instance)
 pub fn register_worker_channels<
     K: CacheKey
         + Default
@@ -290,12 +301,13 @@ pub fn register_worker_channels<
         + serde::de::DeserializeOwned
         + 'static,
 >(
+    channel_map: &std::sync::Arc<std::sync::RwLock<
+        std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
+    >>,
     channels: CoherenceChannelPair<K, V>,
 ) {
-    let registry = WORKER_CHANNELS.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
-
-    if let Ok(mut channel_map) = registry.write() {
-        let type_id = TypeId::of::<(K, V)>();
-        channel_map.insert(type_id, Box::new(channels));
+    if let Ok(mut map) = channel_map.write() {
+        let type_id = std::any::TypeId::of::<(K, V)>();
+        map.insert(type_id, Box::new(channels));
     }
 }

@@ -14,7 +14,8 @@ use crate::cache::traits::{CacheKey, CacheValue};
 /// Process canonical maintenance task
 pub fn process_task(
     task: MaintenanceTask, 
-    stat_sender: &Sender<StatUpdate>
+    stat_sender: &Sender<StatUpdate>,
+    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
 ) {
     match task {
         MaintenanceTask::CleanupExpired { ttl, batch_size } => {
@@ -41,7 +42,7 @@ pub fn process_task(
         }
 
         MaintenanceTask::CompactStorage { .. } => {
-            compact_cold_tier(stat_sender);
+            compact_cold_tier(stat_sender, cold_tier_coordinator);
         }
 
         MaintenanceTask::AnalyzePatterns { .. } => {
@@ -72,13 +73,16 @@ pub fn process_task(
 }
 
 /// Perform periodic maintenance tasks using canonical tasks
-pub fn perform_periodic_maintenance(stat_sender: &Sender<StatUpdate>) {
+pub fn perform_periodic_maintenance(
+    stat_sender: &Sender<StatUpdate>,
+    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
+) {
     // Check for entries that need promotion/demotion
     super::tier_transitions::check_tier_transitions(stat_sender);
 
     // Process standard maintenance tasks
-    process_task(WorkerMaintenanceOps::cleanup_expired_task(), stat_sender);
-    process_task(WorkerMaintenanceOps::update_statistics_task(), stat_sender);
+    process_task(WorkerMaintenanceOps::cleanup_expired_task(), stat_sender, cold_tier_coordinator);
+    process_task(WorkerMaintenanceOps::update_statistics_task(), stat_sender, cold_tier_coordinator);
 
     // Update last maintenance time
     let now_ns = SystemTime::now()
@@ -88,24 +92,20 @@ pub fn perform_periodic_maintenance(stat_sender: &Sender<StatUpdate>) {
     let _ = stat_sender.send(StatUpdate::SetLastMaintenance(now_ns));
 }
 
-/// Compact cold tier storage using real ColdTierCoordinator
-fn compact_cold_tier(stat_sender: &Sender<StatUpdate>) {
-    use crate::cache::tier::cold::{ColdTierCoordinator, MaintenanceOperation};
+/// Compact cold tier storage using per-instance ColdTierCoordinator
+fn compact_cold_tier(
+    stat_sender: &Sender<StatUpdate>,
+    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
+) {
+    use crate::cache::tier::cold::MaintenanceOperation;
     
-    match ColdTierCoordinator::get() {
-        Ok(coordinator) => {
-            match coordinator.execute_maintenance(MaintenanceOperation::Compact) {
-                Ok(compacted_bytes) => {
-                    let _ = stat_sender.send(StatUpdate::Cleanup);
-                    log::info!("Cold tier compaction completed: {} bytes compacted", compacted_bytes);
-                }
-                Err(e) => {
-                    log::error!("Cold tier compaction failed: {}", e);
-                }
-            }
+    match cold_tier_coordinator.execute_maintenance(MaintenanceOperation::Compact) {
+        Ok(compacted_bytes) => {
+            let _ = stat_sender.send(StatUpdate::Cleanup);
+            log::info!("Cold tier compaction completed: {} bytes compacted", compacted_bytes);
         }
         Err(e) => {
-            log::error!("Failed to get ColdTierCoordinator for compaction: {}", e);
+            log::error!("Cold tier compaction failed: {}", e);
         }
     }
 }

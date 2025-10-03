@@ -379,10 +379,40 @@ pub struct MaintenanceScheduler<
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
     pub scaling_request_sender: crossbeam_channel::Sender<ScalingRequest>,
+    /// Hot tier coordinator for tier operations
+    #[allow(dead_code)]
+    // Background workers - coordinator for hot tier operations
+    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    /// Warm tier coordinator for tier operations
+    #[allow(dead_code)]
+    // Background workers - coordinator for warm tier operations
+    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    /// Cold tier coordinator for tier operations
+    #[allow(dead_code)]
+    // Background workers - coordinator for cold tier operations
+    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    /// Per-instance worker registry for status tracking and monitoring
+    pub worker_registry: std::sync::Arc<dashmap::DashMap<u32, super::worker_state::WorkerStatusChannel>>,
     /// Phantom data for generic parameters
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
     pub _phantom: std::marker::PhantomData<(K, V)>,
+}
+
+/// Worker context containing shared dependencies for worker threads
+/// Reduces parameter count in worker functions from 11 to 7
+#[derive(Clone)]
+pub struct WorkerContext {
+    pub unified_stats: std::sync::Arc<crate::telemetry::unified_stats::UnifiedCacheStatistics>,
+    pub coherence_stats: std::sync::Arc<crate::cache::coherence::statistics::core_statistics::CoherenceStatistics>,
+    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    pub worker_registry: std::sync::Arc<dashmap::DashMap<u32, super::worker_state::WorkerStatusChannel>>,
+    /// Per-instance scaling request sender for dynamic worker management
+    pub scaling_sender: crossbeam_channel::Sender<ScalingRequest>,
+    /// Per-instance pool coordinator for cleanup operations
+    pub pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
 }
 
 /// Background worker state with work-stealing coordination
@@ -488,30 +518,30 @@ pub struct ScalingRequest {
     pub response_sender: crossbeam_channel::Sender<Result<(), String>>,
 }
 
-/// Global scaling request channel - initialized lazily
-static GLOBAL_SCALING_SENDER: std::sync::OnceLock<crossbeam_channel::Sender<ScalingRequest>> =
-    std::sync::OnceLock::new();
-
 impl WorkerStatus {
-    /// Request worker scaling through global coordination channel
+    /// Request worker scaling through instance-specific coordination channel
     ///
     /// # Arguments
+    /// * `scaling_sender` - Instance-specific scaling sender from WorkerContext
     /// * `capacity_factor` - Scaling factor (0.75 = reduce to 75%, 1.5 = increase to 150%)
     ///
     /// # Returns
     /// * `Ok(())` if scaling request was processed successfully
     /// * `Err(String)` if scaling failed or timed out
-    pub fn request_worker_scaling(capacity_factor: f64) -> Result<(), String> {
+    ///
+    /// # Example
+    /// ```rust
+    /// // Inside a worker with access to WorkerContext:
+    /// WorkerStatus::request_worker_scaling(&context.scaling_sender, 1.5)?;
+    /// ```
+    pub fn request_worker_scaling(
+        scaling_sender: &crossbeam_channel::Sender<ScalingRequest>,
+        capacity_factor: f64,
+    ) -> Result<(), String> {
         // Validate capacity factor
         if capacity_factor <= 0.0 || capacity_factor > 10.0 {
             return Err("Invalid capacity factor: must be between 0.0 and 10.0".to_string());
         }
-
-        // Get or initialize the global scaling sender
-        let scaling_sender = GLOBAL_SCALING_SENDER.get().ok_or_else(|| {
-            "Worker scaling system not initialized. MaintenanceScheduler must be created first."
-                .to_string()
-        })?;
 
         // Create response channel for this scaling request
         let (response_sender, response_receiver) =
@@ -522,7 +552,7 @@ impl WorkerStatus {
             response_sender,
         };
 
-        // Send scaling request
+        // Send scaling request to instance-specific channel
         scaling_sender
             .try_send(scaling_request)
             .map_err(|e| format!("Failed to send scaling request: {:?}", e))?;
@@ -537,14 +567,5 @@ impl WorkerStatus {
                 Err("Scaling coordination channel disconnected".to_string())
             }
         }
-    }
-
-    /// Initialize global scaling coordination (called by MaintenanceScheduler)
-    pub(crate) fn initialize_scaling_coordination(
-        sender: crossbeam_channel::Sender<ScalingRequest>,
-    ) -> Result<(), String> {
-        GLOBAL_SCALING_SENDER
-            .set(sender)
-            .map_err(|_| "Scaling coordination already initialized".to_string())
     }
 }

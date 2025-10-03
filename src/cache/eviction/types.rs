@@ -93,11 +93,15 @@ impl Default for ConsistencyLevel {
 impl<K: CacheKey> AccessEvent<K> {
     /// Create new access event with current timestamp
     #[allow(dead_code)] // Eviction policies - new access event used in access pattern tracking
-    pub fn new(key: K, access_type: AccessType, tier: CacheTier, hit: bool) -> Self {
-        static EVENT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
+    pub fn new(
+        key: K,
+        access_type: AccessType,
+        tier: CacheTier,
+        hit: bool,
+        event_counter: &std::sync::atomic::AtomicU64,
+    ) -> Self {
         Self {
-            event_id: EVENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            event_id: event_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             key,
             timestamp: crate::cache::types::timestamp_nanos(std::time::Instant::now()),
             access_type,

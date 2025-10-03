@@ -25,6 +25,8 @@ pub struct PerformanceMetrics {
     pub total_submitted: u64,
 }
 
+use super::types::WorkerContext;
+
 impl<K: CacheKey + Default, V: CacheValue + Default> MaintenanceScheduler<K, V>
 where
     K: Clone + bincode::Encode + bincode::Decode<()> + 'static,
@@ -36,7 +38,15 @@ where
         + 'static,
 {
     /// Create new maintenance scheduler with worker thread pool
-    pub fn new(config: MaintenanceConfig) -> Result<Self, CacheOperationError> {
+    pub fn new(
+        config: MaintenanceConfig,
+        unified_stats: std::sync::Arc<crate::telemetry::unified_stats::UnifiedCacheStatistics>,
+        coherence_stats: std::sync::Arc<crate::cache::coherence::statistics::core_statistics::CoherenceStatistics>,
+        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
+    ) -> Result<Self, CacheOperationError> {
         let (task_sender, task_queue) = if config.queue_capacity > 0 {
             crossbeam_channel::bounded(config.queue_capacity)
         } else {
@@ -48,14 +58,22 @@ where
         // Create scaling request channels for dynamic worker management
         let (scaling_request_sender, scaling_request_receiver) = crossbeam_channel::bounded(10);
 
-        // Initialize global scaling coordination
-        super::types::WorkerStatus::initialize_scaling_coordination(scaling_request_sender.clone())
-            .map_err(|e| {
-                log::warn!("Failed to initialize scaling coordination: {}", e);
-                CacheOperationError::InitializationFailed
-            })?;
+        // Create per-instance worker registry for status tracking
+        let worker_registry = std::sync::Arc::new(dashmap::DashMap::new());
 
         let _stats = MaintenanceStats::new();
+
+        // Create worker context with shared dependencies
+        let context = WorkerContext {
+            unified_stats: unified_stats.clone(),
+            coherence_stats: coherence_stats.clone(),
+            hot_tier_coordinator: hot_tier_coordinator.clone(),
+            warm_tier_coordinator: warm_tier_coordinator.clone(),
+            cold_tier_coordinator: cold_tier_coordinator.clone(),
+            worker_registry: worker_registry.clone(),
+            scaling_sender: scaling_request_sender.clone(),
+            pool_coordinator: pool_coordinator.clone(),
+        };
 
         // Spawn coordinator thread that owns worker management via crossbeam messaging
         let coordinator_handle = {
@@ -63,6 +81,7 @@ where
             let task_queue_clone = task_queue.clone();
             let shutdown_clone = shutdown_signal.clone();
             let config_clone = config.clone();
+            let context_clone = context.clone();
 
             std::thread::Builder::new()
                 .name("maintenance-coordinator".to_string())
@@ -72,6 +91,7 @@ where
                         scaling_receiver,
                         task_queue_clone,
                         shutdown_clone,
+                        context_clone,
                     );
                 })
                 .map_err(|_| CacheOperationError::InitializationFailed)?
@@ -96,6 +116,10 @@ where
             shutdown_sender,
             scaling_request_receiver,
             scaling_request_sender,
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
+            worker_registry,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -254,6 +278,7 @@ where
         scaling_request: &super::types::ScalingRequest,
         task_queue: &crossbeam_channel::Receiver<MaintenanceTask>,
         shutdown_signal: &crossbeam_channel::Receiver<()>,
+        context: &WorkerContext,
     ) -> Result<(), String> {
         let target_workers =
             (config.worker_count as f64 * scaling_request.capacity_factor).ceil() as u32;
@@ -265,6 +290,7 @@ where
                 let task_receiver = task_queue.clone();
                 let global_shutdown_receiver = shutdown_signal.clone();
                 let config_clone = config.clone();
+                let context_clone = context.clone();
 
                 let (worker_shutdown_sender, _worker_shutdown_receiver) =
                     crossbeam_channel::bounded(1);
@@ -278,6 +304,7 @@ where
                             global_shutdown_receiver,
                             &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
                             config_clone,
+                            context_clone,
                         );
                     }) {
                     Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
@@ -305,6 +332,7 @@ where
         scaling_receiver: crossbeam_channel::Receiver<super::types::ScalingRequest>,
         task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
         shutdown_signal: crossbeam_channel::Receiver<()>,
+        context: WorkerContext,
     ) {
         use std::time::Duration;
         let mut worker_threads: Vec<(std::thread::JoinHandle<()>, crossbeam_channel::Sender<()>)> =
@@ -315,6 +343,7 @@ where
             let task_receiver = task_queue.clone();
             let global_shutdown_receiver = shutdown_signal.clone();
             let config_clone = config.clone();
+            let context_clone = context.clone();
 
             // Create individual shutdown channel for this worker
             let (worker_shutdown_sender, _worker_shutdown_receiver) = crossbeam_channel::bounded(1);
@@ -328,6 +357,7 @@ where
                         global_shutdown_receiver,
                         &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
                         config_clone,
+                        context_clone,
                     );
                 }) {
                 Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
@@ -347,6 +377,7 @@ where
                     &scaling_request,
                     &task_queue,
                     &shutdown_signal,
+                    &context,
                 );
                 let _ = scaling_request.response_sender.try_send(result);
             }
@@ -382,15 +413,15 @@ where
     /// Get task processing statistics from all workers
     #[allow(dead_code)] // Background scheduler - worker task count monitoring for load balancing
     pub fn get_worker_task_counts(&self) -> Vec<(u32, u64)> {
-        // Use the global worker registry to get real worker task counts
-        super::types::BackgroundWorkerState::get_all_worker_task_counts()
+        // Use the per-instance worker registry to get real worker task counts
+        super::types::BackgroundWorkerState::get_all_worker_task_counts(&self.worker_registry)
     }
 
     /// Check health status of all workers
     #[allow(dead_code)] // Background scheduler - worker health monitoring for operational visibility
     pub fn check_worker_health(&self) -> Vec<(u32, bool)> {
-        // Use the global worker registry to get real worker health statuses
-        super::types::BackgroundWorkerState::get_all_worker_health()
+        // Use the per-instance worker registry to get real worker health statuses
+        super::types::BackgroundWorkerState::get_all_worker_health(&self.worker_registry)
     }
 
     /// Perform graceful shutdown of workers with proper cleanup

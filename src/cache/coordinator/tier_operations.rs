@@ -4,6 +4,7 @@
 //! and replication logic for the unified cache system.
 
 use crate::cache::analyzer::types::AccessPattern;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cache::coherence::data_structures::{
@@ -11,6 +12,8 @@ use crate::cache::coherence::data_structures::{
 };
 use crate::cache::eviction::CachePolicyEngine;
 use crate::cache::tier::cold::{cold_get, insert_demoted, remove_entry};
+use crate::cache::tier::hot::thread_local::HotTierCoordinator;
+use crate::cache::tier::warm::global_api::WarmTierCoordinator;
 use crate::cache::tier::warm::{warm_get, warm_put, warm_remove};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -29,6 +32,18 @@ pub struct TierOperations<
         + 'static,
 > {
     coherence_controller: CoherenceController<K, V>,
+    
+    /// Per-instance hot tier coordinator (injected from UnifiedCacheManager)
+    /// Manages type-erased hot tier instances and load balancing
+    hot_tier_coordinator: Arc<HotTierCoordinator>,
+    
+    /// Per-instance warm tier coordinator (injected from UnifiedCacheManager)
+    /// Manages ML-driven warm tier instances
+    warm_tier_coordinator: Arc<WarmTierCoordinator>,
+    
+    /// Per-instance cold tier coordinator (injected from UnifiedCacheManager)
+    /// Manages cold tier service channel communication
+    cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
 }
 
 impl<
@@ -42,11 +57,23 @@ impl<
         + 'static,
 > TierOperations<K, V>
 {
-    /// Create new tier operations handler
-    pub fn new() -> Self {
-        Self {
-            coherence_controller: CoherenceController::new(ProtocolConfiguration::default()),
-        }
+    /// Create tier operations with injected coordinators (per-instance pattern)
+    pub fn new_with_coordinators(
+        hot_tier_coordinator: Arc<HotTierCoordinator>,
+        warm_tier_coordinator: Arc<WarmTierCoordinator>,
+        cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    ) -> Result<Self, CacheOperationError> {
+        Ok(Self {
+            coherence_controller: CoherenceController::new(
+                ProtocolConfiguration::default(),
+                hot_tier_coordinator.clone(),
+                warm_tier_coordinator.clone(),
+                cold_tier_coordinator.clone(),
+            ),
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
+        })
     }
 
     /// Try to get value from hot tier with coherence protocol
@@ -54,7 +81,7 @@ impl<
         access_path.tried_hot = true;
 
         // SEARCH FIRST, then update coherence state based on results
-        if let Some(value) = crate::cache::tier::hot::simd_hot_get::<K, V>(key) {
+        if let Some(value) = crate::cache::tier::hot::simd_hot_get::<K, V>(&self.hot_tier_coordinator, key) {
             // Update coherence state to reflect successful hit
             let _ = self
                 .coherence_controller
@@ -74,7 +101,7 @@ impl<
         access_path.tried_warm = true;
 
         // SEARCH FIRST, then update coherence state based on results
-        if let Some(value) = warm_get(key) {
+        if let Some(value) = warm_get(&self.warm_tier_coordinator, key) {
             // Update coherence state to reflect successful hit
             let _ = self
                 .coherence_controller
@@ -94,7 +121,7 @@ impl<
         access_path.tried_cold = true;
 
         // SEARCH FIRST, then update coherence state based on results
-        match cold_get::<K, V>(key) {
+        match cold_get::<K, V>(&self.cold_tier_coordinator, key) {
             Ok(Some(value)) => {
                 // Update coherence state to reflect successful hit
                 let _ = self
@@ -358,10 +385,10 @@ impl<
         // PUT FIRST, then update coherence state based on results
         let put_result = match tier {
             CacheTier::Hot => {
-                crate::cache::tier::hot::simd_hot_put::<K, V>(key.clone(), value.clone())
+                crate::cache::tier::hot::simd_hot_put::<K, V>(&self.hot_tier_coordinator, key.clone(), value.clone())
             }
-            CacheTier::Warm => warm_put(key.clone(), value.clone()),
-            CacheTier::Cold => insert_demoted(key.clone(), value.clone()),
+            CacheTier::Warm => warm_put(&self.warm_tier_coordinator, key.clone(), value.clone()),
+            CacheTier::Cold => insert_demoted(&self.cold_tier_coordinator, key.clone(), value.clone()),
         };
 
         match put_result {
@@ -387,16 +414,16 @@ impl<
     fn remove_from_tier(&self, key: &K, tier: CacheTier) -> Result<bool, CacheOperationError> {
         // REMOVE FIRST, then update coherence state based on results
         let remove_result = match tier {
-            CacheTier::Hot => match crate::cache::tier::hot::simd_hot_remove::<K, V>(key) {
+            CacheTier::Hot => match crate::cache::tier::hot::simd_hot_remove::<K, V>(&self.hot_tier_coordinator, key) {
                 Ok(Some(_)) => Ok(true),
                 Ok(None) => Ok(false),
                 Err(_) => Err(CacheOperationError::TierOperationFailed),
             },
-            CacheTier::Warm => match warm_remove::<K, V>(key) {
+            CacheTier::Warm => match warm_remove::<K, V>(&self.warm_tier_coordinator, key) {
                 Some(_) => Ok(true),
                 None => Ok(false),
             },
-            CacheTier::Cold => remove_entry::<K, V>(key),
+            CacheTier::Cold => remove_entry::<K, V>(&self.cold_tier_coordinator, key),
         };
 
         match remove_result {
@@ -417,16 +444,16 @@ impl<
         match tier {
             CacheTier::Hot => {
                 // Use existing clear_hot_tier function with proper generic parameters
-                crate::cache::tier::hot::thread_local::clear_hot_tier::<K, V>();
+                crate::cache::tier::hot::thread_local::clear_hot_tier::<K, V>(&self.hot_tier_coordinator);
                 Ok(())
             }
             CacheTier::Warm => {
                 // Use existing clear_all_warm_tiers function
-                crate::cache::tier::warm::global_api::clear_all_warm_tiers()
+                crate::cache::tier::warm::global_api::clear_all_warm_tiers(&self.warm_tier_coordinator)
             }
             CacheTier::Cold => {
                 // Use the production-ready cold tier clear function
-                crate::cache::tier::cold::clear::<K, V>()
+                crate::cache::tier::cold::clear::<K, V>(&self.cold_tier_coordinator)
             }
         }
     }
@@ -505,11 +532,11 @@ impl<
         value: V,
     ) -> Result<Option<V>, CacheOperationError> {
         // Use hot tier service message for atomic operation
-        crate::cache::tier::hot::put_if_absent_atomic::<K, V>(key, value)
+        crate::cache::tier::hot::put_if_absent_atomic::<K, V>(&self.hot_tier_coordinator, key, value)
     }
 
     pub fn replace_hot_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
-        crate::cache::tier::hot::replace_atomic::<K, V>(key, value)
+        crate::cache::tier::hot::replace_atomic::<K, V>(&self.hot_tier_coordinator, key, value)
     }
 
     pub fn compare_and_swap_hot_tier(
@@ -521,7 +548,7 @@ impl<
     where
         V: PartialEq,
     {
-        crate::cache::tier::hot::compare_and_swap_atomic::<K, V>(key, expected, new_value)
+        crate::cache::tier::hot::compare_and_swap_atomic::<K, V>(&self.hot_tier_coordinator, key, expected, new_value)
     }
 
     // Warm tier atomic operations using DashMap entry API
@@ -530,11 +557,11 @@ impl<
         key: K,
         value: V,
     ) -> Result<Option<V>, CacheOperationError> {
-        crate::cache::tier::warm::put_if_absent_atomic::<K, V>(key, value)
+        crate::cache::tier::warm::put_if_absent_atomic::<K, V>(&self.warm_tier_coordinator, key, value)
     }
 
     pub fn replace_warm_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
-        crate::cache::tier::warm::replace_atomic::<K, V>(key, value)
+        crate::cache::tier::warm::replace_atomic::<K, V>(&self.warm_tier_coordinator, key, value)
     }
 
     pub fn compare_and_swap_warm_tier(
@@ -546,7 +573,7 @@ impl<
     where
         V: PartialEq,
     {
-        crate::cache::tier::warm::compare_and_swap_atomic::<K, V>(key, expected, new_value)
+        crate::cache::tier::warm::compare_and_swap_atomic::<K, V>(&self.warm_tier_coordinator, key, expected, new_value)
     }
 
     // Cold tier atomic operations (simple synchronization for disk operations)
@@ -555,11 +582,11 @@ impl<
         key: K,
         value: V,
     ) -> Result<Option<V>, CacheOperationError> {
-        crate::cache::tier::cold::put_if_absent_atomic::<K, V>(key, value)
+        crate::cache::tier::cold::put_if_absent_atomic::<K, V>(&self.cold_tier_coordinator, key, value)
     }
 
     pub fn replace_cold_tier(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
-        crate::cache::tier::cold::replace_atomic::<K, V>(key, value)
+        crate::cache::tier::cold::replace_atomic::<K, V>(&self.cold_tier_coordinator, key, value)
     }
 
     pub fn compare_and_swap_cold_tier(
@@ -571,7 +598,7 @@ impl<
     where
         V: PartialEq,
     {
-        crate::cache::tier::cold::compare_and_swap_atomic::<K, V>(key, expected, new_value)
+        crate::cache::tier::cold::compare_and_swap_atomic::<K, V>(&self.cold_tier_coordinator, key, expected, new_value)
     }
 
     /// Select eviction candidate using policy engine intelligence
@@ -608,13 +635,13 @@ impl<
         let candidates = match tier {
             CacheTier::Hot => {
                 // Get idle keys from hot tier using thread-local system
-                crate::cache::tier::hot::get_idle_keys::<K, V>(Duration::from_secs(60))
+                crate::cache::tier::hot::get_idle_keys::<K, V>(&self.hot_tier_coordinator, Duration::from_secs(60))
             }
             CacheTier::Warm => {
                 // Use ML-driven eviction policy engine to select sophisticated candidates
                 // This integrates coherence protocol, ML analysis, and policy-driven selection
                 let warm_tier_candidates =
-                    crate::cache::tier::warm::global_api::get_warm_tier_keys::<K, V>();
+                    crate::cache::tier::warm::global_api::get_warm_tier_keys::<K, V>(&self.warm_tier_coordinator);
 
                 // Use policy engine's sophisticated ML algorithms to filter candidates
                 let policy_candidates: Vec<K> = warm_tier_candidates
@@ -635,7 +662,7 @@ impl<
             }
             CacheTier::Cold => {
                 // Get frequently accessed keys from cold tier for potential eviction
-                crate::cache::tier::cold::get_frequently_accessed_keys::<K, V>(1)
+                crate::cache::tier::cold::get_frequently_accessed_keys::<K, V>(&self.cold_tier_coordinator, 1)
             }
         };
 

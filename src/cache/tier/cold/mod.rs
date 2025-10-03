@@ -8,12 +8,7 @@
 
 use bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use log::error;
 use std::any::TypeId;
-use std::sync::OnceLock;
-
-// Import global atomic counters for statistics
-use crate::cache::tier::cold::storage::{COLD_HITS, COLD_MISSES};
 
 use self::data_structures::{ColdCacheKey, PersistentColdTier};
 use crate::cache::config::types::ColdTierConfig;
@@ -162,9 +157,9 @@ impl ColdTierService {
     }
 }
 
-static COLD_TIER_SERVICE_TX: OnceLock<Sender<ColdTierMessage>> = OnceLock::new();
 
 /// Cold tier coordinator for managing mutable operations
+#[derive(Debug)]
 pub struct ColdTierCoordinator {
     sender: Sender<ColdTierMessage>,
 }
@@ -175,33 +170,24 @@ impl ColdTierCoordinator {
         &self.sender
     }
 
-    pub fn get() -> Result<&'static ColdTierCoordinator, CacheOperationError> {
-        static COORDINATOR: OnceLock<ColdTierCoordinator> = OnceLock::new();
-
-        let sender = COLD_TIER_SERVICE_TX.get_or_init(|| {
-            let (tx, rx) = unbounded();
-
-            if let Err(e) = std::thread::Builder::new()
-                .name("cold-tier-service".to_string())
-                .spawn(move || {
-                    log::info!("Cold tier service thread started");
-                    let service = ColdTierService { receiver: rx };
-                    service.run();
-                    log::warn!("Cold tier service thread exited");
-                })
-            {
-                error!("Failed to spawn cold tier service: {:?}", e);
-                // Note: Cannot return error from closure, service will handle degraded mode
-            } else {
-                log::info!("Cold tier service thread spawned successfully");
-            }
-
-            tx
-        });
-
-        Ok(COORDINATOR.get_or_init(|| ColdTierCoordinator {
-            sender: sender.clone(),
-        }))
+    /// Create new per-instance cold tier coordinator with dedicated service thread
+    pub fn new() -> Result<Self, CacheOperationError> {
+        let (tx, rx) = unbounded();
+        
+        // Spawn PER-INSTANCE service thread (like PrefetchWorker pattern)
+        std::thread::Builder::new()
+            .name("cold-tier-service".to_string())
+            .spawn(move || {
+                log::info!("Cold tier service thread started");
+                let service = ColdTierService { receiver: rx };
+                service.run();
+                log::warn!("Cold tier service thread exited");
+            })
+            .map_err(|e| CacheOperationError::initialization_failed(format!(
+                "Failed to spawn cold tier service: {}", e
+            )))?;
+        
+        Ok(Self { sender: tx })
     }
 
     /// Trigger maintenance operation (compaction, defragmentation, etc.)
@@ -431,6 +417,7 @@ pub fn init_cold_tier<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     base_dir: &str,
     cache_id: &str,
 ) -> Result<(), CacheOperationError> {
@@ -457,7 +444,6 @@ pub fn init_cold_tier<
         CacheOperationError::io_failed(format!("Failed to initialize cold tier: {}", e))
     })?;
 
-    let coordinator = ColdTierCoordinator::get()?;
     coordinator.register::<K, V>(tier)
 }
 
@@ -472,21 +458,11 @@ pub fn cold_get<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     key: &K,
 ) -> Result<Option<V>, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
     let key = key.clone(); // Clone to avoid lifetime issues
-    let result =
-        coordinator.execute_read_operation::<K, V, Option<V>, _>(move |tier| Ok(tier.get(&key)))?;
-
-    // Record hit/miss statistics
-    if result.is_some() {
-        record_hit();
-    } else {
-        record_miss();
-    }
-
-    Ok(result)
+    coordinator.execute_read_operation::<K, V, Option<V>, _>(move |tier| Ok(tier.get(&key)))
 }
 
 /// Get cache statistics  
@@ -499,8 +475,9 @@ pub fn get_stats<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<crate::cache::types::TierStatistics, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<crate::cache::types::TierStatistics, CacheOperationError> {
     coordinator.execute_read_operation::<K, V, crate::cache::types::TierStatistics, _>(|tier| {
         Ok(tier.stats())
     })
@@ -517,32 +494,27 @@ pub fn get_frequently_accessed_keys<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     threshold: u32,
 ) -> Vec<K> {
-    let coordinator = ColdTierCoordinator::get();
-    match coordinator {
-        Ok(coordinator) => {
-            coordinator
-                .execute_read_operation::<K, V, Vec<K>, _>(move |tier| {
-                    let keys: Vec<K> = tier
-                        .metadata_index
-                        .key_index
-                        .iter()
-                        .filter_map(|(cold_key, entry)| {
-                            if entry.access_count >= threshold {
-                                // Try to deserialize the key - bincode is always available
-                                cold_key.to_cache_key().ok()
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    Ok(keys)
+    coordinator
+        .execute_read_operation::<K, V, Vec<K>, _>(move |tier| {
+            let keys: Vec<K> = tier
+                .metadata_index
+                .key_index
+                .iter()
+                .filter_map(|(cold_key, entry)| {
+                    if entry.access_count >= threshold {
+                        // Try to deserialize the key - bincode is always available
+                        cold_key.to_cache_key().ok()
+                    } else {
+                        None
+                    }
                 })
-                .unwrap_or_else(|_| Vec::new())
-        }
-        Err(_) => Vec::new(),
-    }
+                .collect();
+            Ok(keys)
+        })
+        .unwrap_or_else(|_| Vec::new())
 }
 
 /// Check if entry should be promoted to warm tier
@@ -556,24 +528,20 @@ pub fn should_promote_to_warm<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     key: &K,
 ) -> bool {
-    let coordinator = ColdTierCoordinator::get();
-    if let Ok(coordinator) = coordinator {
-        let key_clone = key.clone(); // Clone to avoid lifetime issues
-        coordinator
-            .execute_read_operation::<K, V, bool, _>(move |tier| {
-                let cold_key = ColdCacheKey::from_cache_key(&key_clone);
-                if let Some(entry) = tier.metadata_index.key_index.get(&cold_key) {
-                    Ok(entry.access_count >= 5) // Promotion threshold
-                } else {
-                    Ok(false)
-                }
-            })
-            .unwrap_or(false)
-    } else {
-        false
-    }
+    let key_clone = key.clone(); // Clone to avoid lifetime issues
+    coordinator
+        .execute_read_operation::<K, V, bool, _>(move |tier| {
+            let cold_key = ColdCacheKey::from_cache_key(&key_clone);
+            if let Some(entry) = tier.metadata_index.key_index.get(&cold_key) {
+                Ok(entry.access_count >= 5) // Promotion threshold
+            } else {
+                Ok(false)
+            }
+        })
+        .unwrap_or(false)
 }
 
 /// Insert demoted entry from warm tier (for tier transitions)
@@ -587,10 +555,10 @@ pub fn insert_demoted<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
     coordinator.execute_operation::<K, V, (), _>(|tier| tier.put(key, value))
 }
 
@@ -605,9 +573,9 @@ pub fn remove_entry<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     key: &K,
 ) -> Result<bool, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
     let key = key.clone(); // Clone to avoid lifetime issues
     coordinator.execute_operation::<K, V, bool, _>(move |tier| Ok(tier.remove(&key)))
 }
@@ -625,38 +593,40 @@ pub fn get_detailed_stats<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<storage::ColdTierStats, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<storage::ColdTierStats, CacheOperationError> {
     coordinator.execute_read_operation::<K, V, storage::ColdTierStats, _>(|tier| {
+        let snapshot = tier.stats.snapshot();
         let storage_stats = tier.storage_manager.storage_stats();
         Ok(storage::ColdTierStats {
-            hits: COLD_HITS.load(std::sync::atomic::Ordering::Relaxed),
-            misses: COLD_MISSES.load(std::sync::atomic::Ordering::Relaxed),
+            hits: snapshot.hits,
+            misses: snapshot.misses,
             entries: tier.metadata_index.entry_count(),
             storage_bytes: storage_stats.used_data_size,
         })
     })
 }
 
-/// Record cold tier cache hit for global statistics
-pub fn record_hit() {
-    storage::ColdTierCache::<String, String>::record_hit();
-}
-
-/// Record cold tier cache miss for global statistics  
-pub fn record_miss() {
-    storage::ColdTierCache::<String, String>::record_miss();
-}
-
 /// Get cold tier hit/miss ratio
-pub fn get_hit_miss_ratio() -> f64 {
-    let hits = storage::COLD_HITS.load(std::sync::atomic::Ordering::Relaxed) as f64;
-    let misses = storage::COLD_MISSES.load(std::sync::atomic::Ordering::Relaxed) as f64;
-    if hits + misses > 0.0 {
-        hits / (hits + misses)
-    } else {
-        0.0
-    }
+pub fn get_hit_miss_ratio<
+    K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
+    V: CacheValue
+        + Default
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + bincode::Encode
+        + bincode::Decode<()>
+        + 'static,
+>(
+    coordinator: &ColdTierCoordinator,
+) -> f64 {
+    coordinator
+        .execute_read_operation::<K, V, f64, _>(|tier| {
+            let snapshot = tier.stats.snapshot();
+            Ok(snapshot.hit_rate)
+        })
+        .unwrap_or(0.0)
 }
 
 /// Get cold tier storage utilization metrics
@@ -669,8 +639,9 @@ pub fn get_storage_utilization<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<(u64, u64, bool), CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<(u64, u64, bool), CacheOperationError> {
     coordinator.execute_read_operation::<K, V, (u64, u64, bool), _>(|tier| {
         let storage_stats = tier.storage_manager.storage_stats();
         let needs_compaction = tier.storage_manager.needs_compaction();
@@ -692,8 +663,9 @@ pub fn validate_integrity<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<bool, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<bool, CacheOperationError> {
     coordinator
         .execute_read_operation::<K, V, bool, _>(|tier| tier.storage_manager.validate_integrity())
 }
@@ -708,8 +680,9 @@ pub fn cleanup_expired<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<usize, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<usize, CacheOperationError> {
     coordinator.execute_operation::<K, V, usize, _>(|tier| {
         let initial_count = tier.metadata_index.entry_count();
 
@@ -765,11 +738,11 @@ pub fn contains_key<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &ColdTierCoordinator,
     key: &K,
 ) -> Result<bool, CacheOperationError> {
     // Use coordinator to check if key exists
     // This integrates the unused key containment checking methods
-    let coordinator = ColdTierCoordinator::get()?;
     let key = key.clone();
     coordinator.execute_read_operation::<K, V, bool, _>(move |tier| Ok(tier.get(&key).is_some()))
 }
@@ -784,8 +757,9 @@ pub fn entry_count<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<usize, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<usize, CacheOperationError> {
     coordinator
         .execute_read_operation::<K, V, usize, _>(|tier| Ok(tier.metadata_index.entry_count()))
 }
@@ -800,8 +774,9 @@ pub fn is_empty<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<bool, CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<bool, CacheOperationError> {
     coordinator
         .execute_read_operation::<K, V, bool, _>(|tier| Ok(tier.metadata_index.entry_count() == 0))
 }
@@ -816,17 +791,17 @@ pub fn clear<
         + bincode::Encode
         + bincode::Decode<()>
         + 'static,
->() -> Result<(), CacheOperationError> {
-    let coordinator = ColdTierCoordinator::get()?;
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<(), CacheOperationError> {
     coordinator.execute_operation::<K, V, (), _>(|tier| {
         tier.metadata_index.clear();
         tier.stats.reset();
-
-        // Reset global counters as well for consistency
-        COLD_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
-        COLD_MISSES.store(0, std::sync::atomic::Ordering::Relaxed);
 
         log::debug!("Cold tier cleared: all entries removed");
         Ok(())
     })
 }
+
+
+

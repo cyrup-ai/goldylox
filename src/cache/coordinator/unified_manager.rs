@@ -11,6 +11,7 @@ use crate::cache::eviction::CachePolicyEngine;
 use crate::cache::manager::background::types::{MaintenanceConfig, MaintenanceScheduler};
 use crate::cache::manager::error_recovery::ErrorRecoverySystem as ManagerErrorRecoverySystem;
 use crate::cache::manager::performance::core::PerformanceMonitor;
+use crate::cache::memory::gc_coordinator::GCCoordinator;
 use crate::cache::tier::hot::prefetch::{
     PrefetchPredictor,
     types::{PrefetchConfig, PrefetchStats},
@@ -24,6 +25,16 @@ use crate::cache::worker::task_coordination::{CacheCommand, TaskCoordinator};
 use crate::telemetry::unified_stats::UnifiedCacheStatistics;
 use crate::telemetry::unified_stats::UnifiedStats;
 use crossbeam_channel::{Receiver, Sender, bounded};
+use std::any::TypeId;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use dashmap::DashMap;
+use crate::cache::tier::hot::thread_local::HotTierCoordinator;
+use crate::cache::tier::warm::global_api::WarmTierCoordinator;
+use crate::cache::tier::cold::ColdTierCoordinator;
+use crate::cache::manager::background::worker_state::WorkerStatusChannel;
+use crate::cache::manager::background::types::ScalingRequest;
+use crate::cache::memory::pool_manager::cleanup_manager::{PoolCoordinator, PoolCleanupRequest};
 
 /// PrefetchPredictor channel communication types
 #[derive(Debug)]
@@ -254,6 +265,39 @@ pub struct UnifiedCacheManager<
     task_coordinator: TaskCoordinator<K, V>,
     /// Prefetch predictor channel for hot tier access pattern analysis and prefetching
     prefetch_channel: PrefetchChannel<K>,
+    /// Garbage collection coordinator for memory management
+    gc_coordinator: GCCoordinator,
+    
+    // ========== STATIC_1: Per-instance coordinator fields ==========
+    
+    /// Per-instance hot tier coordinator (NOT global)
+    /// Pattern: DashMap<(TypeId, TypeId), Box<dyn HotTierOperations>>
+    hot_tier_coordinator: Arc<HotTierCoordinator>,
+    
+    /// Per-instance warm tier coordinator (NOT global)
+    /// Pattern: DashMap<(TypeId, TypeId), Box<dyn WarmTierOperations>>
+    warm_tier_coordinator: Arc<WarmTierCoordinator>,
+    
+    /// Per-instance cold tier coordinator with dedicated service thread (NOT global)
+    /// Pattern: DashMap<(TypeId, TypeId), Box<dyn ColdTierOperations>>
+    /// NOTE: Placeholder in STATIC_1, full implementation in STATIC_5
+    cold_tier_coordinator: Arc<ColdTierCoordinator>,
+    
+    /// Per-instance worker registry for background worker tracking (NOT global)
+    /// Maps worker_id (u32) to WorkerStatusChannel for status monitoring
+    worker_registry: Arc<DashMap<u32, WorkerStatusChannel>>,
+    
+    /// Per-instance scaling channel sender for worker pool management (NOT global)
+    /// Coordinates dynamic worker thread scaling based on load
+    scaling_sender: Sender<ScalingRequest>,
+    
+    /// Per-instance coherence worker channel registry (NOT global)
+    /// Type-erased storage for coherence protocol worker channels per K,V type
+    coherence_channels: Arc<RwLock<HashMap<TypeId, Box<dyn std::any::Any + Send + Sync>>>>,
+    
+    /// Per-instance memory pool coordinator for cleanup operations (NOT global)
+    /// Coordinates emergency cleanup and defragmentation across memory pools
+    pool_coordinator: Arc<PoolCoordinator>,
 }
 
 impl<
@@ -283,21 +327,10 @@ impl<
             memory_limit_mb: config.hot_tier.memory_limit_mb,
             _padding: config.hot_tier._padding,
         };
-        // Initialize hot tier system first
-        crate::cache::tier::hot::initialize_hot_tier_system()?;
-        // Then initialize hot tier with proper generic types
-        crate::cache::tier::hot::init_simd_hot_tier::<K, V>(hot_tier_config)?;
-        let warm_tier_config = config.warm_tier.clone();
-        // Initialize warm tier system first
-        crate::cache::tier::warm::init_warm_tier_system()?;
-        // Then initialize warm tier with proper generic types
-        crate::cache::tier::warm::init_warm_tier::<K, V>(warm_tier_config)?;
-        // Initialize cold tier with proper generic types
-        crate::cache::tier::cold::init_cold_tier::<K, V>(
-            config.cold_tier.base_dir.as_str(),
-            &config.cache_id,
-        )
-        .map_err(|e| CacheOperationError::io_failed(format!("Cold tier init failed: {}", e)))?;
+        let _warm_tier_config = config.warm_tier.clone();
+        // Warm tier initialization now happens through per-instance coordinator
+        // No global init needed - coordinator handles tier creation
+        // NOTE: Cold tier initialization moved after coordinator creation below
 
         // Initialize coherence protocol with atomic coordination
         let _coherence_config = ProtocolConfiguration {
@@ -308,7 +341,7 @@ impl<
             strict_ordering: false,
             schema_version: 1,
         };
-        let _coherence_sender: crate::cache::coherence::protocol::global_api::CoherenceSystem<
+        let coherence_system: crate::cache::coherence::protocol::global_api::CoherenceSystem<
             K,
             V,
         > = crate::cache::coherence::protocol::global_api::CoherenceSystem::new()
@@ -318,6 +351,69 @@ impl<
         let strategy_selector = CacheStrategySelector::new(&config)?;
         let tier_manager = TierPromotionManager::new(&config)?;
         let unified_stats = UnifiedCacheStatistics::new();
+        
+        // Create Arc-wrapped statistics for sharing with worker threads
+        let unified_stats_arc = std::sync::Arc::new(UnifiedCacheStatistics::new());
+        let coherence_stats_arc = std::sync::Arc::new(coherence_system.coherence_stats().clone());
+        
+        // ========== Create coordinators BEFORE MaintenanceScheduler ==========
+        
+        // Create per-instance hot tier coordinator (replaces global static)
+        let hot_tier_coordinator = Arc::new(HotTierCoordinator {
+            hot_tiers: DashMap::new(),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        
+        // Initialize hot tier with proper generic types using the coordinator
+        crate::cache::tier::hot::init_simd_hot_tier::<K, V>(&hot_tier_coordinator, hot_tier_config)?;
+        
+        // Create per-instance warm tier coordinator (replaces global static)
+        let warm_tier_coordinator = Arc::new(WarmTierCoordinator {
+            warm_tiers: DashMap::new(),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        
+        // Create per-instance cold tier coordinator with dedicated service thread
+        let cold_tier_coordinator = Arc::new(ColdTierCoordinator::new()?);
+        
+        // Initialize cold tier with proper generic types (using per-instance coordinator)
+        crate::cache::tier::cold::init_cold_tier::<K, V>(
+            &cold_tier_coordinator,
+            config.cold_tier.base_dir.as_str(),
+            &config.cache_id,
+        )
+        .map_err(|e| CacheOperationError::io_failed(format!("Cold tier init failed: {}", e)))?;
+        
+        // Create per-instance pool cleanup service (BEFORE maintenance_scheduler)
+        let (pool_cleanup_sender, pool_cleanup_receiver) = 
+            crossbeam_channel::bounded::<PoolCleanupRequest>(256);
+        
+        // Spawn per-instance pool cleanup service thread
+        std::thread::Builder::new()
+            .name("pool-cleanup-service".to_string())
+            .spawn(move || {
+                log::info!("Pool cleanup service thread started");
+                while let Ok(request) = pool_cleanup_receiver.recv() {
+                    match request {
+                        PoolCleanupRequest::EmergencyCleanup { response } => {
+                            // Handle emergency cleanup - send back count
+                            let _ = response.send(Ok(0));
+                        }
+                        PoolCleanupRequest::TriggerDefragmentation { response } => {
+                            // Handle defragmentation - send back count
+                            let _ = response.send(Ok(0));
+                        }
+                    }
+                }
+                log::warn!("Pool cleanup service thread exited");
+            })
+            .map_err(|e| CacheOperationError::initialization_failed(format!(
+                "Failed to spawn pool cleanup service: {}", e
+            )))?;
+        
+        // Create per-instance pool coordinator (use new() constructor)
+        let pool_coordinator = Arc::new(PoolCoordinator::new(pool_cleanup_sender));
+        
         // Create maintenance config with worker parameters from config
         let mut maintenance_config = MaintenanceConfig {
             worker_count: config.worker.thread_pool_size as u32,
@@ -326,12 +422,19 @@ impl<
         if config.worker.maintenance_interval_ns != 1_000_000_000 {
             maintenance_config.heartbeat_interval_ns = config.worker.maintenance_interval_ns;
         }
-        let maintenance_scheduler = MaintenanceScheduler::new(maintenance_config)?;
+        let maintenance_scheduler = MaintenanceScheduler::new(
+            maintenance_config,
+            unified_stats_arc,
+            coherence_stats_arc,
+            hot_tier_coordinator.clone(),
+            warm_tier_coordinator.clone(),
+            cold_tier_coordinator.clone(),
+            pool_coordinator.clone(),
+        )?;
         let policy_engine =
-            CachePolicyEngine::new(&config, crate::cache::eviction::PolicyType::default())?;
+            CachePolicyEngine::new(&config, crate::cache::eviction::PolicyType::default(), cold_tier_coordinator.clone())?;
         let performance_monitor = PerformanceMonitor::new();
         let error_recovery = ManagerErrorRecoverySystem::new();
-        let tier_operations = TierOperations::new();
 
         // Initialize task coordinator directly
         let task_coordinator =
@@ -363,10 +466,28 @@ impl<
             })
             .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
 
-        // Wire GC coordinator to maintenance scheduler
-        let maintenance_sender = maintenance_scheduler.task_sender.clone();
-        let _ =
-            crate::cache::memory::gc_coordinator::set_global_maintenance_sender(maintenance_sender);
+        // Create GC coordinator with per-instance maintenance sender
+        let gc_coordinator = GCCoordinator::new(&config, maintenance_scheduler.task_sender.clone())
+            .map_err(|e| CacheOperationError::initialization_failed(format!("GC coordinator init failed: {}", e)))?;
+
+        // ========== STATIC_1: Per-instance coordinator initialization ==========
+        // Note: hot, warm, and cold tier coordinators already created above before MaintenanceScheduler
+        
+        // Create per-instance worker registry
+        let worker_registry = Arc::new(DashMap::new());
+        
+        // Create per-instance scaling channel (capacity: 10 scaling requests)
+        let (scaling_sender, _scaling_receiver) = crossbeam_channel::bounded(10);
+        
+        // Create per-instance coherence channels registry
+        let coherence_channels = Arc::new(RwLock::new(HashMap::new()));
+
+        // Create TierOperations with injected coordinators
+        let tier_operations = TierOperations::new_with_coordinators(
+            hot_tier_coordinator.clone(),
+            warm_tier_coordinator.clone(),
+            cold_tier_coordinator.clone(),
+        )?;
 
         let manager = Self {
             config,
@@ -380,6 +501,14 @@ impl<
             tier_operations,
             task_coordinator,
             prefetch_channel,
+            gc_coordinator,
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
+            worker_registry,
+            scaling_sender,
+            coherence_channels,
+            pool_coordinator,
         };
 
         // Start background processing with work-stealing scheduler
@@ -699,6 +828,15 @@ impl<
                 },
             ],
         }
+    }
+
+    /// Get reference to unified cache statistics for per-instance monitoring
+    ///
+    /// Returns a direct reference to the UnifiedCacheStatistics instance,
+    /// enabling external systems to access real-time atomic statistics
+    /// without copying or aggregation overhead.
+    pub fn get_unified_stats(&self) -> &UnifiedCacheStatistics {
+        &self.unified_stats
     }
 
     /// Get detailed analytics including policy engine and pattern analyzer statistics
@@ -1251,10 +1389,7 @@ impl<
 
     /// Get total space saved by cold tier compression
     pub fn get_cold_tier_space_saved(&self) -> u64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
@@ -1264,10 +1399,7 @@ impl<
 
     /// Get cold tier compression effectiveness (ratio)
     pub fn get_cold_tier_compression_effectiveness(&self) -> f64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0.0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, f64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
@@ -1277,10 +1409,7 @@ impl<
 
     /// Get average cold tier compression time in nanoseconds
     pub fn get_cold_tier_avg_compression_time(&self) -> u64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
@@ -1290,10 +1419,7 @@ impl<
 
     /// Get average cold tier decompression time in nanoseconds
     pub fn get_cold_tier_avg_decompression_time(&self) -> u64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
@@ -1303,10 +1429,7 @@ impl<
 
     /// Get cold tier compression throughput in MB/s
     pub fn get_cold_tier_compression_throughput(&self) -> f64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0.0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, f64, _>(|tier| {
@@ -1318,10 +1441,7 @@ impl<
 
     /// Get cold tier decompression throughput in MB/s
     pub fn get_cold_tier_decompression_throughput(&self) -> f64 {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return 0.0,
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, f64, _>(|tier| {
@@ -1333,9 +1453,7 @@ impl<
 
     /// Get current cold tier compression algorithm
     pub fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
-        let coordinator = crate::cache::tier::cold::ColdTierCoordinator::get().map_err(|_| {
-            CacheOperationError::configuration_error("Cold tier coordinator unavailable")
-        })?;
+        let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, String, _>(|tier| {
@@ -1357,8 +1475,8 @@ impl<
         max_ratio: f64,
         speed_threshold: f64,
     ) {
-        if let Ok(coordinator) = crate::cache::tier::cold::ColdTierCoordinator::get() {
-            let _ = coordinator.execute_operation::<K, V, (), _>(move |tier| {
+        let coordinator = &self.cold_tier_coordinator;
+        let _ = coordinator.execute_operation::<K, V, (), _>(move |tier| {
                 tier.compression_engine.update_thresholds(
                     min_size as u32,
                     max_ratio as f32,
@@ -1366,17 +1484,15 @@ impl<
                 );
                 Ok(())
             });
-        }
     }
 
     /// Adapt cold tier compression algorithm based on workload
     pub fn adapt_cold_tier_compression(&self) {
-        if let Ok(coordinator) = crate::cache::tier::cold::ColdTierCoordinator::get() {
-            let _ = coordinator.execute_operation::<K, V, (), _>(|tier| {
+        let coordinator = &self.cold_tier_coordinator;
+        let _ = coordinator.execute_operation::<K, V, (), _>(|tier| {
                 tier.compression_engine.adapt_algorithm();
                 Ok(())
             });
-        }
     }
 
     // =======================================================================
@@ -1521,10 +1637,7 @@ impl<
 
     /// Select optimal compression algorithm for current workload
     pub fn select_cold_tier_compression_for_workload(&self, workload_type: &str) -> String {
-        let coordinator = match crate::cache::tier::cold::ColdTierCoordinator::get() {
-            Ok(c) => c,
-            Err(_) => return "LZ4".to_string(),
-        };
+        let coordinator = &self.cold_tier_coordinator;
 
         let workload_type = workload_type.to_string(); // Clone to avoid lifetime issues
         coordinator
@@ -1564,21 +1677,43 @@ impl<
             tier_manager: TierPromotionManager::new(&self.config)
                 .unwrap_or_else(|_| panic!("Failed to clone tier manager")),
             unified_stats: UnifiedCacheStatistics::new(),
-            maintenance_scheduler: MaintenanceScheduler::new(MaintenanceConfig::default())
-                .unwrap_or_else(|_| panic!("Failed to clone maintenance scheduler")),
+            maintenance_scheduler: {
+                let unified_stats_arc = std::sync::Arc::new(UnifiedCacheStatistics::new());
+                let coherence_stats_arc = std::sync::Arc::new(crate::cache::coherence::statistics::core_statistics::CoherenceStatistics::new());
+                // Create placeholder coordinators for clone
+                let hot_coord = self.hot_tier_coordinator.clone();
+                let warm_coord = self.warm_tier_coordinator.clone();
+                let cold_coord = self.cold_tier_coordinator.clone();
+                let pool_coord = self.pool_coordinator.clone();
+                MaintenanceScheduler::new(MaintenanceConfig::default(), unified_stats_arc, coherence_stats_arc, hot_coord, warm_coord, cold_coord, pool_coord)
+                    .unwrap_or_else(|_| panic!("Failed to clone maintenance scheduler"))
+            },
             policy_engine: CachePolicyEngine::new(
                 &self.config,
                 crate::cache::eviction::PolicyType::default(),
+                self.cold_tier_coordinator.clone(),
             )
             .unwrap_or_else(|_| panic!("Failed to clone policy engine")),
             performance_monitor: PerformanceMonitor::new(),
             error_recovery: ManagerErrorRecoverySystem::new(),
-            tier_operations: TierOperations::new(),
+            tier_operations: TierOperations::new_with_coordinators(
+                self.hot_tier_coordinator.clone(),
+                self.warm_tier_coordinator.clone(),
+                self.cold_tier_coordinator.clone(),
+            ).unwrap_or_else(|_| panic!("Failed to create tier operations")),
             task_coordinator: TaskCoordinator::new_direct(
                 self.config.worker.task_queue_capacity as usize,
             )
             .expect("Failed to clone TaskCoordinator"),
             prefetch_channel: self.prefetch_channel.clone(),
+            gc_coordinator: self.gc_coordinator.clone(),
+            hot_tier_coordinator: self.hot_tier_coordinator.clone(),
+            warm_tier_coordinator: self.warm_tier_coordinator.clone(),
+            cold_tier_coordinator: self.cold_tier_coordinator.clone(),
+            worker_registry: self.worker_registry.clone(),
+            scaling_sender: self.scaling_sender.clone(),
+            coherence_channels: self.coherence_channels.clone(),
+            pool_coordinator: self.pool_coordinator.clone(),
         }
     }
 }

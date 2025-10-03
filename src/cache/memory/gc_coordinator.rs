@@ -19,23 +19,6 @@ use crate::cache::manager::background::types::MaintenanceTask;
 use crate::cache::tier::warm::maintenance::MaintenanceTask as CanonicalMaintenanceTask;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crossbeam_channel::Sender;
-use std::sync::{Mutex, OnceLock};
-
-/// Global maintenance task sender for GC coordination
-static GLOBAL_MAINTENANCE_SENDER: OnceLock<Mutex<Option<Sender<MaintenanceTask>>>> =
-    OnceLock::new();
-
-/// Set the global maintenance sender for all GC coordinators
-pub fn set_global_maintenance_sender(
-    sender: Sender<MaintenanceTask>,
-) -> Result<(), CacheOperationError> {
-    let mutex = GLOBAL_MAINTENANCE_SENDER.get_or_init(|| Mutex::new(None));
-    let mut global_sender = mutex.lock().map_err(|_| {
-        CacheOperationError::InvalidState("Poisoned maintenance sender mutex".to_string())
-    })?;
-    *global_sender = Some(sender);
-    Ok(())
-}
 
 /// Garbage collection coordinator
 #[allow(dead_code)] // Memory management - used in garbage collection and cleanup coordination
@@ -104,20 +87,8 @@ struct GCTaskQueue {
 impl GCCoordinator {
     /// Create new GC coordinator
     #[allow(dead_code)] // Memory management - new used in GC coordinator initialization
-    pub fn new(_config: &CacheConfig) -> Result<Self, CacheOperationError> {
-        // Get the global maintenance sender if available
-        let maintenance_sender = if let Some(mutex) = GLOBAL_MAINTENANCE_SENDER.get() {
-            mutex
-                .lock()
-                .map_err(|_| {
-                    CacheOperationError::InvalidState(
-                        "Poisoned maintenance sender mutex".to_string(),
-                    )
-                })?
-                .clone()
-        } else {
-            None
-        };
+    pub fn new(_config: &CacheConfig, maintenance_sender: Sender<MaintenanceTask>) -> Result<Self, CacheOperationError> {
+        let maintenance_sender = Some(maintenance_sender);
 
         Ok(Self {
             gc_state: GCState {
@@ -144,11 +115,6 @@ impl GCCoordinator {
             lock_free_queue: LockFreeQueue::with_capacity(1024),
             maintenance_sender,
         })
-    }
-
-    /// Set the maintenance task sender
-    pub fn set_maintenance_sender(&mut self, sender: Sender<MaintenanceTask>) {
-        self.maintenance_sender = Some(sender);
     }
 
     /// Trigger emergency garbage collection
@@ -368,5 +334,35 @@ impl GCCoordinator {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0)
+    }
+}
+
+impl Clone for GCCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            gc_state: GCState {
+                is_running: AtomicBool::new(self.gc_state.is_running.load(Ordering::Relaxed)),
+                current_cycle_type: AtomicU32::new(self.gc_state.current_cycle_type.load(Ordering::Relaxed)),
+                cycle_start_time: AtomicU64::new(self.gc_state.cycle_start_time.load(Ordering::Relaxed)),
+                emergency_triggers: CachePadded::new(AtomicU64::new(self.gc_state.emergency_triggers.load(Ordering::Relaxed))),
+                normal_triggers: CachePadded::new(AtomicU64::new(self.gc_state.normal_triggers.load(Ordering::Relaxed))),
+            },
+            gc_metrics: GCMetrics {
+                total_cycles: AtomicU64::new(self.gc_metrics.total_cycles.load(Ordering::Relaxed)),
+                total_gc_time: AtomicU64::new(self.gc_metrics.total_gc_time.load(Ordering::Relaxed)),
+                avg_cycle_duration: AtomicU64::new(self.gc_metrics.avg_cycle_duration.load(Ordering::Relaxed)),
+                memory_reclaimed: AtomicU64::new(self.gc_metrics.memory_reclaimed.load(Ordering::Relaxed)),
+                efficiency_score: AtomicU32::new(self.gc_metrics.efficiency_score.load(Ordering::Relaxed)),
+                last_completion_time: AtomicU64::new(self.gc_metrics.last_completion_time.load(Ordering::Relaxed)),
+            },
+            task_queue: GCTaskQueue {
+                pending_tasks: ArrayVec::new(), // Start fresh for cloned instance
+                queue_head: AtomicUsize::new(0),
+                queue_tail: AtomicUsize::new(0),
+                queue_size: AtomicUsize::new(0),
+            },
+            lock_free_queue: LockFreeQueue::with_capacity(1024),
+            maintenance_sender: self.maintenance_sender.clone(),
+        }
     }
 }

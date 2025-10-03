@@ -18,8 +18,6 @@ use crate::cache::types::CacheTier;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 /// Adaptive eviction engine with machine learning
 #[derive(Debug)]
 pub struct EvictionEngine<K: CacheKey + Default, V: CacheValue> {
@@ -33,6 +31,8 @@ pub struct EvictionEngine<K: CacheKey + Default, V: CacheValue> {
     pub performance_metrics: EvictionMetrics,
     /// Configuration
     pub config: HotTierEvictionConfig,
+    /// Per-instance event ID counter for hot tier tracking
+    event_id_counter: AtomicU64,
     /// Phantom data for V type parameter
     _phantom: PhantomData<V>,
 }
@@ -47,6 +47,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
             feature_weights: FeatureWeights::default(),
             performance_metrics: EvictionMetrics::default(),
             config: hot_config,
+            event_id_counter: AtomicU64::new(1),
             _phantom: PhantomData,
         }
     }
@@ -74,7 +75,7 @@ impl<K: CacheKey + Default, V: CacheValue> EvictionEngine<K, V> {
     /// Record cache access for learning
     pub fn record_access(&mut self, key: K, slot_idx: usize, hit: bool, timestamp_ns: u64) {
         let event = AccessEvent {
-            event_id: EVENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            event_id: self.event_id_counter.fetch_add(1, Ordering::Relaxed),
             key,
             timestamp: timestamp_ns,
             access_type: AccessType::Read,

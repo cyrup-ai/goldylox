@@ -19,6 +19,6 @@ pub mod types;
 // PrecisionTimer is now available from crate::cache::types::performance::timer::PrecisionTimer
 pub use atomic_ops::{compare_and_swap_atomic, put_if_absent_atomic, replace_atomic};
 pub use thread_local::{
-    cleanup_expired_entries, get_idle_keys, init_simd_hot_tier, initialize_hot_tier_system,
+    cleanup_expired_entries, get_idle_keys, init_simd_hot_tier,
     insert_promoted, remove_entry, simd_hot_get, simd_hot_put, simd_hot_remove,
 };

@@ -29,6 +29,12 @@ pub struct WritePropagationSystem<K: CacheKey, V: CacheValue> {
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
     pub worker_health: AtomicU32, // Encoded WorkerHealth
+    /// Hot tier coordinator for tier operations
+    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    /// Warm tier coordinator for tier operations
+    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    /// Cold tier coordinator for tier operations
+    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
 }
 
 /// Write-back request for background processing

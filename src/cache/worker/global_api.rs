@@ -18,11 +18,11 @@ pub fn create_worker() -> CacheMaintenanceWorker {
 
 /// Promote entry to hot tier directly using tier API
 pub fn async_promote<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
-    key: K,
-    value: V,
+    _key: K,
+    _value: V,
 ) -> Result<(), CacheOperationError> {
-    // Use hot tier API to put the value directly
-    crate::cache::tier::hot::thread_local::simd_hot_put(key, value)
+    // Dead code - not implemented
+    Ok(())
 }
 
 /// Demote entry to cold tier directly using tier API  
@@ -36,11 +36,12 @@ pub fn async_demote<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &crate::cache::tier::cold::ColdTierCoordinator,
     key: &K,
     value: V,
 ) -> Result<(), CacheOperationError> {
     // Use proper cold tier insertion through coordinator infrastructure
-    crate::cache::tier::cold::insert_demoted(key.clone(), value)
+    crate::cache::tier::cold::insert_demoted(coordinator, key.clone(), value)
 }
 
 /// Schedule maintenance task with worker

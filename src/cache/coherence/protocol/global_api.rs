@@ -16,9 +16,6 @@ use crate::cache::traits::{CacheKey, CacheValue};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-// Global request ID counter
-static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 /// Coherence system handle that manages worker lifecycle
 #[derive(Debug)]
 pub struct CoherenceSystem<
@@ -40,6 +37,16 @@ pub struct CoherenceSystem<
     sender: CoherenceSender<K, V>,
     #[allow(dead_code)] // MESI coherence - worker manager used for lifecycle management
     manager: CoherenceWorkerManager<K, V>,
+    coherence_stats: crate::cache::coherence::statistics::core_statistics::CoherenceStatistics,
+    /// Per-instance request ID counter for coherence protocol
+    request_id_counter: AtomicU64,
+    
+    /// Per-instance coherence worker channel registry
+    /// Type-erased storage for coherence protocol worker channels per K,V type
+    worker_channels: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<
+        std::any::TypeId,
+        Box<dyn std::any::Any + Send + Sync>
+    >>>,
 }
 
 impl<
@@ -61,9 +68,58 @@ impl<
 {
     /// Initialize coherence system with worker-owned architecture
     pub fn new() -> Result<Self, CoherenceError> {
-        let mut manager = CoherenceWorkerManager::<K, V>::new(ProtocolConfiguration::default())?;
+        // Create per-instance channel map
+        let worker_channels = std::sync::Arc::new(
+            std::sync::RwLock::new(std::collections::HashMap::new())
+        );
+        
+        // Create placeholder coordinators for the worker manager
+        // NOTE: This coherence worker system is secondary to the main TierOperations coherence
+        let hot_coordinator = std::sync::Arc::new(crate::cache::tier::hot::thread_local::HotTierCoordinator {
+            hot_tiers: dashmap::DashMap::new(),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let warm_coordinator = std::sync::Arc::new(crate::cache::tier::warm::global_api::WarmTierCoordinator {
+            warm_tiers: dashmap::DashMap::new(),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cold_coordinator = std::sync::Arc::new(
+            crate::cache::tier::cold::ColdTierCoordinator::new()
+                .map_err(|e| CoherenceError::InitializationFailed(format!("Cold tier init failed: {}", e)))?
+        );
+        
+        let mut manager = CoherenceWorkerManager::<K, V>::new(
+            ProtocolConfiguration::default(),
+            hot_coordinator,
+            warm_coordinator,
+            cold_coordinator,
+        )?;
         let sender = manager.start_worker()?;
-        Ok(Self { sender, manager })
+        let coherence_stats = crate::cache::coherence::statistics::core_statistics::CoherenceStatistics::new();
+        Ok(Self { 
+            sender, 
+            manager, 
+            coherence_stats,
+            request_id_counter: AtomicU64::new(1),
+            worker_channels,
+        })
+    }
+
+    /// Get reference to worker channels for this instance
+    pub fn worker_channels(&self) -> &std::sync::Arc<std::sync::RwLock<
+        std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
+    >> {
+        &self.worker_channels
+    }
+
+    /// Get coherence statistics reference
+    pub fn coherence_stats(&self) -> &crate::cache::coherence::statistics::core_statistics::CoherenceStatistics {
+        &self.coherence_stats
+    }
+
+    /// Get reference to request ID counter for coherence requests
+    pub fn request_id_counter(&self) -> &AtomicU64 {
+        &self.request_id_counter
     }
 
     /// Get sender for communication with worker
@@ -106,7 +162,7 @@ where
         + 'static,
 {
     let sender = system.sender();
-    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
     let request = CoherenceRequest::Read {
         key,
         requesting_tier,
@@ -152,7 +208,7 @@ where
         + 'static,
 {
     let sender = system.sender();
-    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
     let request = CoherenceRequest::Write {
         key,
         data,
@@ -201,7 +257,7 @@ where
         + 'static,
 {
     let sender = system.sender();
-    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
     let request = CoherenceRequest::Serialize {
         key,
         value,

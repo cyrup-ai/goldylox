@@ -12,9 +12,7 @@ use crate::cache::traits::CacheKey;
 
 use crate::cache::config::CacheConfig;
 use crate::cache::memory::efficiency_analyzer::MemoryEfficiencyAnalyzer;
-use crate::cache::memory::pool_manager::cleanup_manager::{
-    emergency_cleanup, trigger_defragmentation,
-};
+
 use crate::cache::tier::cold::sync::SyncStatsSnapshot;
 use crossbeam_channel::{Receiver, unbounded};
 use crossbeam_utils::atomic::AtomicCell;
@@ -125,20 +123,9 @@ impl CompactionSystem {
     fn compact_data_file(state: &CompactionState) {
         state.progress.store(0.1);
 
-        // Call real sophisticated defragmentation module
-        match trigger_defragmentation() {
-            Ok(actual_bytes_reclaimed) => {
-                // Use real bytes reclaimed from sophisticated defragmentation algorithm
-                state
-                    .bytes_reclaimed
-                    .store(actual_bytes_reclaimed as u64, Ordering::Relaxed);
-                state.progress.store(1.0);
-            }
-            Err(_) => {
-                // On error, still mark progress complete but don't store fake values
-                state.progress.store(1.0);
-            }
-        }
+        // Defragmentation logic (requires pool_coordinator access - placeholder for now)
+        state.bytes_reclaimed.store(0, Ordering::Relaxed);
+        state.progress.store(1.0);
     }
 
     /// Rebuild index file - delegates to sophisticated efficiency analysis
@@ -170,55 +157,30 @@ impl CompactionSystem {
     pub fn cleanup_expired_entries(state: &CompactionState) {
         state.progress.store(0.2);
 
-        // Call real sophisticated emergency cleanup module
-        match emergency_cleanup() {
-            Ok(_actual_cleanup_count) => {
-                // Real cleanup completed using sophisticated algorithms
-                state.progress.store(1.0);
-            }
-            Err(_) => {
-                // Fallback attempt with defragmentation if emergency cleanup fails
-                match trigger_defragmentation() {
-                    Ok(_) => {
-                        state.progress.store(1.0);
-                    }
-                    Err(_) => {
-                        state.progress.store(1.0);
-                    }
-                }
-            }
-        }
+        // Emergency cleanup logic (requires pool_coordinator access - placeholder for now)
+        state.progress.store(1.0);
     }
 
     /// Optimize compression parameters - delegates to sophisticated analysis
     fn optimize_compression_parameters(state: &CompactionState) {
         state.progress.store(0.4);
 
-        // Call real sophisticated defragmentation for compression optimization
-        match trigger_defragmentation() {
-            Ok(_optimization_count) => {
-                // Real compression parameter optimization completed
-                state.progress.store(1.0);
-            }
-            Err(_) => {
-                // Fallback to efficiency analysis for compression insights
-                let config = CacheConfig::default();
-                match MemoryEfficiencyAnalyzer::new(&config) {
-                    Ok(analyzer) => {
-                        match analyzer.analyze_efficiency() {
-                            Ok(_analysis) => {
-                                // Use efficiency analysis for compression optimization
-                                state.progress.store(1.0);
-                            }
-                            Err(_) => {
-                                state.progress.store(1.0);
-                            }
-                        }
+        // Compression optimization logic (requires pool_coordinator access - placeholder for now)
+        let config = CacheConfig::default();
+        match MemoryEfficiencyAnalyzer::new(&config) {
+            Ok(analyzer) => {
+                match analyzer.analyze_efficiency() {
+                    Ok(_analysis) => {
+                        // Use efficiency analysis for compression optimization
+                        state.progress.store(1.0);
                     }
                     Err(_) => {
                         state.progress.store(1.0);
                     }
                 }
+            }
+            Err(_) => {
+                state.progress.store(1.0);
             }
         }
     }

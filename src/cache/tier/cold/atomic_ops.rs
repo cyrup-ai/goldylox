@@ -17,15 +17,14 @@ pub fn put_if_absent_atomic<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &crate::cache::tier::cold::ColdTierCoordinator,
     key: K,
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
-    use crate::cache::tier::cold::{ColdTierCoordinator, ColdTierMessage};
+    use crate::cache::tier::cold::ColdTierMessage;
     use crossbeam_channel::bounded;
     use std::any::TypeId;
     use std::time::Duration;
-
-    let coordinator = ColdTierCoordinator::get()?;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
     let (response_tx, response_rx) = bounded(1);
@@ -91,15 +90,14 @@ pub fn replace_atomic<
         + bincode::Decode<()>
         + 'static,
 >(
+    coordinator: &crate::cache::tier::cold::ColdTierCoordinator,
     key: K,
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
-    use crate::cache::tier::cold::{ColdTierCoordinator, ColdTierMessage};
+    use crate::cache::tier::cold::ColdTierMessage;
     use crossbeam_channel::bounded;
     use std::any::TypeId;
     use std::time::Duration;
-
-    let coordinator = ColdTierCoordinator::get()?;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
     let (response_tx, response_rx) = bounded(1);
@@ -161,16 +159,15 @@ pub fn compare_and_swap_atomic<
         + PartialEq
         + 'static,
 >(
+    coordinator: &crate::cache::tier::cold::ColdTierCoordinator,
     key: K,
     expected: V,
     new_value: V,
 ) -> Result<bool, CacheOperationError> {
-    use crate::cache::tier::cold::{ColdTierCoordinator, ColdTierMessage};
+    use crate::cache::tier::cold::ColdTierMessage;
     use crossbeam_channel::bounded;
     use std::any::TypeId;
     use std::time::Duration;
-
-    let coordinator = ColdTierCoordinator::get()?;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
     let (response_tx, response_rx) = bounded(1);

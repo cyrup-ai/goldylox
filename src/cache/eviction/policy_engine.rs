@@ -4,7 +4,7 @@
 //! eviction strategies and adapts based on workload characteristics.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::cache::analyzer::analyzer_core::AccessPatternAnalyzer;
@@ -38,6 +38,9 @@ pub struct CachePolicyEngine<K: CacheKey + Default + 'static, V: CacheValue> {
     /// Current active policy type (atomic for lock-free switching)
     #[allow(dead_code)] // Policy engine - current policy used in policy switching decisions
     current_policy: AtomicU8,
+    /// Per-instance event counter for access event tracking
+    #[allow(dead_code)] // Eviction infrastructure - counter for generating unique event IDs per cache instance
+    event_counter: AtomicU64,
     /// Phantom data to maintain type parameter
     pub _phantom: PhantomData<V>,
 }
@@ -47,6 +50,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     pub fn new(
         config: &CacheConfig,
         initial_policy: PolicyType,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
     ) -> Result<Self, CacheOperationError> {
         let pattern_analyzer =
             AccessPatternAnalyzer::new(config.analyzer.clone()).map_err(|e| {
@@ -59,11 +63,18 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
         Ok(Self {
             pattern_analyzer,
             replacement_policies: ReplacementPolicies::new(config)?,
-            write_policy_manager: WritePolicyManager::new(config)?,
+            write_policy_manager: WritePolicyManager::new(config, cold_tier_coordinator)?,
             prefetch_predictor: PrefetchPredictor::new(Default::default()),
             current_policy: AtomicU8::new(Self::policy_to_u8(initial_policy)),
+            event_counter: AtomicU64::new(0),
             _phantom: PhantomData,
         })
+    }
+
+    /// Get reference to event counter for access event creation
+    #[allow(dead_code)] // Eviction infrastructure - accessor for per-instance event ID generation
+    pub fn event_counter(&self) -> &AtomicU64 {
+        &self.event_counter
     }
 
     /// Convert PolicyType to u8 for atomic storage

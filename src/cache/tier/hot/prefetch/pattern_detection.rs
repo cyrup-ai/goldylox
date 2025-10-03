@@ -325,10 +325,10 @@ impl PatternDetector {
             .iter()
             .map(|&interval| {
                 let diff = interval as i64 - mean_interval as i64;
-                (diff * diff) as u64
+                diff.saturating_mul(diff) as u64
             })
-            .sum::<u64>()
-            / intervals.len() as u64;
+            .fold(0u64, |acc, x| acc.saturating_add(x))
+            .saturating_div(intervals.len().max(1) as u64);
 
         let std_dev = (variance as f64).sqrt();
         let coefficient_of_variation = std_dev / mean_interval as f64;

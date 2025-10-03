@@ -290,13 +290,10 @@ async fn start_api_server(
     }
 
     async fn get_cache_stats(State(cache): State<Goldylox<String, Vec<u8>>>) -> impl IntoResponse {
-        // Use professional telemetry system for accurate statistics
-        use crate::telemetry::unified_stats::UnifiedCacheStatistics;
-
-        let (total_keys, hit_rate, memory_usage_bytes, _ops_per_second, estimated_uptime_seconds) =
-            match UnifiedCacheStatistics::get_global_instance() {
-                Ok(telemetry) => {
-                    let metrics = telemetry.get_performance_metrics();
+        // Use per-instance telemetry system for accurate statistics
+        let telemetry = cache.get_unified_stats();
+        let (total_keys, hit_rate, memory_usage_bytes, _ops_per_second, estimated_uptime_seconds) = {
+                let metrics = telemetry.get_performance_metrics();
 
                     // Calculate total keys by summing entry counts from all tiers with overflow protection
                     let total_keys = metrics.hot_tier.entry_count.saturating_add(
@@ -322,114 +319,13 @@ async fn start_api_server(
                         metrics.total_operations
                     };
 
-                    (
-                        total_keys,
-                        hit_rate,
-                        memory_usage_bytes,
-                        ops_per_second,
-                        estimated_uptime_seconds,
-                    )
-                }
-                Err(telemetry_error) => {
-                    log::error!(
-                        "Primary telemetry system failed: {:?}, attempting cache statistics fallback",
-                        telemetry_error
-                    );
-
-                    // Alternative: Parse cache.stats() JSON directly with proper error handling
-                    match cache.stats() {
-                        Ok(stats_json) => {
-                            match serde_json::from_str::<serde_json::Value>(&stats_json) {
-                                Ok(stats_value) => {
-                                    log::debug!(
-                                        "Using parsed cache statistics as telemetry fallback"
-                                    );
-
-                                    // Extract values using verified JSON fields only
-                                    let total_keys = {
-                                        // Calculate total keys using verified tier hit counts as best proxy
-                                        let hot_hits =
-                                            stats_value["hot_tier_hits"].as_u64().unwrap_or(0);
-                                        let warm_hits =
-                                            stats_value["warm_tier_hits"].as_u64().unwrap_or(0);
-                                        let cold_hits =
-                                            stats_value["cold_tier_hits"].as_u64().unwrap_or(0);
-
-                                        // Sum tier hits with overflow protection (this approximates distinct keys accessed)
-                                        hot_hits.saturating_add(warm_hits.saturating_add(cold_hits))
-                                    };
-
-                                    let hit_rate =
-                                        stats_value["overall_hit_rate"].as_f64().unwrap_or(0.0);
-                                    let memory_usage_bytes =
-                                        stats_value["total_memory_usage"].as_u64().unwrap_or(0);
-                                    let ops_per_second =
-                                        stats_value["ops_per_second"].as_f64().unwrap_or(0.0);
-
-                                    // Calculate uptime using verified fields with division-by-zero protection
-                                    let estimated_uptime_seconds = if ops_per_second > f64::EPSILON
-                                    {
-                                        (stats_value["total_operations"].as_u64().unwrap_or(0)
-                                            as f64
-                                            / ops_per_second)
-                                            as u64
-                                    } else {
-                                        // Alternative: conservative estimate of 1 operation per second if ops_per_second is zero
-                                        stats_value["total_operations"].as_u64().unwrap_or(0)
-                                    };
-
-                                    (
-                                        total_keys as usize,
-                                        hit_rate,
-                                        memory_usage_bytes,
-                                        ops_per_second,
-                                        estimated_uptime_seconds,
-                                    )
-                                }
-                                Err(parse_error) => {
-                                    log::error!(
-                                        "Failed to parse cache statistics JSON - telemetry: {:?}, parsing: {:?}",
-                                        telemetry_error,
-                                        parse_error
-                                    );
-
-                                    // Return error response instead of fake data
-                                    return (
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        Json(CacheResponse::<CacheStats> {
-                                            success: false,
-                                            data: None,
-                                            message: Some(format!(
-                                                "Cache statistics temporarily unavailable: {}",
-                                                parse_error
-                                            )),
-                                        }),
-                                    );
-                                }
-                            }
-                        }
-                        Err(cache_error) => {
-                            log::error!(
-                                "Complete statistics failure - telemetry: {:?}, cache API: {:?}",
-                                telemetry_error,
-                                cache_error
-                            );
-
-                            // Return error response instead of fake data
-                            return (
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                Json(CacheResponse::<CacheStats> {
-                                    success: false,
-                                    data: None,
-                                    message: Some(
-                                        "Cache statistics service completely unavailable"
-                                            .to_string(),
-                                    ),
-                                }),
-                            );
-                        }
-                    }
-                }
+                (
+                    total_keys,
+                    hit_rate,
+                    memory_usage_bytes,
+                    ops_per_second,
+                    estimated_uptime_seconds,
+                )
             };
 
         // Format memory usage in human-readable format
@@ -691,88 +587,70 @@ async fn start_api_server(
     }
 
     async fn get_detailed_stats(
-        State(_cache): State<Goldylox<String, Vec<u8>>>,
+        State(cache): State<Goldylox<String, Vec<u8>>>,
     ) -> impl IntoResponse {
         // Use professional telemetry system for detailed tier-specific statistics
-        use crate::telemetry::unified_stats::UnifiedCacheStatistics;
+        let telemetry = cache.get_unified_stats();
+        let metrics = telemetry.get_performance_metrics();
 
-        match UnifiedCacheStatistics::get_global_instance() {
-            Ok(telemetry) => {
-                let metrics = telemetry.get_performance_metrics();
+        // Calculate aggregated statistics with overflow protection
+        let total_keys = metrics
+            .hot_tier
+            .entry_count
+            .saturating_add(metrics.warm_tier.entry_count)
+            .saturating_add(metrics.cold_tier.entry_count);
 
-                // Calculate aggregated statistics with overflow protection
-                let total_keys = metrics
-                    .hot_tier
-                    .entry_count
-                    .saturating_add(metrics.warm_tier.entry_count)
-                    .saturating_add(metrics.cold_tier.entry_count);
+        let total_memory = metrics
+            .hot_tier
+            .memory_usage
+            .saturating_add(metrics.warm_tier.memory_usage)
+            .saturating_add(metrics.cold_tier.memory_usage);
 
-                let total_memory = metrics
-                    .hot_tier
-                    .memory_usage
-                    .saturating_add(metrics.warm_tier.memory_usage)
-                    .saturating_add(metrics.cold_tier.memory_usage);
+        let total_ops_per_second = metrics.hot_tier.ops_per_second
+            + metrics.warm_tier.ops_per_second
+            + metrics.cold_tier.ops_per_second;
 
-                let total_ops_per_second = metrics.hot_tier.ops_per_second
-                    + metrics.warm_tier.ops_per_second
-                    + metrics.cold_tier.ops_per_second;
+        // Calculate uptime estimate with protection
+        let uptime_seconds = if total_ops_per_second > f64::EPSILON {
+            (metrics.total_operations as f64 / total_ops_per_second) as u64
+        } else {
+            metrics.total_operations // Conservative fallback
+        };
 
-                // Calculate uptime estimate with protection
-                let uptime_seconds = if total_ops_per_second > f64::EPSILON {
-                    (metrics.total_operations as f64 / total_ops_per_second) as u64
-                } else {
-                    metrics.total_operations // Conservative fallback
-                };
-
-                let detailed_stats = serde_json::json!({
-                    "detailed": true,
-                    "total_keys": total_keys,
-                    "memory_usage": format_memory_size(total_memory as u64),
-                    "hit_rate": metrics.overall_hit_rate,
-                    "uptime_seconds": uptime_seconds,
-                    "tier_stats": {
-                        "hot": {
-                            "keys": metrics.hot_tier.entry_count,
-                            "memory": format_memory_size(metrics.hot_tier.memory_usage as u64),
-                            "ops_per_second": metrics.hot_tier.ops_per_second,
-                            "avg_latency_ns": metrics.hot_tier.avg_access_time_ns
-                        },
-                        "warm": {
-                            "keys": metrics.warm_tier.entry_count,
-                            "memory": format_memory_size(metrics.warm_tier.memory_usage as u64),
-                            "ops_per_second": metrics.warm_tier.ops_per_second,
-                            "avg_latency_ns": metrics.warm_tier.avg_access_time_ns
-                        },
-                        "cold": {
-                            "keys": metrics.cold_tier.entry_count,
-                            "memory": format_memory_size(metrics.cold_tier.memory_usage as u64),
-                            "ops_per_second": metrics.cold_tier.ops_per_second,
-                            "avg_latency_ns": metrics.cold_tier.avg_access_time_ns
-                        }
-                    }
-                });
-
-                let response = CacheResponse {
-                    success: true,
-                    data: Some(detailed_stats),
-                    message: None,
-                };
-                (StatusCode::OK, Json(response))
+        let detailed_stats = serde_json::json!({
+            "detailed": true,
+            "total_keys": total_keys,
+            "memory_usage": format_memory_size(total_memory as u64),
+            "hit_rate": metrics.overall_hit_rate,
+            "uptime_seconds": uptime_seconds,
+            "tier_stats": {
+                "hot": {
+                    "keys": metrics.hot_tier.entry_count,
+                    "memory": format_memory_size(metrics.hot_tier.memory_usage as u64),
+                    "ops_per_second": metrics.hot_tier.ops_per_second,
+                    "avg_latency_ns": metrics.hot_tier.avg_access_time_ns
+                },
+                "warm": {
+                    "keys": metrics.warm_tier.entry_count,
+                    "memory": format_memory_size(metrics.warm_tier.memory_usage as u64),
+                    "ops_per_second": metrics.warm_tier.ops_per_second,
+                    "avg_latency_ns": metrics.warm_tier.avg_access_time_ns
+                },
+                "cold": {
+                    "keys": metrics.cold_tier.entry_count,
+                    "memory": format_memory_size(metrics.cold_tier.memory_usage as u64),
+                    "ops_per_second": metrics.cold_tier.ops_per_second,
+                    "avg_latency_ns": metrics.cold_tier.avg_access_time_ns
+                }
             }
-            Err(telemetry_error) => {
-                log::error!(
-                    "Telemetry system failed for detailed stats: {:?}",
-                    telemetry_error
-                );
+        });
 
-                let response: CacheResponse<serde_json::Value> = CacheResponse {
-                    success: false,
-                    data: None,
-                    message: Some("Detailed cache statistics require telemetry system".to_string()),
-                };
-                (StatusCode::SERVICE_UNAVAILABLE, Json(response))
-            }
-        }
+        let response = CacheResponse {
+            success: true,
+            data: Some(detailed_stats),
+            message: None,
+        };
+        (StatusCode::OK, Json(response))
     }
 
     async fn batch_get_handler(

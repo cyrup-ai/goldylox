@@ -155,6 +155,7 @@ pub enum CoherenceError {
     SerializationFailed(String),
     TierAccessFailed(String),
     WriteConflict,
+    InitializationFailed(String),
     // UnsupportedSchemaVersion and ChecksumMismatch variants removed - were unused error types
 }
 

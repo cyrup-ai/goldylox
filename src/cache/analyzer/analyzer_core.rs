@@ -542,20 +542,18 @@ impl<K: CacheKey> AccessPatternAnalyzer<K> {
     /// Get current timestamp in nanoseconds
     #[inline(always)]
     fn current_timestamp_ns(&self) -> Result<u64, CacheOperationError> {
-        use std::sync::OnceLock;
-        static START_TIME: OnceLock<std::time::Instant> = OnceLock::new();
-
-        let start = START_TIME.get_or_init(std::time::Instant::now);
-        let elapsed = std::time::Instant::now().duration_since(*start);
-        let wall_time_ns = elapsed.as_nanos() as u64;
-
-        // Increment global logical clock to ensure consistent ordering across concurrent operations
+        use crate::cache::types::performance::timer::timestamp_nanos;
+        
+        // Use absolute UNIX epoch timestamp for wall time
+        let wall_time_ns = timestamp_nanos(std::time::Instant::now());
+        
+        // Increment per-instance logical clock for consistent ordering
         let logical_clock = self.global_clock.fetch_add(1, Ordering::SeqCst);
-
-        // Combine wall clock time with logical clock to maintain both temporal ordering and causal ordering
-        // Use high-order bits for wall time, low-order bits for logical sequence within same nanosecond
+        
+        // Combine wall clock time with logical clock for hybrid timestamp
+        // High-order bits: wall time, low-order bits: logical sequence
         let combined_timestamp = wall_time_ns.wrapping_add(logical_clock & 0xFFFF);
-
+        
         Ok(combined_timestamp)
     }
 

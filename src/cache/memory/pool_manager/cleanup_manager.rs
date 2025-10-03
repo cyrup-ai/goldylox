@@ -9,7 +9,6 @@ use super::individual_pool::MemoryPool;
 use crate::cache::tier::hot::memory_pool::statistics::MemoryPoolStats;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crossbeam_channel::{Sender, bounded};
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::time::Duration;
 
 /// Pool cleanup request types
@@ -27,41 +26,17 @@ pub enum PoolCleanupRequest {
     },
 }
 
-/// Global pool coordinator for cleanup operations
+/// Per-instance pool coordinator for cleanup operations
+#[derive(Debug)]
 pub struct PoolCoordinator {
     /// Cleanup request sender
-    cleanup_sender: Sender<PoolCleanupRequest>,
+    pub cleanup_sender: Sender<PoolCleanupRequest>,
 }
 
-static POOL_COORDINATOR: AtomicPtr<PoolCoordinator> = AtomicPtr::new(std::ptr::null_mut());
-
 impl PoolCoordinator {
-    /// Initialize the global coordinator
-    #[allow(dead_code)] // Memory management - used in pool cleanup coordination and emergency responses
-    pub fn initialize(
-        cleanup_sender: Sender<PoolCleanupRequest>,
-    ) -> Result<(), CacheOperationError> {
-        if !POOL_COORDINATOR.load(Ordering::Acquire).is_null() {
-            return Ok(()); // Already initialized
-        }
-
-        let coordinator = Box::new(PoolCoordinator { cleanup_sender });
-
-        let coordinator_ptr = Box::into_raw(coordinator);
-        POOL_COORDINATOR.store(coordinator_ptr, Ordering::Release);
-        Ok(())
-    }
-
-    /// Get the global coordinator instance
-    #[inline]
-    fn get() -> Result<&'static PoolCoordinator, CacheOperationError> {
-        let ptr = POOL_COORDINATOR.load(Ordering::Acquire);
-        if ptr.is_null() {
-            return Err(CacheOperationError::initialization_failed(
-                "PoolCoordinator not initialized",
-            ));
-        }
-        Ok(unsafe { &*ptr })
+    /// Create new per-instance pool coordinator
+    pub fn new(cleanup_sender: Sender<PoolCleanupRequest>) -> Self {
+        Self { cleanup_sender }
     }
 
     /// Send cleanup request
@@ -386,9 +361,8 @@ impl PoolCleanupManager {
     }
 }
 
-/// Emergency cleanup - called by maintenance worker
-pub fn emergency_cleanup() -> Result<usize, CacheOperationError> {
-    let coordinator = PoolCoordinator::get()?;
+/// Emergency cleanup - accepts per-instance coordinator
+pub fn emergency_cleanup(coordinator: &PoolCoordinator) -> Result<usize, CacheOperationError> {
     let (response_tx, response_rx) = bounded(1);
 
     coordinator.send_request(PoolCleanupRequest::EmergencyCleanup {
@@ -400,9 +374,8 @@ pub fn emergency_cleanup() -> Result<usize, CacheOperationError> {
         .map_err(|_| CacheOperationError::timing_error("Operation timed out"))?
 }
 
-/// Trigger defragmentation - called by maintenance worker
-pub fn trigger_defragmentation() -> Result<usize, CacheOperationError> {
-    let coordinator = PoolCoordinator::get()?;
+/// Trigger defragmentation - accepts per-instance coordinator
+pub fn trigger_defragmentation(coordinator: &PoolCoordinator) -> Result<usize, CacheOperationError> {
     let (response_tx, response_rx) = bounded(1);
 
     coordinator.send_request(PoolCleanupRequest::TriggerDefragmentation {

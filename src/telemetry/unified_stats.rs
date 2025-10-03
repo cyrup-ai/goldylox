@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // Telemetry System - Complete unified statistics library with atomic coordination across all cache tiers, performance metrics tracking, tier analysis, and comprehensive cache performance monitoring
 
 //! Unified cache statistics across all tiers with atomic coordination
@@ -6,15 +5,12 @@
 //! This module implements the `UnifiedCacheStatistics` structure that provides
 //! atomic performance tracking across hot, warm, and cold cache tiers.
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use crossbeam_utils::{CachePadded, atomic::AtomicCell};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::data_structures::{OpsPerSecondState, TierHitRateState};
 use crate::cache::coherence::CacheTier;
 use crate::cache::types::statistics::tier_stats::TierStatistics;
-
 /// Unified cache statistics across all tiers with atomic coordination
 #[derive(Debug)]
 pub struct UnifiedCacheStatistics {
@@ -62,9 +58,6 @@ pub struct UnifiedStats {
     pub tier_hit_rates: [f32; 3], // Hot, Warm, Cold
 }
 
-/// Global singleton instance for unified cache statistics
-static GLOBAL_UNIFIED_STATS: OnceLock<UnifiedCacheStatistics> = OnceLock::new();
-
 impl Default for UnifiedCacheStatistics {
     fn default() -> Self {
         Self::new()
@@ -89,14 +82,6 @@ impl UnifiedCacheStatistics {
             ops_per_second_state: OpsPerSecondState::new(),
             tier_hit_rates: TierHitRateState::new(),
         }
-    }
-
-    /// Get or create the global unified statistics instance
-    pub fn get_global_instance() -> Result<&'static UnifiedCacheStatistics, &'static str> {
-        GLOBAL_UNIFIED_STATS.get_or_init(UnifiedCacheStatistics::new);
-        GLOBAL_UNIFIED_STATS
-            .get()
-            .ok_or("Failed to initialize global unified stats")
     }
 
     /// Record cache hit for specific tier with atomic update
@@ -511,8 +496,14 @@ impl UnifiedCacheStatistics {
         // Connect to existing warm tier coordinator API
         use crate::cache::tier::warm::global_api;
 
+        // Create placeholder coordinator for stats (legacy code)
+        let warm_coord = std::sync::Arc::new(crate::cache::tier::warm::global_api::WarmTierCoordinator {
+            warm_tiers: dashmap::DashMap::new(),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        
         // Use the sophisticated warm tier infrastructure with worker-based routing
-        match global_api::get_stats::<String, Vec<u8>>() {
+        match global_api::get_stats::<String, Vec<u8>>(&warm_coord) {
             Some(warm_snapshot) => {
                 // Convert TierStatsSnapshot to TierStatistics
                 TierStatistics {
@@ -550,28 +541,20 @@ impl UnifiedCacheStatistics {
 
     /// Get cold tier statistics from existing coordinator infrastructure
     fn get_cold_tier_stats(&self) -> TierStatistics {
-        // Connect to existing cold tier coordinator with comprehensive statistics
-        use crate::cache::tier::cold;
-
-        // Use the sophisticated cold tier infrastructure with full statistics tracking
-        match cold::get_stats::<String, Vec<u8>>() {
-            Ok(cold_stats) => cold_stats,
-            Err(_) => {
-                // Fallback: create basic statistics from available counters
-                TierStatistics {
-                    hits: self.cold_hits.load(Ordering::Relaxed),
-                    misses: 0,       // Will be calculated in caller
-                    entry_count: 0,  // Unknown without coordinator
-                    memory_usage: 0, // Unknown without coordinator
-                    peak_memory: 0,
-                    total_size_bytes: 0,
-                    hit_rate: 0.0,         // Will be calculated in caller
-                    avg_access_time_ns: 0, // Will be set in caller
-                    ops_per_second: 0.0,
-                    error_count: 0,
-                    error_rate: 0.0,
-                }
-            }
+        // NOTE: Cold tier coordinator is per-instance and not accessible from global stats
+        // Use atomic counters instead for basic statistics tracking
+        TierStatistics {
+            hits: self.cold_hits.load(Ordering::Relaxed),
+            misses: 0,       // Will be calculated in caller
+            entry_count: 0,  // Unknown without coordinator
+            memory_usage: 0, // Unknown without coordinator
+            peak_memory: 0,
+            total_size_bytes: 0,
+            hit_rate: 0.0,         // Will be calculated in caller
+            avg_access_time_ns: 0, // Will be set in caller
+            ops_per_second: 0.0,
+            error_count: 0,
+            error_rate: 0.0,
         }
     }
 

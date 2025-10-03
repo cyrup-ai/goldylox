@@ -6,8 +6,8 @@
 #![allow(dead_code)] // Hot tier SIMD - Complete SIMD-accelerated cache operations with intelligent eviction and prefetch prediction
 
 use super::core::SimdHotTier;
-use crate::cache::tier::hot::synchronization::timing::timestamp;
 use crate::cache::tier::hot::synchronization::{ReadGuard, WriteGuard};
+use crate::cache::types::performance::timer::timestamp_nanos;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::performance::timer::PrecisionTimer;
@@ -32,7 +32,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
 
         // Record access for prefetch learning
         self.prefetch_predictor
-            .record_access(key, timestamp::now_nanos(), context_hash);
+            .record_access(key, timestamp_nanos(std::time::Instant::now()), context_hash);
         let primary_slot = self.memory_pool.slot_index_from_hash(key_hash);
 
         // Search for the key
@@ -116,7 +116,7 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
             // Update existing entry and record access
             self.lru_tracker.record_access(result.slot_index);
             self.memory_pool
-                .update_at_slot(result.slot_index, value, timestamp::now_nanos());
+                .update_at_slot(result.slot_index, value, timestamp_nanos(std::time::Instant::now()));
             return Ok(());
         }
 
@@ -127,14 +127,14 @@ impl<K: CacheKey + Default, V: CacheValue> SimdHotTier<K, V> {
                 key.clone(),
                 value,
                 key_hash,
-                timestamp::now_nanos(),
+                timestamp_nanos(std::time::Instant::now()),
             );
             self.lru_tracker.record_access(slot_idx);
             return Ok(());
         }
 
         // Need to evict entry
-        let current_time = timestamp::now_nanos();
+        let current_time = timestamp_nanos(std::time::Instant::now());
         if let Some(candidate) = self.eviction_engine.find_eviction_candidate(
             &self.memory_pool.metadata,
             &self.lru_tracker,

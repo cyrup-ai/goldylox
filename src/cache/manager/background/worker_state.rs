@@ -3,13 +3,11 @@
 //! This module implements worker state tracking and health monitoring
 //! for background maintenance workers.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use crossbeam_utils::atomic::AtomicCell;
-use dashmap::DashMap;
 
 use super::types::{BackgroundWorkerState, WorkerStatus};
 
@@ -39,14 +37,6 @@ pub struct WorkerStatusSnapshot {
     pub tasks_since_heartbeat: u64,
     pub is_healthy: bool,
     pub snapshot_time_ns: u64, // when this snapshot was created
-}
-
-/// Global worker registry for tracking active worker states
-static WORKER_REGISTRY: OnceLock<DashMap<u32, WorkerStatusChannel>> = OnceLock::new();
-
-/// Get the global worker registry
-fn get_worker_registry() -> &'static DashMap<u32, WorkerStatusChannel> {
-    WORKER_REGISTRY.get_or_init(DashMap::new)
 }
 
 impl WorkerStatusChannel {
@@ -228,12 +218,12 @@ impl BackgroundWorkerState {
         }
     }
 
-    /// Register worker status channel in global registry for monitoring
+    /// Register worker status channel in per-instance registry for monitoring
     pub fn register_worker_channel(
+        registry: &std::sync::Arc<dashmap::DashMap<u32, WorkerStatusChannel>>,
         worker_id: u32,
         status_receiver: Receiver<WorkerStatusSnapshot>,
     ) {
-        let registry = get_worker_registry();
         let channel = WorkerStatusChannel {
             status_receiver,
             cached_status: std::sync::RwLock::new(None),
@@ -242,15 +232,18 @@ impl BackgroundWorkerState {
         registry.insert(worker_id, channel);
     }
 
-    /// Unregister worker state from global registry
-    pub fn unregister_worker(worker_id: u32) {
-        let registry = get_worker_registry();
+    /// Unregister worker state from per-instance registry
+    pub fn unregister_worker(
+        registry: &std::sync::Arc<dashmap::DashMap<u32, WorkerStatusChannel>>,
+        worker_id: u32,
+    ) {
         registry.remove(&worker_id);
     }
 
     /// Get all registered worker task counts via channel communication
-    pub fn get_all_worker_task_counts() -> Vec<(u32, u64)> {
-        let registry = get_worker_registry();
+    pub fn get_all_worker_task_counts(
+        registry: &std::sync::Arc<dashmap::DashMap<u32, WorkerStatusChannel>>,
+    ) -> Vec<(u32, u64)> {
         registry
             .iter()
             .filter_map(|entry| {
@@ -264,8 +257,9 @@ impl BackgroundWorkerState {
     }
 
     /// Get all registered worker health statuses via channel communication
-    pub fn get_all_worker_health() -> Vec<(u32, bool)> {
-        let registry = get_worker_registry();
+    pub fn get_all_worker_health(
+        registry: &std::sync::Arc<dashmap::DashMap<u32, WorkerStatusChannel>>,
+    ) -> Vec<(u32, bool)> {
         registry
             .iter()
             .filter_map(|entry| {

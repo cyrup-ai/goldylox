@@ -31,11 +31,8 @@ impl<
         entry.last_access_ns = timestamp_nanos(Instant::now());
         entry.access_count += 1;
 
-        // Update global statistics using existing atomic counters directly
-        use crate::cache::tier::cold::storage::{COLD_HITS, COLD_READS};
-        use std::sync::atomic::Ordering;
-        COLD_HITS.fetch_add(1, Ordering::Relaxed);
-        COLD_READS.fetch_add(1, Ordering::Relaxed);
+        // Update per-instance statistics using existing stats infrastructure
+        self.stats.record_hit(0);
     }
 
     /// Mark space as free for compaction
@@ -124,34 +121,13 @@ impl<
                     }
                 }
                 Err(analyzer_error) => {
-                    log::debug!(
-                        "MemoryEfficiencyAnalyzer failed: {:?}, using defragmentation measurement",
+                    // Alternative: Use fallback value (defragmentation requires pool_coordinator access)
+                    log::warn!(
+                        "MemoryEfficiencyAnalyzer failed: {:?}, using fallback fragmentation estimate",
                         analyzer_error
                     );
-
-                    // Alternative: Use actual defragmentation measurement for real fragmentation data
-                    use crate::cache::memory::pool_manager::cleanup_manager::trigger_defragmentation;
-                    match trigger_defragmentation() {
-                        Ok(actual_bytes_reclaimed) => {
-                            log::debug!(
-                                "Using measured defragmentation: {} bytes",
-                                actual_bytes_reclaimed
-                            );
-                            actual_bytes_reclaimed as u64
-                        }
-                        Err(defrag_error) => {
-                            log::warn!(
-                                "Both MemoryEfficiencyAnalyzer and defragmentation failed - analyzer: {:?}, defrag: {:?}",
-                                analyzer_error,
-                                defrag_error
-                            );
-
-                            // Conservative fallback: use zero instead of arbitrary calculation
-                            // Better to underestimate than use arbitrary math
-                            log::debug!("Using conservative zero estimate for deleted entry bytes");
-                            0
-                        }
-                    }
+                    // Conservative fallback: use zero instead of arbitrary calculation
+                    0
                 }
             }
         };

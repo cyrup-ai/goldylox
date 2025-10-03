@@ -234,6 +234,14 @@ where
         ))
     }
 
+    /// Get reference to unified cache statistics for per-instance monitoring
+    ///
+    /// Returns a reference to the UnifiedCacheStatistics instance for this cache,
+    /// enabling per-instance statistics tracking and monitoring.
+    pub fn get_unified_stats(&self) -> &crate::telemetry::unified_stats::UnifiedCacheStatistics {
+        self.manager.get_unified_stats()
+    }
+
     // =======================================================================
     // CONCURRENT CACHE OPERATIONS (Java ConcurrentHashMap style)
     // =======================================================================

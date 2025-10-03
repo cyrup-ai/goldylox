@@ -14,8 +14,8 @@ use crossbeam_channel::{Sender, bounded};
 use dashmap::DashMap;
 
 use super::simd_tier::SimdHotTier;
-use super::synchronization::timing::timestamp;
 use crate::cache::config::types::HotTierConfig;
+use crate::cache::types::performance::timer::timestamp_nanos;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::types::statistics::tier_stats::TierStatistics;
@@ -102,7 +102,7 @@ pub enum CacheRequest<K: CacheKey, V: CacheValue> {
 }
 
 /// Trait for type-erased hot tier operations
-trait HotTierOperations: std::any::Any + Send + Sync {
+pub(crate) trait HotTierOperations: std::any::Any + Send + Sync {
     fn shutdown(&self);
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -144,31 +144,21 @@ impl<K: CacheKey, V: CacheValue> HotTierOperations for HotTierHandle<K, V> {
 /// Global hot tier coordinator for type-safe cache operations
 pub struct HotTierCoordinator {
     /// Storage for different K,V type combinations using DashMap
-    hot_tiers: DashMap<(TypeId, TypeId), Box<dyn HotTierOperations>>,
+    pub(crate) hot_tiers: DashMap<(TypeId, TypeId), Box<dyn HotTierOperations>>,
     /// Instance counter for load balancing
-    instance_selector: AtomicUsize,
+    pub(crate) instance_selector: AtomicUsize,
 }
 
-static COORDINATOR: std::sync::OnceLock<HotTierCoordinator> = std::sync::OnceLock::new();
+impl std::fmt::Debug for HotTierCoordinator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HotTierCoordinator")
+            .field("hot_tiers", &format!("{} entries", self.hot_tiers.len()))
+            .field("instance_selector", &self.instance_selector)
+            .finish()
+    }
+}
 
 impl HotTierCoordinator {
-    /// Initialize the global coordinator
-    pub fn initialize() -> Result<(), CacheOperationError> {
-        COORDINATOR.get_or_init(|| HotTierCoordinator {
-            hot_tiers: DashMap::new(),
-            instance_selector: AtomicUsize::new(0),
-        });
-        Ok(())
-    }
-
-    /// Get the global coordinator instance
-    #[inline]
-    pub fn get() -> Result<&'static HotTierCoordinator, CacheOperationError> {
-        COORDINATOR
-            .get()
-            .ok_or_else(|| CacheOperationError::invalid_state("HotTierCoordinator not initialized"))
-    }
-
     /// Get or create a hot tier instance for the given K,V types
     pub fn get_or_create_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         &self,
@@ -211,7 +201,7 @@ impl HotTierCoordinator {
                         let _ = response.send(result);
                     }
                     CacheRequest::CleanupExpired { ttl_ns, response } => {
-                        let current_time = timestamp::now_nanos();
+                        let current_time = timestamp_nanos(std::time::Instant::now());
                         let mut cleaned_count = 0;
 
                         // Process slots in batches for better cache locality and SIMD potential
@@ -277,7 +267,7 @@ impl HotTierCoordinator {
                     } => {
                         // Get frequent keys - full implementation
                         let mut frequent_keys = Vec::new();
-                        let current_time = timestamp::now_nanos();
+                        let current_time = timestamp_nanos(std::time::Instant::now());
                         let _window_start = current_time.saturating_sub(window_ns);
 
                         for slot_idx in 0..256 {
@@ -298,7 +288,7 @@ impl HotTierCoordinator {
                     } => {
                         // Get idle keys - full implementation
                         let mut idle_keys = Vec::new();
-                        let _current_time = timestamp::now_nanos();
+                        let _current_time = timestamp_nanos(std::time::Instant::now());
 
                         for slot_idx in 0..256 {
                             if let Some(metadata) = tier.memory_pool().get_metadata(slot_idx)
@@ -387,25 +377,22 @@ impl HotTierCoordinator {
     }
 }
 
-/// Initialize hot tier system
-pub fn initialize_hot_tier_system() -> Result<(), CacheOperationError> {
-    HotTierCoordinator::initialize()
-}
+
 
 /// Initialize hot tier with specific configuration for given types
 pub fn init_simd_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     config: HotTierConfig,
 ) -> Result<(), CacheOperationError> {
-    let coordinator = HotTierCoordinator::get()?;
     let _tier = coordinator.get_or_create_tier::<K, V>(Some(config))?;
     Ok(())
 }
 
 /// Get value from hot tier cache
 pub fn simd_hot_get<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Option<V> {
-    let coordinator = HotTierCoordinator::get().ok()?;
     let handle = coordinator.get_or_create_tier::<K, V>(None).ok()?;
 
     let (response_tx, response_rx) = bounded(1);
@@ -420,10 +407,10 @@ pub fn simd_hot_get<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 
 /// Put value in hot tier cache  
 pub fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    let coordinator = HotTierCoordinator::get()?;
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
     let (response_tx, response_rx) = bounded(1);
@@ -444,9 +431,9 @@ pub fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 
 /// Remove value from hot tier cache
 pub fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Result<Option<V>, CacheOperationError> {
-    let coordinator = HotTierCoordinator::get()?;
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
     let (response_tx, response_rx) = bounded(1);
@@ -466,14 +453,9 @@ pub fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>
 
 /// Get statistics from hot tier
 #[allow(dead_code)] // Hot tier SIMD - Statistics collection function for SIMD hot tier performance monitoring
-pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>() -> TierStatistics
-{
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return TierStatistics::default(),
-    };
-
+pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
+) -> TierStatistics {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return TierStatistics::default(),
@@ -495,15 +477,10 @@ pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 
 /// Get frequently accessed keys from hot tier
 pub fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     access_threshold: u32,
     time_window: Duration,
 ) -> Vec<K> {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return Vec::new(),
@@ -527,14 +504,9 @@ pub fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheVal
 
 /// Get idle keys from hot tier (candidates for demotion)
 pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     idle_threshold: Duration,
 ) -> Vec<K> {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return Vec::new(),
@@ -557,31 +529,28 @@ pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 
 /// Remove entry from hot tier using service-based routing
 pub fn remove_entry<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Option<V> {
     // Use the standard remove operation which properly routes to service
-    simd_hot_remove::<K, V>(key).unwrap_or_default()
+    simd_hot_remove::<K, V>(coordinator, key).unwrap_or_default()
 }
 
 /// Insert entry promoted from warm tier using service-based routing
 pub fn insert_promoted<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
     // Use the standard put operation which properly routes to service
-    simd_hot_put(key, value)
+    simd_hot_put(coordinator, key, value)
 }
 
 /// Cleanup expired entries from hot tier
 pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
     ttl: Duration,
 ) -> usize {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return 0,
-    };
-
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return 0,
@@ -606,13 +575,9 @@ pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 
 pub fn process_prefetch_requests<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
->() -> usize {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return 0,
-    };
-
+>(
+    coordinator: &HotTierCoordinator,
+) -> usize {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return 0,
@@ -633,14 +598,9 @@ pub fn process_prefetch_requests<
 }
 
 /// Compact hot tier and return compacted entries count
-pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>()
--> usize {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return 0,
-    };
-
+pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>(
+    coordinator: &HotTierCoordinator,
+) -> usize {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return 0,
@@ -661,13 +621,9 @@ pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + Partial
 }
 
 /// Clear all entries from hot tier
-pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>() {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return,
-    };
-
+pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+    coordinator: &HotTierCoordinator,
+) {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return,
@@ -689,13 +645,9 @@ pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 pub fn should_optimize_hot_tier<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
->() -> bool {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return false,
-    };
-
+>(
+    coordinator: &HotTierCoordinator,
+) -> bool {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return false,
@@ -719,13 +671,9 @@ pub fn should_optimize_hot_tier<
 pub fn hot_tier_memory_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
->() -> super::memory_pool::MemoryPoolStats {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return super::memory_pool::MemoryPoolStats::default(),
-    };
-
+>(
+    coordinator: &HotTierCoordinator,
+) -> super::memory_pool::MemoryPoolStats {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return super::memory_pool::MemoryPoolStats::default(),
@@ -749,13 +697,9 @@ pub fn hot_tier_memory_stats<
 pub fn hot_tier_eviction_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
->() -> super::eviction::EvictionStats {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return super::eviction::EvictionStats::default(),
-    };
-
+>(
+    coordinator: &HotTierCoordinator,
+) -> super::eviction::EvictionStats {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return super::eviction::EvictionStats::default(),
@@ -779,13 +723,9 @@ pub fn hot_tier_eviction_stats<
 pub fn hot_tier_prefetch_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
->() -> super::prefetch::PrefetchStats {
-    let coordinator = HotTierCoordinator::get().ok();
-    let coordinator = match coordinator {
-        Some(c) => c,
-        None => return super::prefetch::PrefetchStats::default(),
-    };
-
+>(
+    coordinator: &HotTierCoordinator,
+) -> super::prefetch::PrefetchStats {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
         Ok(h) => h,
         Err(_) => return super::prefetch::PrefetchStats::default(),
@@ -813,16 +753,18 @@ pub fn hot_tier_config() -> HotTierConfig {
 }
 
 /// Clear all hot tier instances (type-erased for error recovery)
-pub fn clear_hot_tier_system() -> Result<(), CacheOperationError> {
-    let coordinator = HotTierCoordinator::get()?;
+pub fn clear_hot_tier_system(
+    coordinator: &HotTierCoordinator,
+) -> Result<(), CacheOperationError> {
     // Clear all tiers regardless of type - this is for error recovery
     coordinator.hot_tiers.clear();
     Ok(())
 }
 
 /// Shutdown hot tier system (type-erased for error recovery)
-pub fn shutdown_hot_tier_system() -> Result<(), CacheOperationError> {
-    let coordinator = HotTierCoordinator::get()?;
+pub fn shutdown_hot_tier_system(
+    coordinator: &HotTierCoordinator,
+) -> Result<(), CacheOperationError> {
     // Send shutdown to all active tiers
     for _tier_entry in coordinator.hot_tiers.iter() {
         // We can't access the sender directly due to type erasure,

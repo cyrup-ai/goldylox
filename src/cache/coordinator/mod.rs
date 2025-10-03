@@ -9,7 +9,7 @@
 //! - `unified_manager`: Core UnifiedCacheManager struct and main operations
 //! - `strategy_selector`: Cache strategy selection and adaptive optimization
 //! - `tier_operations`: Low-level tier access and placement analysis
-//! - `global_api`: Global interface functions and static management
+//! - (deprecated: global_api removed - use explicit UnifiedCacheManager instances)
 //!
 //! ## Key Features
 //!
@@ -21,7 +21,6 @@
 //! - **Background processing**: Work-stealing task queue for maintenance operations
 
 // Module declarations
-pub mod global_api;
 pub mod strategy_selector;
 pub mod tier_operations;
 pub mod unified_manager;
@@ -29,7 +28,7 @@ pub mod unified_manager;
 // REMOVED: Compatibility re-exports that hide canonical API paths
 // These re-exports allowed broken code to import via coordinator:: instead of specific modules
 // Users must now import from canonical module paths:
-// - Use coordinator::global_api::{cache_clear, cache_clear_generic, ...}
+// - Deprecated: coordinator::global_api removed (use UnifiedCacheManager::<K,V>::new directly)
 // - Use coordinator::strategy_selector::CacheStrategySelector
 // - Use coordinator::tier_operations::TierOperations
 // - Use coordinator::unified_manager::UnifiedCacheManager

@@ -12,7 +12,6 @@ use super::types::{
     BackgroundWorkerState, CanonicalMaintenanceTask, MaintenanceConfig, MaintenanceTask,
     WorkerStatus,
 };
-use crate::cache::tier::cold::ColdTierCoordinator;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Global active task counter
@@ -35,14 +34,15 @@ where
         shutdown_receiver: Receiver<()>,
         _active_tasks: &AtomicU32, // Now uses global static
         config: MaintenanceConfig,
+        context: super::types::WorkerContext,
     ) {
         let worker_state = BackgroundWorkerState::new(worker_id);
 
         // Create channel for worker status updates to monitoring system
         let (status_sender, status_receiver) = crossbeam_channel::unbounded();
 
-        // Register worker status channel in global registry for monitoring
-        BackgroundWorkerState::register_worker_channel(worker_id, status_receiver);
+        // Register worker status channel in per-instance registry for monitoring
+        BackgroundWorkerState::register_worker_channel(&context.worker_registry, worker_id, status_receiver);
 
         // Send initial status update
         let _ = status_sender.try_send(worker_state.create_status_snapshot());
@@ -68,7 +68,7 @@ where
                     let start_time = Instant::now();
 
                     // Process the task with error handling
-                    match Self::try_process_maintenance_task(&task, &worker_state) {
+                    match Self::try_process_maintenance_task(&task, &worker_state, &context) {
                         Ok(_) => {
                             let processing_time = start_time.elapsed().as_nanos() as u64;
                             worker_state
@@ -153,14 +153,15 @@ where
             }
         }
 
-        // Unregister worker state from global registry on shutdown
-        BackgroundWorkerState::unregister_worker(worker_id);
+        // Unregister worker state from per-instance registry on shutdown
+        BackgroundWorkerState::unregister_worker(&context.worker_registry, worker_id);
     }
 
     /// Process canonical maintenance task with error handling
     pub fn try_process_maintenance_task(
         task: &MaintenanceTask,
         worker_state: &BackgroundWorkerState,
+        context: &super::types::WorkerContext,
     ) -> Result<(), crate::cache::traits::types_and_enums::CacheOperationError> {
         // Check for task timeout
         if task.created_at.elapsed().as_secs() > 30 {
@@ -169,26 +170,23 @@ where
         }
 
         // Process the task
-        Self::process_maintenance_task(task, worker_state);
+        Self::process_maintenance_task(task, worker_state, context);
         Ok(())
     }
 
     /// Process canonical maintenance task
-    pub fn process_maintenance_task(task: &MaintenanceTask, worker_state: &BackgroundWorkerState) {
+    pub fn process_maintenance_task(
+        task: &MaintenanceTask,
+        worker_state: &BackgroundWorkerState,
+        context: &super::types::WorkerContext,
+    ) {
         match &task.task {
             CanonicalMaintenanceTask::CompactStorage { .. } => {
                 // Connect to cold tier service via message passing
-                match ColdTierCoordinator::get() {
-                    Ok(coordinator) => {
-                        if let Err(e) = coordinator.trigger_maintenance::<K, V>("compact") {
-                            log::error!("Failed to trigger compaction: {:?}", e);
-                        } else {
-                            log::debug!("Cold tier compaction requested via service");
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to get cold tier coordinator: {:?}", e);
-                    }
+                if let Err(e) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact") {
+                    log::error!("Failed to trigger compaction: {:?}", e);
+                } else {
+                    log::debug!("Cold tier compaction requested via service");
                 }
 
                 worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
@@ -200,23 +198,16 @@ where
                 let mut total_cleaned = 0;
 
                 // Clean hot tier
-                total_cleaned += hot::cleanup_expired_entries::<K, V>(*ttl);
+                total_cleaned += hot::cleanup_expired_entries::<K, V>(&context.hot_tier_coordinator, *ttl);
 
                 // Clean warm tier
-                if let Ok(cleaned) = warm::cleanup_expired_entries::<K, V>(*ttl) {
+                if let Ok(cleaned) = warm::cleanup_expired_entries::<K, V>(&context.warm_tier_coordinator, *ttl) {
                     total_cleaned += cleaned;
                 }
 
                 // Clean cold tier using existing sophisticated maintenance system
-                match crate::cache::tier::cold::ColdTierCoordinator::get() {
-                    Ok(coordinator) => {
-                        if let Ok(()) = coordinator.trigger_maintenance::<K, V>("compact") {
-                            total_cleaned += 1; // Cold tier maintenance triggered successfully
-                        }
-                    }
-                    Err(_) => {
-                        // Cold tier not available - this is normal if cold tier disabled
-                    }
+                if let Ok(()) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact") {
+                    total_cleaned += 1; // Cold tier maintenance triggered successfully
                 }
 
                 log::debug!("Cleaned {} expired entries across all tiers", total_cleaned);
@@ -246,64 +237,42 @@ where
                 worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
             }
             CanonicalMaintenanceTask::UpdateStatistics { .. } => {
-                // Update unified statistics using existing sophisticated system
-                use crate::telemetry::unified_stats::UnifiedCacheStatistics;
+                // Update unified statistics using per-instance statistics
+                let _metrics = context.unified_stats.get_performance_metrics();
+                log::debug!("Updated unified cache statistics");
 
-                // Get global unified statistics instance and update
-                match UnifiedCacheStatistics::get_global_instance() {
-                    Ok(stats) => {
-                        // Refresh comprehensive performance metrics
-                        let _metrics = stats.get_performance_metrics();
-                        log::debug!("Updated unified cache statistics");
-                    }
-                    Err(_) => {
-                        log::warn!("Unified statistics system not available");
-                    }
-                }
+                // Update coherence statistics using per-instance statistics
+                let snapshot = context.coherence_stats.get_snapshot();
 
-                // Update coherence statistics using existing sophisticated system
-                use crate::cache::coherence::statistics::core_statistics::CoherenceStatistics;
+                // Use CoherenceStatistics methods for real-time calculation
+                let live_success_rate = context.coherence_stats.success_rate();
+                let live_invalidation_efficiency =
+                    context.coherence_stats.invalidation_efficiency();
 
-                match CoherenceStatistics::get_global_instance() {
-                    Ok(coherence_stats) => {
-                        // Get fresh snapshot and log comprehensive telemetry
-                        let snapshot = coherence_stats.get_snapshot();
-
-                        // Use CoherenceStatistics methods for real-time calculation
-                        let live_success_rate = coherence_stats.success_rate();
-                        let live_invalidation_efficiency =
-                            coherence_stats.invalidation_efficiency();
-
-                        // Log comprehensive coherence telemetry using all CoherenceStatisticsSnapshot fields
-                        log::info!(
-                            "Coherence telemetry - Total ops: {}, Success rate: {:.1}%, Violations: {} ({:.1}%), Overhead: {}ns/op",
-                            snapshot.total_operations(),
-                            snapshot.success_rate(),
-                            snapshot.protocol_violations,
-                            snapshot.violation_rate(),
-                            snapshot.avg_overhead_per_operation_ns()
-                        );
-                        log::debug!(
-                            "Coherence details - Transitions: {}, Invalidations sent/rcv: {}/{}, Writebacks: {}, Avg latency: {}ns, Peak concurrent: {}",
-                            snapshot.total_transitions,
-                            snapshot.invalidations_sent,
-                            snapshot.invalidations_received,
-                            snapshot.writebacks_performed,
-                            snapshot.avg_operation_latency_ns,
-                            snapshot.peak_concurrent_operations
-                        );
-                        log::debug!(
-                            "Live coherence metrics - Success rate: {:.2}%, Invalidation efficiency: {:.2}%",
-                            live_success_rate,
-                            live_invalidation_efficiency
-                        );
-                        log::debug!("Updated coherence statistics");
-                    }
-                    Err(_) => {
-                        log::warn!("Coherence statistics system not available");
-                    }
-                }
-
+                // Log comprehensive coherence telemetry using all CoherenceStatisticsSnapshot fields
+                log::info!(
+                    "Coherence telemetry - Total ops: {}, Success rate: {:.1}%, Violations: {} ({:.1}%), Overhead: {}ns/op",
+                    snapshot.total_operations(),
+                    snapshot.success_rate(),
+                    snapshot.protocol_violations,
+                    snapshot.violation_rate(),
+                    snapshot.avg_overhead_per_operation_ns()
+                );
+                log::debug!(
+                    "Coherence details - Transitions: {}, Invalidations sent/rcv: {}/{}, Writebacks: {}, Avg latency: {}ns, Peak concurrent: {}",
+                    snapshot.total_transitions,
+                    snapshot.invalidations_sent,
+                    snapshot.invalidations_received,
+                    snapshot.writebacks_performed,
+                    snapshot.avg_operation_latency_ns,
+                    snapshot.peak_concurrent_operations
+                );
+                log::debug!(
+                    "Live coherence metrics - Success rate: {:.2}%, Invalidation efficiency: {:.2}%",
+                    live_success_rate,
+                    live_invalidation_efficiency
+                );
+                log::debug!("Updated coherence statistics");
                 log::debug!("Updated cache statistics");
                 worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
             }
@@ -313,7 +282,7 @@ where
                 use crate::cache::tier::warm::global_api;
 
                 // Trigger pattern analysis for all active warm tier instances
-                match global_api::process_background_maintenance::<K, V>() {
+                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator) {
                     Ok(maintenance_count) => {
                         log::debug!(
                             "Warm tier pattern analysis completed, processed {} items",
@@ -348,7 +317,7 @@ where
                 // Connect to memory pool optimization system
                 use crate::cache::memory::pool_manager::cleanup_manager;
 
-                match cleanup_manager::trigger_defragmentation() {
+                match cleanup_manager::trigger_defragmentation(&context.pool_coordinator) {
                     Ok(reclaimed) => {
                         log::debug!("Memory optimization reclaimed {} bytes", reclaimed);
                     }
@@ -364,7 +333,7 @@ where
                 use crate::cache::tier::warm::global_api;
 
                 // Trigger pattern analysis to optimize eviction decisions
-                match global_api::process_background_maintenance::<K, V>() {
+                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator) {
                     Ok(maintenance_count) => {
                         log::debug!(
                             "Pattern analysis for eviction optimization completed, processed {} items",
@@ -383,25 +352,18 @@ where
             }
             CanonicalMaintenanceTask::ValidateIntegrity { .. } => {
                 // Connect to cold tier integrity validation
-                match ColdTierCoordinator::get() {
-                    Ok(coordinator) => {
-                        match coordinator.execute_read_operation::<K, V, bool, _>(|tier| {
-                            tier.validate_integrity()
-                        }) {
-                            Ok(valid) => {
-                                if !valid {
-                                    log::warn!("Cold tier integrity validation failed");
-                                } else {
-                                    log::debug!("Cold tier integrity validation passed");
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Cold tier integrity check error: {:?}", e);
-                            }
+                match context.cold_tier_coordinator.execute_read_operation::<K, V, bool, _>(|tier| {
+                    tier.validate_integrity()
+                }) {
+                    Ok(valid) => {
+                        if !valid {
+                            log::warn!("Cold tier integrity validation failed");
+                        } else {
+                            log::debug!("Cold tier integrity validation passed");
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to get cold tier coordinator: {:?}", e);
+                        log::error!("Cold tier integrity check error: {:?}", e);
                     }
                 }
 
@@ -413,7 +375,7 @@ where
                 // Connect to memory pool defragmentation system
                 use crate::cache::memory::pool_manager::cleanup_manager;
 
-                match cleanup_manager::trigger_defragmentation() {
+                match cleanup_manager::trigger_defragmentation(&context.pool_coordinator) {
                     Ok(reclaimed_bytes) => {
                         log::debug!(
                             "Memory defragmentation completed, reclaimed {} bytes (target fragmentation: {})",
@@ -444,7 +406,7 @@ where
                 // 6. Aging applied to feature vectors using exponential decay
                 // 7. Statistics recording using existing infrastructure
 
-                match crate::cache::tier::warm::global_api::update_warm_tier_ml_models::<K, V>() {
+                match crate::cache::tier::warm::global_api::update_warm_tier_ml_models::<K, V>(&context.warm_tier_coordinator) {
                     Ok(updated_count) => {
                         log::info!(
                             "ML model adaptation completed via crossbeam messaging: {} ML policies updated using existing sophisticated system",

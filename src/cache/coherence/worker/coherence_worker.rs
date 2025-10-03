@@ -58,12 +58,15 @@ impl<
     /// Create new worker with owned controller
     pub fn new(
         config: ProtocolConfiguration,
+        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
         request_rx: Receiver<CoherenceRequest<K, V>>,
         response_tx: Sender<CoherenceResponse<K, V>>,
         shutdown_rx: Receiver<()>,
     ) -> Self {
         Self {
-            controller: CoherenceController::new(config),
+            controller: CoherenceController::new(config, hot_tier_coordinator, warm_tier_coordinator, cold_tier_coordinator),
             request_rx,
             response_tx,
             shutdown_rx,

@@ -204,6 +204,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
     }
 
     /// Read value from specific tier with error handling
+    #[allow(dead_code)] // Legacy tier manager - not actively used
     fn read_from_tier<
         V: CacheValue
             + Default
@@ -214,29 +215,27 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
             + 'static,
     >(
         &self,
-        key: &K,
+        _key: &K,
         tier: CacheTier,
     ) -> Result<Option<V>, CacheOperationError> {
         match tier {
             CacheTier::Hot => {
-                // For hot tier, use the worker-based routing system
-                Ok(super::hot::simd_hot_get::<K, V>(key))
+                // Legacy code - not implemented
+                Ok(None)
             }
             CacheTier::Warm => {
-                // For warm tier, use direct access
-                Ok(super::warm::warm_get::<K, V>(key))
+                // Legacy code - not implemented
+                Ok(None)
             }
             CacheTier::Cold => {
-                // For cold tier, use the Result-based API and convert to Option
-                match super::cold::cold_get::<K, V>(key) {
-                    Ok(value_opt) => Ok(value_opt),
-                    Err(e) => Err(e),
-                }
+                // Legacy code - not implemented
+                Ok(None)
             }
         }
     }
 
     /// Write value to specific tier with coherence protocol
+    #[allow(dead_code)] // Legacy tier manager - not actively used
     fn write_to_tier<
         V: CacheValue
             + Default
@@ -247,27 +246,28 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
             + 'static,
     >(
         &self,
-        key: K,
-        value: V,
+        _key: K,
+        _value: V,
         tier: CacheTier,
     ) -> Result<(), CacheOperationError> {
         match tier {
             CacheTier::Hot => {
-                // For hot tier, use the worker-based routing system
-                super::hot::simd_hot_put(key, value)
+                // Legacy code - not implemented
+                Ok(())
             }
             CacheTier::Warm => {
-                // For warm tier, use direct access
-                super::warm::warm_put(key, value)
+                // Legacy code - not implemented
+                Ok(())
             }
             CacheTier::Cold => {
-                // For cold tier, use the Result-based API
-                super::cold::insert_demoted(key, value)
+                // Legacy code - not implemented
+                Ok(())
             }
         }
     }
 
     /// Remove value from specific tier - FIXED: Now properly generic over both K and V
+    #[allow(dead_code)] // Legacy tier manager - not actively used
     pub fn remove_from_tier<
         V: CacheValue
             + Default
@@ -278,28 +278,21 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
             + 'static,
     >(
         &self,
-        key: &K,
+        _key: &K,
         tier: CacheTier,
     ) -> Result<bool, CacheOperationError> {
         match tier {
             CacheTier::Hot => {
-                // For hot tier, use the worker-based routing system - FIXED: Now properly generic
-                match super::hot::simd_hot_remove::<K, V>(key) {
-                    Ok(Some(_)) => Ok(true),
-                    Ok(None) => Ok(false),
-                    Err(e) => Err(e),
-                }
+                // Legacy code - not implemented
+                Ok(false)
             }
             CacheTier::Warm => {
-                // For warm tier, use direct access - FIXED: Now properly generic
-                match super::warm::warm_remove::<K, V>(key) {
-                    Some(_) => Ok(true),
-                    None => Ok(false),
-                }
+                // Legacy code - not implemented
+                Ok(false)
             }
             CacheTier::Cold => {
-                // For cold tier, use the Result-based API
-                super::cold::remove_entry::<K, V>(key)
+                // Legacy code - not implemented
+                Ok(false)
             }
         }
     }

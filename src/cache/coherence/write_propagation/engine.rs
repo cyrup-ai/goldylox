@@ -32,7 +32,12 @@ impl<
 > WritePropagationSystem<K, V>
 {
     /// Create new write propagation system
-    pub fn new(writeback_delay_ns: u64) -> Self {
+    pub fn new(
+        writeback_delay_ns: u64,
+        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    ) -> Self {
         let (task_tx, task_rx) = unbounded();
         let (completion_tx, completion_rx) = unbounded();
 
@@ -71,6 +76,9 @@ impl<
             propagation_stats: PropagationStatistics::new(),
             config,
             worker_health: std::sync::atomic::AtomicU32::new(WorkerHealth::Healthy as u32),
+            hot_tier_coordinator,
+            warm_tier_coordinator,
+            cold_tier_coordinator,
         }
     }
 
@@ -185,30 +193,15 @@ impl<
         let write_result = match request.target_tier {
             CacheTier::Hot => {
                 // Write to hot tier using SIMD-optimized crossbeam messaging
-                crate::cache::tier::hot::thread_local::simd_hot_put(cache_key, cache_value)
+                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value)
             }
             CacheTier::Warm => {
                 // Write to warm tier using balanced crossbeam messaging
-                crate::cache::tier::warm::global_api::warm_put(cache_key, cache_value)
+                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value)
             }
             CacheTier::Cold => {
-                // Write to cold tier using coordinator crossbeam pattern
-                use crate::cache::tier::cold::ColdTierCoordinator;
-
-                // Clone for closure since ownership is required by crossbeam channel
-                let key_for_cold = cache_key.clone();
-                let value_for_cold = cache_value.clone();
-
-                match ColdTierCoordinator::get() {
-                    Ok(coordinator) => {
-                        coordinator.execute_operation::<K, V, (), _>(move |tier| {
-                            // Perform put operation on the cold tier
-                            tier.put(key_for_cold, value_for_cold)?;
-                            Ok(())
-                        })
-                    }
-                    Err(e) => Err(e),
-                }
+                // Write to cold tier using insert_demoted function
+                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key, cache_value)
             }
         };
 

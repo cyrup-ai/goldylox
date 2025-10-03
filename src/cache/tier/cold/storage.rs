@@ -9,10 +9,11 @@
 use std::fs::{File, OpenOptions};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crossbeam_channel::{Sender, bounded};
 use log;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
@@ -21,6 +22,7 @@ use dashmap::DashMap;
 use crate::cache::traits::CompressionAlgorithm;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
+use crate::cache::types::statistics::atomic_stats::AtomicTierStats;
 
 /// Cold tier cache entry metadata
 #[derive(Debug, Clone)]
@@ -94,23 +96,13 @@ pub struct ColdTierCache<K: CacheKey, V: CacheValue> {
     pub compression_algorithm: CompressionAlgorithm,
     /// Serialization engine for coordinated cache operations
     pub serialization_engine: crate::cache::tier::cold::serialization::config::SerializationEngine,
+    /// Per-instance atomic statistics (replaces global statics)
+    pub statistics: Arc<AtomicTierStats>,
     /// Phantom data to maintain type parameter
     _phantom: PhantomData<V>,
 }
 
-/// Global cold tier statistics
-#[allow(dead_code)] // Cold tier - global hit tracking for performance analysis
-pub static COLD_HITS: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)] // Cold tier - global miss tracking for performance analysis  
-pub static COLD_MISSES: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)] // Cold tier - global write tracking for I/O analysis
-pub static COLD_WRITES: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)] // Cold tier - global read tracking for I/O analysis
-pub static COLD_READS: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)] // Cold tier - global entry count for capacity analysis
-pub static COLD_ENTRIES: AtomicUsize = AtomicUsize::new(0);
-#[allow(dead_code)] // Cold tier - global storage tracking for disk usage analysis
-pub static COLD_STORAGE_BYTES: AtomicU64 = AtomicU64::new(0);
+
 
 impl<
     K: CacheKey + bincode::Encode,
@@ -221,6 +213,7 @@ impl<
             write_offset: AtomicU64::new(0),
             compression_algorithm,
             serialization_engine,
+            statistics: Arc::new(AtomicTierStats::new()),
             _phantom: PhantomData,
         };
 
@@ -242,17 +235,17 @@ impl<
                 let entry = entry_ref.value().clone();
                 match self.read_data_from_file(&entry) {
                     Ok(value) => {
-                        Self::record_hit();
+                        self.record_hit();
                         Ok(Some(value))
                     }
                     Err(e) => {
-                        Self::record_miss();
+                        self.record_miss();
                         Err(e)
                     }
                 }
             }
             None => {
-                Self::record_miss();
+                self.record_miss();
                 Ok(None)
             }
         }
@@ -364,7 +357,7 @@ impl<
         self.index.insert(key, entry);
 
         // Record write statistics
-        Self::record_write(data_size);
+        self.record_write(data_size);
 
         Ok(())
     }
@@ -551,12 +544,12 @@ impl<
 
     /// Get cache statistics
     pub fn get_stats(&self) -> Result<ColdTierStats, CacheOperationError> {
-        let index = &self.index;
+        let snapshot = self.statistics.snapshot();
         Ok(ColdTierStats {
-            hits: COLD_HITS.load(Ordering::Relaxed),
-            misses: COLD_MISSES.load(Ordering::Relaxed),
-            entries: index.len(),
-            storage_bytes: COLD_STORAGE_BYTES.load(Ordering::Relaxed),
+            hits: snapshot.hits,
+            misses: snapshot.misses,
+            entries: self.index.len(),
+            storage_bytes: snapshot.memory_usage as u64,
         })
     }
 
@@ -596,8 +589,7 @@ impl<
             .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
 
         self.write_offset.store(0, Ordering::Relaxed);
-        COLD_ENTRIES.store(0, Ordering::Relaxed);
-        COLD_STORAGE_BYTES.store(0, Ordering::Relaxed);
+        self.statistics.reset();
 
         Ok(())
     }
@@ -718,6 +710,7 @@ impl<
             write_offset: AtomicU64::new(0),
             compression_algorithm,
             serialization_engine,
+            statistics: Arc::new(AtomicTierStats::new()),
             _phantom: PhantomData,
         };
 
@@ -726,11 +719,12 @@ impl<
 
     /// Get cache statistics
     pub fn stats(&self) -> ColdTierStats {
+        let snapshot = self.statistics.snapshot();
         ColdTierStats {
-            hits: COLD_HITS.load(Ordering::Relaxed),
-            misses: COLD_MISSES.load(Ordering::Relaxed),
-            entries: COLD_ENTRIES.load(Ordering::Relaxed),
-            storage_bytes: COLD_STORAGE_BYTES.load(Ordering::Relaxed),
+            hits: snapshot.hits,
+            misses: snapshot.misses,
+            entries: snapshot.entry_count,
+            storage_bytes: snapshot.memory_usage as u64,
         }
     }
 }
@@ -738,29 +732,27 @@ impl<
 // Basic impl block for utility methods that don't require complex trait bounds
 impl<K: CacheKey, V: CacheValue> ColdTierCache<K, V> {
     /// Record cache hit
-    pub fn record_hit() {
-        COLD_HITS.fetch_add(1, Ordering::Relaxed);
-        COLD_READS.fetch_add(1, Ordering::Relaxed);
+    pub fn record_hit(&self) {
+        self.statistics.record_hit(0);
     }
 
     /// Record cache miss
-    pub fn record_miss() {
-        COLD_MISSES.fetch_add(1, Ordering::Relaxed);
+    pub fn record_miss(&self) {
+        self.statistics.record_miss(0);
     }
 
     /// Record cache write
-    pub fn record_write(size: u32) {
-        COLD_WRITES.fetch_add(1, Ordering::Relaxed);
-        COLD_ENTRIES.fetch_add(1, Ordering::Relaxed);
-        COLD_STORAGE_BYTES.fetch_add(size as u64, Ordering::Relaxed);
+    pub fn record_write(&self, size: u32) {
+        self.statistics.update_entry_count(1);
+        self.statistics.update_memory_usage(size as i64);
     }
 
     /// Remove entry from cache
     pub fn remove(&self, key: &K) -> Result<bool, CacheOperationError> {
         let index = &self.index;
         if let Some((_key, entry)) = index.remove(key) {
-            COLD_ENTRIES.fetch_sub(1, Ordering::Relaxed);
-            COLD_STORAGE_BYTES.fetch_sub(entry.data_size as u64, Ordering::Relaxed);
+            self.statistics.update_entry_count(-1);
+            self.statistics.update_memory_usage(-(entry.data_size as i64));
             Ok(true)
         } else {
             Ok(false)

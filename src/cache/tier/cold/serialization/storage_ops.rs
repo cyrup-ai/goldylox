@@ -71,7 +71,7 @@ impl<
         self.index.insert(key, entry);
 
         // Record write statistics like storage.rs put() method
-        Self::record_write(data_size);
+        self.record_write(data_size);
 
         Ok(())
     }
@@ -85,7 +85,7 @@ impl<
         let entry = match self.index.get(key) {
             Some(entry_ref) => entry_ref.value().clone(),
             None => {
-                Self::record_miss();
+                self.record_miss();
                 return Ok(None);
             }
         };
@@ -135,11 +135,11 @@ impl<
 
         match deserialize_cache_value::<V>(payload, compression_algo)? {
             Some(value) => {
-                Self::record_hit();
+                self.record_hit();
                 Ok(Some(value))
             }
             None => {
-                Self::record_miss();
+                self.record_miss();
                 Err(CacheOperationError::serialization_failed(
                     "Deserialization returned None",
                 ))

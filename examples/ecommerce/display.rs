@@ -4,7 +4,6 @@
 //! and final results from the e-commerce workload.
 
 use crate::ecommerce::types::*;
-use goldylox::should_promote_to_warm;
 
 /// Display REAL cache statistics from actual operations
 pub fn display_cache_stats(workload: &WorkloadState) {
@@ -100,13 +99,5 @@ pub fn display_final_results(workload: &WorkloadState) {
         // Display maintenance configuration information
         let maintenance_config = node.analytics_cache.get_maintenance_config_info();
         println!("      ⚙️  Maintenance Config: {}", maintenance_config);
-
-        // Test cold tier promotion logic (call unused function to make it used)
-        let sample_key = "promotion_test";
-        if should_promote_to_warm::<String, String>(&sample_key.to_string()) {
-            println!("      🔥 Sample key would be promoted from cold to warm tier");
-        } else {
-            println!("      ❄️  Sample key would remain in cold tier");
-        }
     }
 }

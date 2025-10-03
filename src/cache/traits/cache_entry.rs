@@ -289,6 +289,24 @@ impl Default for CacheEntryMetadata {
     }
 }
 
+/// Parameters for recording cache access events
+pub struct AccessRecordParams<'a, K: CacheKey> {
+    /// Key being accessed
+    pub key: &'a K,
+    /// Cache tier where access occurred
+    pub tier: CacheTier,
+    /// Size of the entry in bytes
+    pub entry_size: usize,
+    /// Type of access operation
+    pub access_type: AccessType,
+    /// Access latency in nanoseconds
+    pub latency_ns: u64,
+    /// Whether the access was a hit
+    pub hit: bool,
+    /// Event counter for generating unique event IDs
+    pub event_counter: &'a std::sync::atomic::AtomicU64,
+}
+
 /// Sophisticated access pattern tracker for cache intelligence
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode)]
 #[serde(default)]
@@ -335,19 +353,17 @@ impl<K: CacheKey> AccessTracker<K> {
     }
 
     /// Record new access event and update statistics
-    pub fn record_access(
-        &mut self,
-        key: &K,
-        tier: CacheTier,
-        entry_size: usize,
-        access_type: AccessType,
-        latency_ns: u64,
-        hit: bool,
-    ) {
+    pub fn record_access(&mut self, params: AccessRecordParams<K>) {
         // Use proper AccessEvent constructor that handles event_id generation
-        let mut event = AccessEvent::new(key.clone(), access_type, tier, hit);
-        event.latency_ns = latency_ns;
-        event.entry_size = entry_size;
+        let mut event = AccessEvent::new(
+            params.key.clone(),
+            params.access_type,
+            params.tier,
+            params.hit,
+            params.event_counter,
+        );
+        event.latency_ns = params.latency_ns;
+        event.entry_size = params.entry_size;
 
         // Update frequency estimate using exponential moving average
         let time_delta = if let Some(last_event) = self.access_history.back() {
@@ -771,7 +787,13 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
     }
 
     /// Record access to this cache entry
-    pub fn record_access(&mut self, access_type: AccessType, latency_ns: u64, hit: bool) {
+    pub fn record_access(
+        &mut self,
+        access_type: AccessType,
+        latency_ns: u64,
+        hit: bool,
+        event_counter: &std::sync::atomic::AtomicU64,
+    ) {
         // Update metadata with coherence integration
         self.metadata.access_count.fetch_add(1, Ordering::Relaxed);
         self.metadata.last_accessed_ns = std::time::SystemTime::now()
@@ -789,14 +811,15 @@ impl<K: CacheKey, V: CacheValue> CacheEntry<K, V> {
         );
 
         // Update access tracker with sophisticated analysis
-        self.access_tracker.record_access(
-            &self.key,
-            self.tier_info.current_tier.into(),
-            self.metadata.size_bytes,
+        self.access_tracker.record_access(AccessRecordParams {
+            key: &self.key,
+            tier: self.tier_info.current_tier.into(),
+            entry_size: self.metadata.size_bytes,
             access_type,
             latency_ns,
             hit,
-        );
+            event_counter,
+        });
 
         // Update promotion score based on access patterns
         self.update_promotion_score();
@@ -955,17 +978,22 @@ impl<
 > CacheEntry<K, V>
 {
     /// Create new cache entry with coherence tracking enabled
-    pub fn coherence_aware_new(key: K, value: V, initial_tier: TierLocation) -> Self {
+    pub fn coherence_aware_new(
+        key: K,
+        value: V,
+        initial_tier: TierLocation,
+        request_id_counter: &std::sync::atomic::AtomicU64,
+        channel_map: &std::sync::Arc<std::sync::RwLock<
+            std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
+        >>,
+    ) -> Self {
         let entry = Self::new(key, value, initial_tier);
 
         // Record access via crossbeam messaging to coherence worker
         if let Some((sender, _receiver)) =
-            crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>()
+            crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>(channel_map)
         {
-            // Request ID generator for coherence requests
-            static REQUEST_ID_COUNTER: std::sync::atomic::AtomicU64 =
-                std::sync::atomic::AtomicU64::new(1);
-            let request_id = REQUEST_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let request_id = request_id_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             let access_type = match initial_tier {
                 TierLocation::Hot => crate::cache::traits::types_and_enums::AccessType::Write,
@@ -1003,6 +1031,11 @@ impl<
         access_type: AccessType,
         latency_ns: u64,
         hit: bool,
+        event_counter: &std::sync::atomic::AtomicU64,
+        request_id_counter: &std::sync::atomic::AtomicU64,
+        channel_map: &std::sync::Arc<std::sync::RwLock<
+            std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
+        >>,
     ) {
         // Update metadata first
         self.metadata
@@ -1016,19 +1049,16 @@ impl<
         // Coherence coordination via crossbeam messaging to dedicated coherence workers
         use crate::cache::coherence::worker::message_types::{CoherenceRequest, CoherenceResponse};
         use crossbeam_channel::TrySendError;
-        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        use std::sync::atomic::Ordering as AtomicOrdering;
         use std::time::Duration;
 
-        // Request ID generator for coherence requests
-        static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-        // Get global coherence worker channel from worker manager
+        // Get per-instance coherence worker channel from worker manager
         if let Some((request_sender, response_receiver)) =
-            crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>()
+            crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>(channel_map)
         {
             // Convert tier for coherence protocol
             let requesting_tier = self.tier_info.current_tier.into();
-            let request_id = REQUEST_ID_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+            let request_id = request_id_counter.fetch_add(1, AtomicOrdering::Relaxed);
 
             // Create appropriate coherence request based on access type
             let request = match access_type {
@@ -1124,14 +1154,15 @@ impl<
         }
 
         // Update access tracker with sophisticated analysis
-        self.access_tracker.record_access(
-            &self.key,
-            self.tier_info.current_tier.into(),
-            self.metadata.size_bytes,
+        self.access_tracker.record_access(AccessRecordParams {
+            key: &self.key,
+            tier: self.tier_info.current_tier.into(),
+            entry_size: self.metadata.size_bytes,
             access_type,
             latency_ns,
             hit,
-        );
+            event_counter,
+        });
 
         // Update promotion score based on access patterns
         self.update_promotion_score();
