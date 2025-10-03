@@ -25,6 +25,7 @@ Pipfile.lock
 ./.crates-lsp/*
 **/.crates-lsp/*
 **/.claude/*
+cache/*
 
 # ==============================
 # Rust Specific
