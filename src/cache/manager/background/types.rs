@@ -382,15 +382,15 @@ pub struct MaintenanceScheduler<
     /// Hot tier coordinator for tier operations
     #[allow(dead_code)]
     // Background workers - coordinator for hot tier operations
-    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    pub hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
     /// Warm tier coordinator for tier operations
     #[allow(dead_code)]
     // Background workers - coordinator for warm tier operations
-    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    pub warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
     /// Cold tier coordinator for tier operations
     #[allow(dead_code)]
     // Background workers - coordinator for cold tier operations
-    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    pub cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     /// Per-instance worker registry for status tracking and monitoring
     pub worker_registry: std::sync::Arc<dashmap::DashMap<u32, super::worker_state::WorkerStatusChannel>>,
     /// Phantom data for generic parameters
@@ -405,9 +405,9 @@ pub struct MaintenanceScheduler<
 pub struct WorkerContext {
     pub unified_stats: std::sync::Arc<crate::telemetry::unified_stats::UnifiedCacheStatistics>,
     pub coherence_stats: std::sync::Arc<crate::cache::coherence::statistics::core_statistics::CoherenceStatistics>,
-    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
-    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
-    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    pub hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+    pub warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+    pub cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     pub worker_registry: std::sync::Arc<dashmap::DashMap<u32, super::worker_state::WorkerStatusChannel>>,
     /// Per-instance scaling request sender for dynamic worker management
     pub scaling_sender: crossbeam_channel::Sender<ScalingRequest>,

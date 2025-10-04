@@ -15,7 +15,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 pub fn process_task(
     task: MaintenanceTask, 
     stat_sender: &Sender<StatUpdate>,
-    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
+    cold_tier_coordinator: &crate::cache::tier::cold::ColdTierCoordinator
 ) {
     match task {
         MaintenanceTask::CleanupExpired { ttl, batch_size } => {
@@ -75,7 +75,7 @@ pub fn process_task(
 /// Perform periodic maintenance tasks using canonical tasks
 pub fn perform_periodic_maintenance(
     stat_sender: &Sender<StatUpdate>,
-    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
+    cold_tier_coordinator: &crate::cache::tier::cold::ColdTierCoordinator
 ) {
     // Check for entries that need promotion/demotion
     super::tier_transitions::check_tier_transitions(stat_sender);
@@ -95,7 +95,7 @@ pub fn perform_periodic_maintenance(
 /// Compact cold tier storage using per-instance ColdTierCoordinator
 fn compact_cold_tier(
     stat_sender: &Sender<StatUpdate>,
-    cold_tier_coordinator: &std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>
+    cold_tier_coordinator: &crate::cache::tier::cold::ColdTierCoordinator
 ) {
     use crate::cache::tier::cold::MaintenanceOperation;
     

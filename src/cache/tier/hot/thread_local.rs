@@ -143,10 +143,19 @@ impl<K: CacheKey, V: CacheValue> HotTierOperations for HotTierHandle<K, V> {
 
 /// Global hot tier coordinator for type-safe cache operations
 pub struct HotTierCoordinator {
-    /// Storage for different K,V type combinations using DashMap
-    pub(crate) hot_tiers: DashMap<(TypeId, TypeId), Box<dyn HotTierOperations>>,
+    /// Storage for different K,V type combinations using DashMap (Arc-wrapped for cloning)
+    pub(crate) hot_tiers: std::sync::Arc<DashMap<(TypeId, TypeId), Box<dyn HotTierOperations>>>,
     /// Instance counter for load balancing
     pub(crate) instance_selector: AtomicUsize,
+}
+
+impl Clone for HotTierCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            hot_tiers: self.hot_tiers.clone(), // Arc clone is cheap
+            instance_selector: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl std::fmt::Debug for HotTierCoordinator {

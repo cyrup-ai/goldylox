@@ -164,6 +164,14 @@ pub struct ColdTierCoordinator {
     sender: Sender<ColdTierMessage>,
 }
 
+impl Clone for ColdTierCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+        }
+    }
+}
+
 impl ColdTierCoordinator {
     /// Get the sender channel for direct message sending
     pub fn sender(&self) -> &Sender<ColdTierMessage> {

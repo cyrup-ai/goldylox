@@ -497,10 +497,10 @@ impl UnifiedCacheStatistics {
         use crate::cache::tier::warm::global_api;
 
         // Create placeholder coordinator for stats (legacy code)
-        let warm_coord = std::sync::Arc::new(crate::cache::tier::warm::global_api::WarmTierCoordinator {
-            warm_tiers: dashmap::DashMap::new(),
+        let warm_coord = crate::cache::tier::warm::global_api::WarmTierCoordinator {
+            warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
             instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        });
+        };
         
         // Use the sophisticated warm tier infrastructure with worker-based routing
         match global_api::get_stats::<String, Vec<u8>>(&warm_coord) {

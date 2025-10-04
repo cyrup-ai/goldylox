@@ -239,7 +239,7 @@ pub struct FlushStatistics {
 impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     pub fn new(
         config: &CacheConfig,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<Self, CacheOperationError> {
         let (sender, receiver) = bounded(8192);
         let (backing_store_sender, backing_store_worker) =
@@ -262,7 +262,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     /// Spawn dedicated backing store worker that OWNS storage resources
     fn spawn_backing_store_worker(
         config: &CacheConfig,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<
         (
             Sender<BackingStoreOperation<K>>,

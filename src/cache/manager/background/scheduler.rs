@@ -42,9 +42,9 @@ where
         config: MaintenanceConfig,
         unified_stats: std::sync::Arc<crate::telemetry::unified_stats::UnifiedCacheStatistics>,
         coherence_stats: std::sync::Arc<crate::cache::coherence::statistics::core_statistics::CoherenceStatistics>,
-        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
-        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+        warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
         pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
     ) -> Result<Self, CacheOperationError> {
         let (task_sender, task_queue) = if config.queue_capacity > 0 {

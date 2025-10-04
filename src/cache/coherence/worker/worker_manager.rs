@@ -60,9 +60,9 @@ pub struct CoherenceWorkerManager<
         + serde::de::DeserializeOwned,
 > {
     config: ProtocolConfiguration,
-    hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
-    warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
-    cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+    warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+    cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     worker_handle: Option<JoinHandle<()>>,
     _phantom: PhantomData<(K, V)>,
 }
@@ -87,9 +87,9 @@ impl<
     /// Create new worker manager
     pub fn new(
         config: ProtocolConfiguration,
-        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
-        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+        warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<Self, CoherenceError> {
         Ok(Self {
             config,

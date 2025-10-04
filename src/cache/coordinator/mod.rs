@@ -24,6 +24,7 @@
 pub mod strategy_selector;
 pub mod tier_operations;
 pub mod unified_manager;
+pub mod unified_manager_allocation;
 
 // REMOVED: Compatibility re-exports that hide canonical API paths
 // These re-exports allowed broken code to import via coordinator:: instead of specific modules

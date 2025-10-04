@@ -160,10 +160,19 @@ pub enum WarmCacheRequest<K: CacheKey, V: CacheValue> {
 
 /// Global warm tier coordinator for type-safe cache operations
 pub struct WarmTierCoordinator {
-    /// Storage for different K,V type combinations using lock-free DashMap
-    pub(crate) warm_tiers: DashMap<(TypeId, TypeId), Box<dyn WarmTierOperations>>,
+    /// Storage for different K,V type combinations using lock-free DashMap (Arc-wrapped for cloning)
+    pub(crate) warm_tiers: std::sync::Arc<DashMap<(TypeId, TypeId), Box<dyn WarmTierOperations>>>,
     /// Instance counter for load balancing (if we add multiple instances later)
     pub(crate) instance_selector: AtomicUsize,
+}
+
+impl Clone for WarmTierCoordinator {
+    fn clone(&self) -> Self {
+        Self {
+            warm_tiers: self.warm_tiers.clone(), // Arc clone is cheap
+            instance_selector: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl std::fmt::Debug for WarmTierCoordinator {

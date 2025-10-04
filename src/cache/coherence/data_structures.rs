@@ -37,11 +37,11 @@ pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     /// Write propagation system
     pub write_propagation: super::write_propagation::WritePropagationSystem<K, V>,
     /// Hot tier coordinator for tier operations
-    pub hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
+    pub hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
     /// Warm tier coordinator for tier operations
-    pub warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    pub warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
     /// Cold tier coordinator for tier operations  
-    pub cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    pub cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
 }
 
 /// Cache line state with MESI protocol tracking
@@ -390,9 +390,9 @@ impl<
     /// This constructor is pub(crate) to prevent external shared access
     pub(crate) fn new(
         config: ProtocolConfiguration,
-        hot_tier_coordinator: std::sync::Arc<crate::cache::tier::hot::thread_local::HotTierCoordinator>,
-        warm_tier_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+        warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Self {
         Self {
             cache_line_states: SkipMap::new(),

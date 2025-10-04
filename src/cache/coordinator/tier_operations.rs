@@ -4,7 +4,6 @@
 //! and replication logic for the unified cache system.
 
 use crate::cache::analyzer::types::AccessPattern;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cache::coherence::data_structures::{
@@ -35,15 +34,15 @@ pub struct TierOperations<
     
     /// Per-instance hot tier coordinator (injected from UnifiedCacheManager)
     /// Manages type-erased hot tier instances and load balancing
-    hot_tier_coordinator: Arc<HotTierCoordinator>,
+    hot_tier_coordinator: HotTierCoordinator,
     
     /// Per-instance warm tier coordinator (injected from UnifiedCacheManager)
     /// Manages ML-driven warm tier instances
-    warm_tier_coordinator: Arc<WarmTierCoordinator>,
+    warm_tier_coordinator: WarmTierCoordinator,
     
     /// Per-instance cold tier coordinator (injected from UnifiedCacheManager)
     /// Manages cold tier service channel communication
-    cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
 }
 
 impl<
@@ -59,9 +58,9 @@ impl<
 {
     /// Create tier operations with injected coordinators (per-instance pattern)
     pub fn new_with_coordinators(
-        hot_tier_coordinator: Arc<HotTierCoordinator>,
-        warm_tier_coordinator: Arc<WarmTierCoordinator>,
-        cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        hot_tier_coordinator: HotTierCoordinator,
+        warm_tier_coordinator: WarmTierCoordinator,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<Self, CacheOperationError> {
         Ok(Self {
             coherence_controller: CoherenceController::new(

@@ -50,7 +50,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode, V: CacheValue> CachePoli
     pub fn new(
         config: &CacheConfig,
         initial_policy: PolicyType,
-        cold_tier_coordinator: std::sync::Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<Self, CacheOperationError> {
         let pattern_analyzer =
             AccessPatternAnalyzer::new(config.analyzer.clone()).map_err(|e| {

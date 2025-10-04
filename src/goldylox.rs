@@ -126,7 +126,6 @@ pub struct MaintenanceBreakdown {
 ///
 /// Users specify both key and value types for full type safety and direct access
 /// to all sophisticated cache features: ML eviction, SIMD optimization, coherence protocols.
-#[derive(Clone)]
 pub struct Goldylox<K, V>
 where
     K: Serialize
@@ -142,8 +141,30 @@ where
         + 'static,
     V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
 {
-    // Direct connection to sophisticated UnifiedCacheManager with all advanced features
-    manager: UnifiedCacheManager<SerdeCacheKey<K>, SerdeCacheValue<V>>,
+    // Arc-wrapped manager for cheap cloning without spawning new threads
+    manager: std::sync::Arc<UnifiedCacheManager<SerdeCacheKey<K>, SerdeCacheValue<V>>>,
+}
+
+impl<K, V> Clone for Goldylox<K, V>
+where
+    K: Serialize
+        + DeserializeOwned
+        + Clone
+        + Hash
+        + Eq
+        + Ord
+        + Send
+        + Sync
+        + Debug
+        + Default
+        + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            manager: self.manager.clone(), // Just Arc clone - cheap!
+        }
+    }
 }
 
 impl<K, V> Goldylox<K, V>
@@ -865,11 +886,15 @@ where
     ///
     /// This initializes all cache tiers, crossbeam channels, workers, etc.
     /// All complex initialization is handled by UnifiedCacheManager.
+    /// Spawns ~18-24 background worker threads.
     pub fn build(self) -> Result<Goldylox<K, V>, CacheOperationError> {
         // Delegate all complex initialization to UnifiedCacheManager
         let manager = UnifiedCacheManager::new(self.config)?;
 
-        Ok(Goldylox { manager })
+        // Arc-wrap for cheap cloning without spawning new threads
+        Ok(Goldylox { 
+            manager: std::sync::Arc::new(manager)
+        })
     }
 }
 

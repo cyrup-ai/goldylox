@@ -295,11 +295,20 @@ impl<
     #[allow(dead_code)] // Memory management - new used in allocation manager initialization
     pub fn new(
         config: &CacheConfig,
-        pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
-    ) -> Result<Self, CacheOperationError> {
+    ) -> Result<(Self, std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>), CacheOperationError> {
         // Create channels for background services
         let (efficiency_sender, efficiency_receiver) = bounded(256);
         let (maintenance_sender, maintenance_receiver) = bounded(256);
+
+        // Create pool cleanup channel and coordinator BEFORE spawning workers
+        let (pool_cleanup_sender, pool_cleanup_receiver) = bounded::<PoolCleanupRequest>(256);
+        
+        // Create the actual pool coordinator with the real cleanup sender
+        let pool_coordinator = std::sync::Arc::new(
+            crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator::new(
+                pool_cleanup_sender.clone()
+            )
+        );
 
         // Spawn efficiency analyzer worker
         let config_clone = config.clone();
@@ -322,32 +331,30 @@ impl<
             .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
 
         // Spawn maintenance scheduler worker
+        let pool_coord_clone = pool_coordinator.clone();
         std::thread::Builder::new()
             .name("maintenance-scheduler".to_string())
             .spawn(move || {
                 let unified_stats_arc = std::sync::Arc::new(crate::telemetry::unified_stats::UnifiedCacheStatistics::new());
                 let coherence_stats_arc = std::sync::Arc::new(crate::cache::coherence::statistics::core_statistics::CoherenceStatistics::new());
                 // Create placeholder coordinators for this maintenance scheduler
-                let hot_coord = std::sync::Arc::new(crate::cache::tier::hot::thread_local::HotTierCoordinator {
-                    hot_tiers: dashmap::DashMap::new(),
+                let hot_coord = crate::cache::tier::hot::thread_local::HotTierCoordinator {
+                    hot_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
                     instance_selector: std::sync::atomic::AtomicUsize::new(0),
-                });
-                let warm_coord = std::sync::Arc::new(crate::cache::tier::warm::global_api::WarmTierCoordinator {
-                    warm_tiers: dashmap::DashMap::new(),
+                };
+                let warm_coord = crate::cache::tier::warm::global_api::WarmTierCoordinator {
+                    warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
                     instance_selector: std::sync::atomic::AtomicUsize::new(0),
-                });
+                };
                 let cold_coord = match crate::cache::tier::cold::ColdTierCoordinator::new() {
-                    Ok(c) => std::sync::Arc::new(c),
+                    Ok(c) => c,
                     Err(e) => {
                         log::error!("Failed to create cold tier coordinator: {:?}", e);
                         return;
                     }
                 };
-                // Create placeholder pool coordinator for this worker's scheduler
-                let (dummy_pool_sender, _dummy_pool_receiver) = crossbeam_channel::bounded(1);
-                let pool_coord = std::sync::Arc::new(crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator::new(dummy_pool_sender));
                 
-                let scheduler = match MaintenanceScheduler::<K, V>::new(MaintenanceConfig::default(), unified_stats_arc, coherence_stats_arc, hot_coord, warm_coord, cold_coord, pool_coord) {
+                let scheduler = match MaintenanceScheduler::<K, V>::new(MaintenanceConfig::default(), unified_stats_arc, coherence_stats_arc, hot_coord, warm_coord, cold_coord, pool_coord_clone) {
                     Ok(s) => s,
                     Err(e) => {
                         log::error!("Maintenance scheduler failed to start: {:?}", e);
@@ -369,16 +376,6 @@ impl<
         // Create pool manager
         let pool_manager = MemoryPoolManager::new(config)?;
 
-        // Create pool cleanup channel
-        let (pool_cleanup_sender, pool_cleanup_receiver) = bounded::<PoolCleanupRequest>(256);
-
-        // Create the actual pool coordinator with the real cleanup sender
-        let pool_coordinator = std::sync::Arc::new(
-            crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator::new(
-                pool_cleanup_sender.clone()
-            )
-        );
-
         // Clone pool manager for worker ownership
         let worker_pool_manager = pool_manager.clone();
 
@@ -394,7 +391,7 @@ impl<
             })
             .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
 
-        Ok(Self {
+        let manager = Self {
             pool_manager,
             cleanup_manager,
             error_recovery: ErrorRecoverySystem::new(),
@@ -404,9 +401,11 @@ impl<
                     .max_memory_usage
                     .unwrap_or(1024 * 1024 * 1024),
             ),
-            pool_coordinator,
+            pool_coordinator: pool_coordinator.clone(),
             _phantom: std::marker::PhantomData,
-        })
+        };
+
+        Ok((manager, pool_coordinator))
     }
 
     /// Allocate memory with optimal pool selection
