@@ -459,7 +459,7 @@ impl<
         let worker_config = prefetch_config.clone();
         let task_coordinator_clone = task_coordinator.clone(); // Arc::clone is cheap
 
-        tokio::spawn(async move {
+        tokio::runtime::Handle::current().spawn(async move {
             let worker = PrefetchWorker::new(prefetch_receiver, worker_config);
             worker.run(task_coordinator_clone).await;
         });

@@ -190,7 +190,7 @@ impl HotTierCoordinator {
         let (sender, mut receiver) = mpsc::unbounded_channel::<CacheRequest<K, V>>();
 
         // Spawn background task to handle tier operations - tier OWNS the data
-        tokio::spawn(async move {
+        tokio::runtime::Handle::current().spawn(async move {
             while let Some(request) = receiver.recv().await {
                 match request {
                     CacheRequest::Get { key, response } => {

@@ -78,7 +78,7 @@ impl CacheMaintenanceWorker {
         stat_sender: Sender<StatUpdate>,
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
+        tokio::runtime::Handle::current().spawn(async move {
             // SAFETY: The shutdown flag lives as long as the CacheMaintenanceWorker
             // and we only read from it. The worker thread is joined before Drop.
             let shutdown = unsafe { &*shutdown_ptr };

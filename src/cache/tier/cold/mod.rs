@@ -183,7 +183,7 @@ impl ColdTierCoordinator {
         let (tx, rx) = mpsc::unbounded_channel();
 
         // Spawn PER-INSTANCE async worker (like PrefetchWorker pattern)
-        tokio::spawn(async move {
+        tokio::runtime::Handle::current().spawn(async move {
             log::info!("Cold tier service task started");
             let service = ColdTierService { receiver: rx };
             service.run().await;
