@@ -165,6 +165,53 @@ impl StorageManager {
         Ok(())
     }
 
+    /// Synchronous shutdown - flush both data and index files to disk
+    /// Called from blocking worker thread context (no spawn_blocking needed)
+    /// This is the primary shutdown method for the sync/crossbeam architecture
+    pub fn shutdown_sync(&self) -> io::Result<()> {
+        // Sync data file
+        if let Some(ref mmap) = self.data_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.data_handle {
+            handle.sync_all()?;
+        }
+        
+        // Sync index file
+        if let Some(ref mmap) = self.index_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.index_handle {
+            handle.sync_all()?;
+        }
+        
+        Ok(())
+    }
+
+    /// Synchronous data file sync - flush data mmap and file handle
+    /// Direct flush calls are safe in worker thread context
+    pub fn sync_data_sync(&self) -> io::Result<()> {
+        if let Some(ref mmap) = self.data_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.data_handle {
+            handle.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Synchronous index file sync - flush index mmap and file handle
+    /// Direct flush calls are safe in worker thread context
+    pub fn sync_index_sync(&self) -> io::Result<()> {
+        if let Some(ref mmap) = self.index_file {
+            mmap.flush()?;
+        }
+        if let Some(ref handle) = self.index_handle {
+            handle.sync_all()?;
+        }
+        Ok(())
+    }
+
     /// Get available space in data file
     pub fn available_space(&self) -> u64 {
         let current_pos = self.write_position.load(Ordering::Relaxed);
