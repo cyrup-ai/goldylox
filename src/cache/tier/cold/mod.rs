@@ -7,7 +7,7 @@
 //! lock-free message passing architecture for thread safety.
 
 use bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
-use crossbeam_channel::{unbounded, Sender, Receiver};
+use tokio::sync::{mpsc, oneshot};
 use std::any::TypeId;
 
 use self::data_structures::{ColdCacheKey, PersistentColdTier};
@@ -51,31 +51,31 @@ pub enum ColdTierMessage {
     Register {
         type_key: (TypeId, TypeId),
         tier: Box<dyn std::any::Any + Send + Sync>,
-        response: Sender<Result<(), CacheOperationError>>,
+        response: oneshot::Sender<Result<(), CacheOperationError>>,
     },
     ExecuteOp {
         type_key: (TypeId, TypeId),
         op: MutateOperation,
-        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+        response: oneshot::Sender<Result<Vec<u8>, CacheOperationError>>,
     },
     ExecuteReadOp {
         type_key: (TypeId, TypeId),
         op: ReadOperation,
-        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+        response: oneshot::Sender<Result<Vec<u8>, CacheOperationError>>,
     },
     Maintenance {
         operation: MaintenanceOperation,
-        response: Sender<Result<(), CacheOperationError>>,
+        response: oneshot::Sender<Result<(), CacheOperationError>>,
     },
 }
 
 /// Cold tier service that owns all state (no locks needed)
 struct ColdTierService {
-    receiver: Receiver<ColdTierMessage>,
+    receiver: mpsc::UnboundedReceiver<ColdTierMessage>,
 }
 
 impl ColdTierService {
-    fn run(self) {
+    async fn run(mut self) {
         log::info!("Cold tier service starting...");
         // Service thread owns ALL tier instances - no sharing, no locks
         let mut tiers = std::collections::HashMap::<
@@ -83,7 +83,7 @@ impl ColdTierService {
             Box<dyn std::any::Any + Send + Sync>,
         >::new();
 
-        while let Ok(msg) = self.receiver.recv() {
+        while let Some(msg) = self.receiver.recv().await {
             log::debug!("Cold tier service received message");
             match msg {
                 ColdTierMessage::Register {
@@ -161,7 +161,7 @@ impl ColdTierService {
 /// Cold tier coordinator for managing mutable operations
 #[derive(Debug)]
 pub struct ColdTierCoordinator {
-    sender: Sender<ColdTierMessage>,
+    sender: mpsc::UnboundedSender<ColdTierMessage>,
 }
 
 impl Clone for ColdTierCoordinator {
@@ -174,28 +174,22 @@ impl Clone for ColdTierCoordinator {
 
 impl ColdTierCoordinator {
     /// Get the sender channel for direct message sending
-    pub fn sender(&self) -> &Sender<ColdTierMessage> {
+    pub fn sender(&self) -> &mpsc::UnboundedSender<ColdTierMessage> {
         &self.sender
     }
 
-    /// Create new per-instance cold tier coordinator with dedicated worker thread
-    /// Uses crossbeam channels and std::thread for worker-owns-data pattern
+    /// Create new per-instance cold tier coordinator with dedicated service thread
     pub fn new() -> Result<Self, CacheOperationError> {
-        let (tx, rx) = unbounded();
-        
-        // Spawn OS thread worker (not tokio task)
-        std::thread::Builder::new()
-            .name("cold-tier-worker".to_string())
-            .spawn(move || {
-                log::info!("Cold tier worker thread started");
-                let service = ColdTierService { receiver: rx };
-                service.run(); // Blocking call
-                log::warn!("Cold tier worker thread exited");
-            })
-            .map_err(|e| CacheOperationError::initialization_failed(
-                format!("Failed to spawn cold tier worker: {}", e)
-            ))?;
-        
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Spawn PER-INSTANCE async worker (like PrefetchWorker pattern)
+        tokio::spawn(async move {
+            log::info!("Cold tier service task started");
+            let service = ColdTierService { receiver: rx };
+            service.run().await;
+            log::warn!("Cold tier service task exited");
+        });
+
         Ok(Self { sender: tx })
     }
 
@@ -327,7 +321,7 @@ impl ColdTierCoordinator {
         rx.await.map_err(|_| CacheOperationError::TimeoutError)?
     }
 
-    pub fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
+    pub async fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
     where
         K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: CacheValue
@@ -341,7 +335,7 @@ impl ColdTierCoordinator {
         R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let (tx, rx) = unbounded();
+        let (tx, rx) = oneshot::channel();
 
         let op = Box::new(move |tier_any: &mut dyn std::any::Any| -> Vec<u8> {
             if let Some(tier) = tier_any.downcast_mut::<PersistentColdTier<K, V>>() {
@@ -362,14 +356,18 @@ impl ColdTierCoordinator {
             })
             .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
 
-        // Blocking recv with timeout using crossbeam
-        let serialized = rx.recv_timeout(std::time::Duration::from_millis(50))
-            .map_err(|_| CacheOperationError::TimeoutError)??;
+        let serialized = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx
+        )
+        .await
+        .map_err(|_| CacheOperationError::TimeoutError)?
+        .map_err(|_| CacheOperationError::internal_error("Response channel closed"))??;
 
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
             .map_err(|e| CacheOperationError::internal_error(
-                format!("Cold tier operation result deserialization failed: serialized_size={}, error={:?}", 
+                format!("Cold tier operation result deserialization failed: serialized_size={}, error={:?}",
                          serialized.len(), e)
             ))
     }
@@ -421,60 +419,6 @@ impl ColdTierCoordinator {
             .map(|(decoded, _len)| decoded)
             .map_err(|e| CacheOperationError::internal_error(
                 format!("Cold tier read operation result deserialization failed: serialized_size={}, error={:?}", 
-                         serialized.len(), e)
-            ))
-    }
-
-    pub async fn execute_async_operation<K, V, R, F, Fut>(&self, operation: F) -> Result<R, CacheOperationError>
-    where
-        K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-        F: FnOnce(&mut PersistentColdTier<K, V>) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<R, CacheOperationError>> + Send + 'static,
-        R: Encode + Decode<()> + 'static,
-    {
-        let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let (tx, rx) = oneshot::channel();
-
-        let op = Box::new(move |tier_any: &mut dyn std::any::Any| -> Pin<Box<dyn Future<Output = Vec<u8>> + Send + '_>> {
-            Box::pin(async move {
-                if let Some(tier) = tier_any.downcast_mut::<PersistentColdTier<K, V>>() {
-                    match operation(tier).await {
-                        Ok(result) => encode_to_vec(&result, config::standard()).unwrap_or_default(),
-                        Err(_) => Vec::new(),
-                    }
-                } else {
-                    Vec::new()
-                }
-            })
-        });
-
-        self.sender
-            .send(ColdTierMessage::ExecuteAsyncOp {
-                type_key,
-                op,
-                response: tx,
-            })
-            .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
-
-        let serialized = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx
-        )
-        .await
-        .map_err(|_| CacheOperationError::TimeoutError)?
-        .map_err(|_| CacheOperationError::internal_error("Response channel closed"))??;
-
-        decode_from_slice(&serialized, config::standard())
-            .map(|(decoded, _len)| decoded)
-            .map_err(|e| CacheOperationError::internal_error(
-                format!("Cold tier async operation result deserialization failed: serialized_size={}, error={:?}", 
                          serialized.len(), e)
             ))
     }
@@ -884,8 +828,8 @@ pub async fn clear<
 /// Sync storage files to disk (async, non-blocking)
 /// Call this during graceful shutdown to ensure data persistence
 ///
-/// This function performs async I/O to flush memory-mapped files and sync file handles
-/// using tokio::task::spawn_blocking for safe operations on !Send types.
+/// This function uses execute_operation to send a sync request to the worker thread,
+/// which performs the actual I/O synchronously on the worker thread (off the critical path).
 pub async fn sync_storage<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
@@ -898,13 +842,11 @@ pub async fn sync_storage<
 >(
     coordinator: &ColdTierCoordinator,
 ) -> Result<(), CacheOperationError> {
-    coordinator.execute_async_operation::<K, V, (), _, _>(|tier| {
-        Box::pin(async {
-            tier.storage_manager.shutdown_async().await
-                .map_err(|e| CacheOperationError::io_failed(
-                    format!("Failed to sync storage: {}", e)
-                ))
-        })
+    coordinator.execute_operation::<K, V, (), _>(|tier| {
+        tier.storage_manager.shutdown_sync()
+            .map_err(|e| CacheOperationError::io_failed(
+                format!("Failed to sync storage: {}", e)
+            ))
     }).await
 }
 
