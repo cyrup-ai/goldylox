@@ -30,25 +30,31 @@ impl<
         let timer = PrecisionTimer::start();
         let cold_key = ColdCacheKey::from_cache_key(key);
 
+        // Access metadata index directly (worker owns the data, no locks needed)
+        let index = &self.metadata_index;
+
         // Check bloom filter first (fast negative lookup)
-        if !self.metadata_index.bloom_filter.might_contain(&cold_key) {
+        if !index.bloom_filter.might_contain(&cold_key) {
             let elapsed_ns = timer.elapsed_ns();
             self.stats.record_miss(elapsed_ns);
             return None;
         }
 
         // Lookup in metadata index
-        if let Some(index_entry) = self.metadata_index.get_entry(&cold_key) {
+        if let Some(index_entry) = index.get_entry(&cold_key) {
+            // Clone the entry before I/O operations
+            let index_entry_clone = index_entry.clone();
+
             // Read compressed data from memory-mapped file
-            match self.read_compressed_data(&index_entry) {
+            match self.read_compressed_data(&index_entry_clone) {
                 Ok(compressed_data) => {
                     // Decompress data
                     // Create CompressedData struct from raw data and metadata
                     let compressed_data_struct = CompressedData {
                         data: compressed_data,
-                        original_size: index_entry.uncompressed_size as usize,
-                        checksum: index_entry.checksum,
-                        algorithm: index_entry.compression_algo,
+                        original_size: index_entry_clone.uncompressed_size as usize,
+                        checksum: index_entry_clone.checksum,
+                        algorithm: index_entry_clone.compression_algo,
                     };
 
                     match self.compression_engine.decompress(&compressed_data_struct) {
@@ -175,9 +181,8 @@ impl<
             checksum: self.calculate_checksum(&compressed_data.data),
         };
 
-        // Update metadata index
-        self.metadata_index
-            .insert_entry(cold_key.clone(), index_entry);
+        // Update metadata index (worker owns the data, no locks needed)
+        self.metadata_index.insert_entry(cold_key.clone(), index_entry);
         self.metadata_index.bloom_filter.insert(&cold_key);
 
         // Schedule sync if needed
@@ -201,6 +206,7 @@ impl<
     pub fn remove(&mut self, key: &K) -> bool {
         let cold_key = ColdCacheKey::from_cache_key(key);
 
+        // Access metadata index directly (worker owns the data, no locks needed)
         if let Some(index_entry) = self.metadata_index.remove_entry(&cold_key) {
             // Mark space as free (actual cleanup happens during compaction)
             self.mark_space_free(index_entry.file_offset, index_entry.compressed_size);

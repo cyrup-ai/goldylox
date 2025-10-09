@@ -499,10 +499,17 @@ impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
         // Create memory monitor - cannot fail
         let memory_monitor = MemoryMonitorImpl::new(config.max_memory_bytes);
 
+        // Create eviction policy and configure it with capacity limits
+        let eviction_policy = ConcurrentEvictionPolicy::new();
+        eviction_policy.update_cache_capacity(
+            Some(config.max_entries),
+            Some(config.max_memory_bytes)
+        );
+
         Ok(Self {
             storage: SkipMap::new(),
             access_tracker: ConcurrentAccessTracker::new(),
-            eviction_policy: ConcurrentEvictionPolicy::new(),
+            eviction_policy,
             stats: AtomicTierStats::new(),
             config,
             memory_monitor,
@@ -889,6 +896,13 @@ impl<K: CacheKey, V: CacheValue + Default> LockFreeWarmTier<K, V> {
     /// Force eviction of the specified number of entries
     pub fn force_evict(&mut self, target_count: usize) -> Result<usize, CacheOperationError> {
         let mut evicted_count = 0;
+
+        // Update eviction policy with current statistics for accurate pressure calculation
+        let stats_snapshot = self.stats.snapshot();
+        self.eviction_policy.update_cache_stats(
+            stats_snapshot.entry_count,
+            self.stats.memory_usage_bytes()
+        );
 
         // Use eviction policy to select candidates
         let candidates = self

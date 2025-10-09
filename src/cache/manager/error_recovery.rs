@@ -6,6 +6,7 @@
 use crate::cache::types::statistics::multi_tier::ErrorType;
 use crate::telemetry::performance_history::PerformanceSummary;
 use crate::telemetry::types::PerformanceSample;
+use crate::cache::coherence::data_structures::CacheTier;
 // Duration removed - not needed in current implementation
 
 /// Backoff strategy for error recovery retries
@@ -92,9 +93,9 @@ impl<K, V> ErrorRecoverySystem<K, V> {
         Self {
             recovery_strategies: RecoveryStrategies::new(RecoveryConfig::default()),
             circuit_breakers: vec![
-                ComponentCircuitBreaker::new(5, 5000), // Tier 0
-                ComponentCircuitBreaker::new(5, 5000), // Tier 1
-                ComponentCircuitBreaker::new(5, 5000), // Tier 2
+                ComponentCircuitBreaker::new(5, 5000), // Tier 0 (Hot)
+                ComponentCircuitBreaker::new(5, 5000), // Tier 1 (Warm)
+                ComponentCircuitBreaker::new(5, 5000), // Tier 2 (Cold)
             ],
             _phantom: std::marker::PhantomData,
         }
@@ -183,10 +184,47 @@ impl<K, V> ErrorRecoverySystem<K, V> {
             }
             RecoveryStrategy::TierFailover => {
                 log::info!("Initiating tier failover from tier {}", tier);
-                // In real implementation, this would coordinate with tier manager
-                // For now, just record the failure and let circuit breaker handle it
-                self.circuit_breakers[tier_idx].record_failure();
-                true
+
+                // Determine failover target tier
+                let (from_tier, target_tier) = match tier {
+                    0 => (CacheTier::Hot, Some(CacheTier::Warm)),
+                    1 => (CacheTier::Warm, Some(CacheTier::Cold)),
+                    2 => {
+                        log::error!("Cannot failover from Cold tier (tier 2) - no lower tier available");
+                        self.circuit_breakers[tier_idx].record_failure();
+                        return false;
+                    }
+                    _ => {
+                        log::error!("Invalid tier index: {}", tier);
+                        return false;
+                    }
+                };
+
+                if let Some(target) = target_tier {
+                    // Record failure in circuit breaker (prevents future requests to this tier)
+                    self.circuit_breakers[tier_idx].record_failure();
+                    
+                    // Log failover event for monitoring
+                    log::warn!(
+                        "Tier failover triggered: {:?} -> {:?} (circuit breaker opened)",
+                        from_tier, target
+                    );
+                    
+                    // Mark tier as degraded in metrics
+                    self.mark_tier_degraded(from_tier);
+                    
+                    // Schedule recovery attempt after timeout period
+                    self.schedule_tier_recovery(from_tier, tier_idx);
+                    
+                    // Note: Actual operation retry happens in the caller (unified_manager.rs)
+                    // This failover just ensures the circuit breaker prevents future requests
+                    // to the failed tier until recovery completes
+                    
+                    true
+                } else {
+                    self.circuit_breakers[tier_idx].record_failure();
+                    false
+                }
             }
             RecoveryStrategy::ResourceReallocation => {
                 log::info!("Attempting resource reallocation for tier {}", tier);
@@ -203,6 +241,40 @@ impl<K, V> ErrorRecoverySystem<K, V> {
 
     pub fn get_recovery_strategies(&self) -> &RecoveryStrategies {
         &self.recovery_strategies
+    }
+
+    /// Mark tier as degraded for monitoring and metrics
+    fn mark_tier_degraded(&self, tier: CacheTier) {
+        log::warn!("Marking tier {:?} as degraded", tier);
+        
+        // Circuit breaker already tracks failure state
+        // This method is for additional monitoring/telemetry if needed
+        
+        // Future enhancement: emit metric event
+        // metrics::tier_degraded_event(tier);
+    }
+
+    /// Schedule tier recovery attempt
+    /// 
+    /// Note: Circuit breaker has built-in auto-recovery. After recovery_timeout_ms,
+    /// should_bypass() returns false and allows retry attempts. If the retry succeeds,
+    /// record_success() resets the circuit breaker.
+    fn schedule_tier_recovery(&self, tier: CacheTier, tier_idx: usize) {
+        let recovery_timeout_ms = self.circuit_breakers[tier_idx].get_recovery_timeout_ms();
+        
+        log::info!(
+            "Tier {:?} recovery scheduled - auto-recovery after {}ms via circuit breaker",
+            tier,
+            recovery_timeout_ms
+        );
+        
+        // Circuit breaker handles auto-recovery:
+        // 1. After recovery_timeout_ms, should_bypass() returns false
+        // 2. Next request to tier will be attempted
+        // 3. If successful, record_success() resets failure count
+        // 4. If failed again, circuit breaker re-opens
+        
+        // No explicit task scheduling needed - circuit breaker does it automatically
     }
 
     /// Reset all error recovery systems and circuit breakers
@@ -272,11 +344,7 @@ impl<K, V> ErrorRecoverySystem<K, V> {
     }
 }
 
-impl<K, V> Default for ErrorRecoverySystem<K, V> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Default implementation removed - ErrorRecoverySystem requires tier coordinators
 
 /// Trait for providing error recovery and fallback values
 pub trait ErrorRecoveryProvider {

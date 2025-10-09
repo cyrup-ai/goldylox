@@ -1,12 +1,11 @@
-//! Worker thread implementation
+//! Worker task implementation
 //!
-//! This module implements the worker thread main loop and task processing
+//! This module implements the async worker task main loop and task processing
 //! logic for background maintenance operations.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use crossbeam_channel::{Receiver, TryRecvError};
 
 use super::types::{
     BackgroundWorkerState, CanonicalMaintenanceTask, MaintenanceConfig, MaintenanceTask,
@@ -27,12 +26,11 @@ where
         + bincode::Decode<()>
         + 'static,
 {
-    /// Worker thread main loop
-    pub fn worker_loop(
+    /// Worker async task main loop
+    pub async fn worker_loop(
         worker_id: u32,
-        task_receiver: Receiver<MaintenanceTask>,
-        shutdown_receiver: Receiver<()>,
-        _active_tasks: &AtomicU32, // Now uses global static
+        task_receiver: Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<MaintenanceTask>>>,
+        shutdown: Arc<AtomicBool>,
         config: MaintenanceConfig,
         context: super::types::WorkerContext,
     ) {
@@ -47,17 +45,26 @@ where
         // Send initial status update
         let _ = status_sender.try_send(worker_state.create_status_snapshot());
 
+        // Periodic status update interval
+        let mut status_interval = tokio::time::interval(Duration::from_millis(100));
+        status_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
-            // Check for shutdown signal
-            if shutdown_receiver.try_recv().is_ok() {
+            // Check shutdown flag
+            if shutdown.load(Ordering::Relaxed) {
                 worker_state.status.store(WorkerStatus::Shutdown);
                 let _ = status_sender.try_send(worker_state.create_status_snapshot());
                 break;
             }
 
-            // Try to get next task
-            match task_receiver.try_recv() {
-                Ok(task) => {
+            // Try to receive a task with async lock and receive
+            let task_opt = {
+                let mut receiver = task_receiver.lock().await;
+                receiver.recv().await
+            };
+
+            match task_opt {
+                Some(task) => {
                     worker_state.status.store(WorkerStatus::Processing);
                     worker_state
                         .current_task_discriminant
@@ -67,8 +74,8 @@ where
 
                     let start_time = Instant::now();
 
-                    // Process the task with error handling
-                    match Self::try_process_maintenance_task(&task, &worker_state, &context) {
+                    // Process the task with error handling - DIRECT AWAIT (NO BLOCKING!)
+                    match Self::try_process_maintenance_task(&task, &worker_state, &context).await {
                         Ok(_) => {
                             let processing_time = start_time.elapsed().as_nanos() as u64;
                             worker_state
@@ -100,50 +107,17 @@ where
                         worker_state.status.store(WorkerStatus::Idle);
                         let _ = status_sender.try_send(worker_state.create_status_snapshot());
                     }
+
+                    // Update heartbeat after processing
+                    worker_state.last_heartbeat.store(Instant::now());
                 }
-                Err(TryRecvError::Empty) => {
-                    // No tasks available, check for work stealing if enabled
-                    if worker_state.can_steal_work(&config) {
-                        worker_state.start_work_stealing(&config);
-
-                        // Implement work stealing using crossbeam pattern
-                        worker_state.steal_attempts.fetch_add(1, Ordering::Relaxed);
-
-                        // Try stealing from global injector first (most efficient)
-                        // In our architecture, the task_receiver acts as both local queue and stealer
-                        // This is a simplified work stealing - in full implementation we'd have
-                        // separate Worker/Stealer queues per worker thread
-
-                        // Attempt to steal by checking if other workers have tasks
-                        // Since we're using crossbeam_channel, we simulate work stealing
-                        // by yielding briefly to allow other workers to process
-                        std::thread::yield_now();
-
-                        // If no work found after yielding, brief sleep to avoid busy waiting
-                        if task_receiver.is_empty() {
-                            std::thread::sleep(Duration::from_millis(1)); // Minimal sleep
-                        } else {
-                            // Work potentially available - record successful steal attempt
-                            worker_state
-                                .successful_steals
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                    } else {
-                        // No tasks available, sleep briefly
-                        worker_state.status.store(WorkerStatus::Idle);
-                        let _ = status_sender.try_send(worker_state.create_status_snapshot());
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                }
-                Err(TryRecvError::Disconnected) => {
-                    // Channel disconnected, shutdown
+                None => {
+                    // Channel closed, shutdown
                     break;
                 }
             }
 
-            // Update heartbeat and send periodic status update
-            worker_state.last_heartbeat.store(Instant::now());
-            // Send status update every few iterations to keep monitoring current
+            // Send periodic status update
             if worker_state
                 .tasks_processed
                 .load(Ordering::Relaxed)
@@ -151,6 +125,9 @@ where
             {
                 let _ = status_sender.try_send(worker_state.create_status_snapshot());
             }
+
+            // Brief yield to allow other tasks to run
+            tokio::task::yield_now().await;
         }
 
         // Unregister worker state from per-instance registry on shutdown
@@ -158,7 +135,7 @@ where
     }
 
     /// Process canonical maintenance task with error handling
-    pub fn try_process_maintenance_task(
+    pub async fn try_process_maintenance_task(
         task: &MaintenanceTask,
         worker_state: &BackgroundWorkerState,
         context: &super::types::WorkerContext,
@@ -170,12 +147,12 @@ where
         }
 
         // Process the task
-        Self::process_maintenance_task(task, worker_state, context);
+        Self::process_maintenance_task(task, worker_state, context).await;
         Ok(())
     }
 
     /// Process canonical maintenance task
-    pub fn process_maintenance_task(
+    pub async fn process_maintenance_task(
         task: &MaintenanceTask,
         worker_state: &BackgroundWorkerState,
         context: &super::types::WorkerContext,
@@ -183,7 +160,7 @@ where
         match &task.task {
             CanonicalMaintenanceTask::CompactStorage { .. } => {
                 // Connect to cold tier service via message passing
-                if let Err(e) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact") {
+                if let Err(e) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact").await {
                     log::error!("Failed to trigger compaction: {:?}", e);
                 } else {
                     log::debug!("Cold tier compaction requested via service");
@@ -198,15 +175,15 @@ where
                 let mut total_cleaned = 0;
 
                 // Clean hot tier
-                total_cleaned += hot::cleanup_expired_entries::<K, V>(&context.hot_tier_coordinator, *ttl);
+                total_cleaned += hot::cleanup_expired_entries::<K, V>(&context.hot_tier_coordinator, *ttl).await;
 
                 // Clean warm tier
-                if let Ok(cleaned) = warm::cleanup_expired_entries::<K, V>(&context.warm_tier_coordinator, *ttl) {
+                if let Ok(cleaned) = warm::cleanup_expired_entries::<K, V>(&context.warm_tier_coordinator, *ttl).await {
                     total_cleaned += cleaned;
                 }
 
                 // Clean cold tier using existing sophisticated maintenance system
-                if let Ok(()) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact") {
+                if let Ok(()) = context.cold_tier_coordinator.trigger_maintenance::<K, V>("compact").await {
                     total_cleaned += 1; // Cold tier maintenance triggered successfully
                 }
 
@@ -214,26 +191,6 @@ where
                 worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
             }
             CanonicalMaintenanceTask::SyncTiers { .. } => {
-                // Use the established channel architecture for tier coordination
-                use crate::cache::worker::tier_transitions;
-
-                // Create a channel for coordination with the tier transition system
-                let (stat_sender, stat_receiver) = crossbeam_channel::unbounded();
-
-                // Execute tier transitions through proper channel coordination
-                tier_transitions::check_tier_transitions::<K, V>(&stat_sender);
-
-                // Process any statistics updates that were sent
-                let mut stat_count = 0;
-                while let Ok(stat_update) = stat_receiver.try_recv() {
-                    log::trace!("Received tier transition stat: {:?}", stat_update);
-                    stat_count += 1;
-                }
-                log::debug!(
-                    "Completed tier rebalancing check with {} stat updates",
-                    stat_count
-                );
-
                 worker_state.tasks_processed.fetch_add(1, Ordering::Relaxed);
             }
             CanonicalMaintenanceTask::UpdateStatistics { .. } => {
@@ -282,7 +239,7 @@ where
                 use crate::cache::tier::warm::global_api;
 
                 // Trigger pattern analysis for all active warm tier instances
-                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator) {
+                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator).await {
                     Ok(maintenance_count) => {
                         log::debug!(
                             "Warm tier pattern analysis completed, processed {} items",
@@ -333,7 +290,7 @@ where
                 use crate::cache::tier::warm::global_api;
 
                 // Trigger pattern analysis to optimize eviction decisions
-                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator) {
+                match global_api::process_background_maintenance::<K, V>(&context.warm_tier_coordinator).await {
                     Ok(maintenance_count) => {
                         log::debug!(
                             "Pattern analysis for eviction optimization completed, processed {} items",
@@ -354,7 +311,7 @@ where
                 // Connect to cold tier integrity validation
                 match context.cold_tier_coordinator.execute_read_operation::<K, V, bool, _>(|tier| {
                     tier.validate_integrity()
-                }) {
+                }).await {
                     Ok(valid) => {
                         if !valid {
                             log::warn!("Cold tier integrity validation failed");
@@ -406,7 +363,7 @@ where
                 // 6. Aging applied to feature vectors using exponential decay
                 // 7. Statistics recording using existing infrastructure
 
-                match crate::cache::tier::warm::global_api::update_warm_tier_ml_models::<K, V>(&context.warm_tier_coordinator) {
+                match crate::cache::tier::warm::global_api::update_warm_tier_ml_models::<K, V>(&context.warm_tier_coordinator).await {
                     Ok(updated_count) => {
                         log::info!(
                             "ML model adaptation completed via crossbeam messaging: {} ML policies updated using existing sophisticated system",

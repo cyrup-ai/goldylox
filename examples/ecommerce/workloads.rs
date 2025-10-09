@@ -6,11 +6,11 @@
 use crate::ecommerce::types::*;
 use rand::{Rng, rng};
 use std::collections::BTreeMap;
-use std::thread;
 use std::time::Instant;
+use tokio::task;
 
 /// REAL Black Friday rush - massive concurrent cache operations
-pub fn generate_black_friday_rush(
+pub async fn generate_black_friday_rush(
     workload: &WorkloadState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔥 Starting Black Friday rush with REAL cache operations...");
@@ -19,13 +19,14 @@ pub fn generate_black_friday_rush(
     // Spawn multiple threads for concurrent cache access
     let mut handles = vec![];
 
-    // Hot product access pattern - many threads hitting popular products
+    // Hot product access pattern - many tasks hitting popular products
     for thread_id in 0..8 {
         let nodes_clone = workload.nodes.clone();
-        let handle = thread::spawn(move || {
-            let mut rng = rng();
+        let handle = task::spawn(async move {
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(thread_id as u64 * 12345);
 
-            // Each thread performs 1000 REAL cache operations
+            // Each task performs 1000 REAL cache operations
             for _ in 0..1000 {
                 let node_idx = thread_id % nodes_clone.len();
 
@@ -39,7 +40,7 @@ pub fn generate_black_friday_rush(
                 let cache_key = format!("product:{}", product_id);
 
                 // ACTUALLY GET FROM CACHE - this triggers ML eviction algorithms
-                if let Some(product) = nodes_clone[node_idx].product_cache.get(&cache_key) {
+                if let Some(product) = nodes_clone[node_idx].product_cache.get(&cache_key).await {
                     // Cache hit - update inventory using compare_and_swap
                     let original_product = product.clone();
                     let mut updated_product = product;
@@ -52,21 +53,22 @@ pub fn generate_black_friday_rush(
                             cache_key,
                             original_product,
                             updated_product,
-                        );
+                        ).await;
                     }
                 }
 
                 // REAL processing time delay
-                thread::sleep(std::time::Duration::from_micros(100));
+                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
         });
         handles.push(handle);
     }
-    // Session management threads - REAL session cache operations
+    // Session management tasks - REAL session cache operations
     for thread_id in 0..4 {
         let nodes_clone = workload.nodes.clone();
-        let handle = thread::spawn(move || {
-            let mut rng = rng();
+        let handle = task::spawn(async move {
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(thread_id as u64 * 12345);
 
             for _ in 0..500 {
                 let node_idx = thread_id % nodes_clone.len();
@@ -87,7 +89,7 @@ pub fn generate_black_friday_rush(
                             browsing_history: vec![],
                             preferences: BTreeMap::new(),
                             location: "US".to_string(),
-                        });
+                        }).await;
             }
         });
         handles.push(handle);
@@ -95,7 +97,7 @@ pub fn generate_black_friday_rush(
 
     // Wait for all real operations to complete
     for handle in handles {
-        handle.join().unwrap();
+        handle.await.unwrap();
     }
 
     let duration = start.elapsed();
@@ -104,7 +106,7 @@ pub fn generate_black_friday_rush(
     Ok(())
 }
 /// REAL regular browsing patterns with analytics
-pub fn generate_regular_browsing(
+pub async fn generate_regular_browsing(
     workload: &WorkloadState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🛒 Starting regular browsing with REAL cache operations...");
@@ -115,8 +117,9 @@ pub fn generate_regular_browsing(
     // Browse products with realistic patterns
     for thread_id in 0..4 {
         let nodes_clone = workload.nodes.clone();
-        let handle = thread::spawn(move || {
-            let mut rng = rng();
+        let handle = task::spawn(async move {
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(thread_id as u64 * 12345);
 
             for session in 0..200 {
                 let node_idx = thread_id % nodes_clone.len();
@@ -129,7 +132,7 @@ pub fn generate_regular_browsing(
                     // REAL cache operation - ML algorithms learning access patterns
                     if nodes_clone[node_idx]
                         .product_cache
-                        .get(&cache_key)
+                        .get(&cache_key).await
                         .is_some()
                     {
                         // Generate analytics event and ACTUALLY cache it
@@ -148,19 +151,19 @@ pub fn generate_regular_browsing(
                         // REAL put operation into analytics cache
                         let _ = nodes_clone[node_idx]
                             .analytics_cache
-                            .put(event_id, analytics_event);
+                            .put(event_id, analytics_event).await;
                     }
                 }
 
                 // Small delay between browsing sessions
-                thread::sleep(std::time::Duration::from_millis(10));
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         });
         handles.push(handle);
     }
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.await.unwrap();
     }
 
     let duration = start.elapsed();
@@ -169,7 +172,7 @@ pub fn generate_regular_browsing(
     Ok(())
 }
 /// REAL clearance sale with mixed access patterns
-pub fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
     println!("💸 Starting clearance sale with REAL cache operations...");
     let start = Instant::now();
 
@@ -178,8 +181,9 @@ pub fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn s
     // Clearance sale access pattern - mix of old and new products
     for thread_id in 0..6 {
         let nodes_clone = workload.nodes.clone();
-        let handle = thread::spawn(move || {
-            let mut rng = rng();
+        let handle = task::spawn(async move {
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(thread_id as u64 * 12345);
 
             for _ in 0..800 {
                 let node_idx = thread_id % nodes_clone.len();
@@ -194,7 +198,7 @@ pub fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn s
                 let cache_key = format!("product:{}", product_id);
 
                 // REAL cache operations with price updates
-                match nodes_clone[node_idx].product_cache.get(&cache_key) {
+                match nodes_clone[node_idx].product_cache.get(&cache_key).await {
                     Some(mut product) => {
                         // Apply clearance discount - REAL data modification
                         if product.price > 50.0 {
@@ -202,7 +206,7 @@ pub fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn s
                             product.last_updated = current_timestamp();
 
                             // REAL put operation to update cache
-                            let _ = nodes_clone[node_idx].product_cache.put(cache_key, product);
+                            let _ = nodes_clone[node_idx].product_cache.put(cache_key, product).await;
                         }
                     }
                     None => {
@@ -215,7 +219,7 @@ pub fn generate_clearance_sale(workload: &WorkloadState) -> Result<(), Box<dyn s
     }
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.await.unwrap();
     }
 
     let duration = start.elapsed();

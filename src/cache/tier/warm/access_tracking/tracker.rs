@@ -44,7 +44,7 @@ pub enum AccessAnalysisTask<K: CacheKey> {
 #[derive(Debug)]
 pub struct ConcurrentAccessTracker<K: CacheKey> {
     /// Recent access patterns (lock-free ring buffer)
-    recent_accesses: SkipMap<u64, AccessRecord>,
+    pub(crate) recent_accesses: SkipMap<u64, AccessRecord>,
     /// Temporal pattern classifier
     pattern_classifier: TemporalPatternClassifier,
     /// Access frequency estimator
@@ -78,12 +78,14 @@ impl<K: CacheKey> ConcurrentAccessTracker<K> {
     pub fn record_access(&self, key: &WarmCacheKey<K>, access_type: AccessType, hit: bool) {
         let now_ns = timestamp_nanos(Instant::now());
         let thread_id = self.get_thread_id();
+        let key_hash = key.cache_hash();
 
         let record = AccessRecord {
             timestamp_ns: now_ns,
             access_type,
             thread_id,
             hit_status: if hit { HitStatus::Hit } else { HitStatus::Miss },
+            key_hash,
         };
 
         // Insert with timestamp as key for ordering

@@ -52,7 +52,6 @@ pub fn process_task(
 
         MaintenanceTask::SyncTiers { .. } => {
             // Synchronize between tiers
-            super::tier_transitions::check_tier_transitions(stat_sender);
         }
 
         MaintenanceTask::ValidateIntegrity { .. } => {
@@ -78,7 +77,6 @@ pub fn perform_periodic_maintenance(
     cold_tier_coordinator: &crate::cache::tier::cold::ColdTierCoordinator
 ) {
     // Check for entries that need promotion/demotion
-    super::tier_transitions::check_tier_transitions(stat_sender);
 
     // Process standard maintenance tasks
     process_task(WorkerMaintenanceOps::cleanup_expired_task(), stat_sender, cold_tier_coordinator);

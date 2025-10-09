@@ -14,7 +14,7 @@ use std::arch::x86_64::*;
 pub struct SimdVectorOps;
 
 impl SimdVectorOps {
-    /// Find minimum value using hardware SIMD operations (Fix 3: Safe SIMD extraction)
+    /// Find minimum value using hardware SIMD operations with safe extraction
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     pub fn find_min_f64(values: &[f64]) -> Option<f64> {
@@ -76,7 +76,7 @@ impl SimdVectorOps {
         })
     }
 
-    /// Find maximum value using hardware SIMD operations (Fix 3: Safe SIMD extraction)
+    /// Find maximum value using hardware SIMD operations with safe extraction
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     pub fn find_max_f64(values: &[f64]) -> Option<f64> {
@@ -138,7 +138,7 @@ impl SimdVectorOps {
         })
     }
 
-    /// Sum array values using hardware SIMD operations (Fix 3: Safe SIMD extraction)
+    /// Sum array values using hardware SIMD operations with safe extraction
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     pub fn sum_f64(values: &[f64]) -> f64 {
@@ -200,7 +200,7 @@ impl SimdVectorOps {
         }
     }
 
-    /// Vectorized comparison for threshold filtering (Fix 5: Complete SIMD coverage)
+    /// Vectorized comparison for threshold filtering with complete SIMD coverage
     pub fn filter_above_threshold(values: &[f64], threshold: f64) -> Vec<usize> {
         #[cfg(target_arch = "x86_64")]
         {
@@ -270,7 +270,7 @@ impl SimdVectorOps {
         }
     }
 
-    /// Vectorized scaling operation using SIMD (Fix 4: Runtime CPU detection)
+    /// Vectorized scaling operation using SIMD with runtime CPU detection
     #[cfg(target_arch = "x86_64")]
     pub fn scale_values(values: &mut [f64], scale_factor: f64) {
         // Runtime CPU feature detection
@@ -313,7 +313,7 @@ impl SimdVectorOps {
         }
     }
 
-    /// Vectorized addition of two arrays using SIMD (Fix 4: Runtime CPU detection)
+    /// Vectorized addition of two arrays using SIMD with runtime CPU detection
     #[cfg(target_arch = "x86_64")]
     pub fn add_arrays(a: &[f64], b: &[f64], result: &mut [f64]) {
         assert_eq!(a.len(), b.len());
@@ -367,7 +367,7 @@ impl SimdVectorOps {
         }
     }
 
-    /// Vectorized dot product using SIMD (Fix 3: Safe SIMD extraction)
+    /// Vectorized dot product using SIMD with safe extraction
     #[cfg(target_arch = "x86_64")]
     pub fn dot_product(a: &[f64], b: &[f64]) -> f64 {
         assert_eq!(a.len(), b.len());

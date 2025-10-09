@@ -10,7 +10,7 @@ use std::any::TypeId;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use crossbeam_channel::{Sender, bounded};
+use tokio::sync::{mpsc, oneshot};
 use dashmap::DashMap;
 
 use super::simd_tier::SimdHotTier;
@@ -25,77 +25,77 @@ use crate::cache::types::statistics::tier_stats::TierStatistics;
 pub enum CacheRequest<K: CacheKey, V: CacheValue> {
     Get {
         key: K,
-        response: Sender<Option<V>>,
+        response: oneshot::Sender<Option<V>>,
     },
     Put {
         key: K,
         value: V,
-        response: Sender<Result<(), CacheOperationError>>,
+        response: oneshot::Sender<Result<(), CacheOperationError>>,
     },
     Remove {
         key: K,
-        response: Sender<Option<V>>,
+        response: oneshot::Sender<Option<V>>,
     },
 
     // Atomic operations
     PutIfAbsent {
         key: K,
         value: V,
-        response: Sender<Option<V>>,
+        response: oneshot::Sender<Option<V>>,
     },
     Replace {
         key: K,
         value: V,
-        response: Sender<Option<V>>,
+        response: oneshot::Sender<Option<V>>,
     },
     CompareAndSwap {
         key: K,
         expected: V,
         new_value: V,
-        response: Sender<bool>,
+        response: oneshot::Sender<bool>,
     },
 
     // Maintenance operations
     CleanupExpired {
         ttl_ns: u64,
-        response: Sender<usize>,
+        response: oneshot::Sender<usize>,
     },
     ProcessPrefetch {
-        response: Sender<usize>,
+        response: oneshot::Sender<usize>,
     },
     Compact {
-        response: Sender<usize>,
+        response: oneshot::Sender<usize>,
     },
     Clear {
-        response: Sender<()>,
+        response: oneshot::Sender<()>,
     },
 
     // Statistics operations
     GetStats {
-        response: Sender<TierStatistics>,
+        response: oneshot::Sender<TierStatistics>,
     },
     GetMemoryStats {
-        response: Sender<super::memory_pool::MemoryPoolStats>,
+        response: oneshot::Sender<super::memory_pool::MemoryPoolStats>,
     },
     GetEvictionStats {
-        response: Sender<super::eviction::EvictionStats>,
+        response: oneshot::Sender<super::eviction::EvictionStats>,
     },
     GetPrefetchStats {
-        response: Sender<super::prefetch::PrefetchStats>,
+        response: oneshot::Sender<super::prefetch::PrefetchStats>,
     },
     ShouldOptimize {
-        response: Sender<bool>,
+        response: oneshot::Sender<bool>,
     },
 
     // Analytics operations
     GetFrequentKeys {
         threshold: u32,
         window_ns: u64,
-        response: Sender<Vec<K>>,
+        response: oneshot::Sender<Vec<K>>,
     },
     GetIdleKeys {
         threshold_ns: u64,
-        response: Sender<Vec<K>>,
+        response: oneshot::Sender<Vec<K>>,
     },
 
     Shutdown,
@@ -109,7 +109,7 @@ pub(crate) trait HotTierOperations: std::any::Any + Send + Sync {
 
 /// Handle for communicating with a hot tier instance
 pub struct HotTierHandle<K: CacheKey, V: CacheValue> {
-    sender: Sender<CacheRequest<K, V>>,
+    sender: mpsc::UnboundedSender<CacheRequest<K, V>>,
     _phantom: std::marker::PhantomData<(K, V)>,
 }
 
@@ -187,11 +187,11 @@ impl HotTierCoordinator {
         let mut tier = SimdHotTier::<K, V>::new(tier_config);
 
         // Create channel for tier communication
-        let (sender, receiver) = bounded::<CacheRequest<K, V>>(1024);
+        let (sender, mut receiver) = mpsc::unbounded_channel::<CacheRequest<K, V>>();
 
         // Spawn background task to handle tier operations - tier OWNS the data
-        std::thread::spawn(move || {
-            while let Ok(request) = receiver.recv() {
+        tokio::spawn(async move {
+            while let Some(request) = receiver.recv().await {
                 match request {
                     CacheRequest::Get { key, response } => {
                         let result = tier.get(&key);
@@ -389,7 +389,7 @@ impl HotTierCoordinator {
 
 
 /// Initialize hot tier with specific configuration for given types
-pub fn init_simd_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn init_simd_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     config: HotTierConfig,
 ) -> Result<(), CacheOperationError> {
@@ -398,31 +398,31 @@ pub fn init_simd_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'stat
 }
 
 /// Get value from hot tier cache
-pub fn simd_hot_get<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn simd_hot_get<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Option<V> {
     let handle = coordinator.get_or_create_tier::<K, V>(None).ok()?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let message = CacheRequest::Get {
         key: key.clone(),
         response: response_tx,
     };
 
     handle.sender.send(message).ok()?;
-    response_rx.recv_timeout(Duration::from_millis(100)).ok()?
+    response_rx.await.ok()?
 }
 
 /// Put value in hot tier cache  
-pub fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let message = CacheRequest::Put {
         key,
         value,
@@ -434,18 +434,18 @@ pub fn simd_hot_put<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         .send(message)
         .map_err(|_| CacheOperationError::resource_exhausted("Worker queue full"))?;
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .map_err(|_| CacheOperationError::TimeoutError)?
 }
 
 /// Remove value from hot tier cache
-pub fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Result<Option<V>, CacheOperationError> {
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let message = CacheRequest::Remove {
         key: key.clone(),
         response: response_tx,
@@ -456,13 +456,13 @@ pub fn simd_hot_remove<K: CacheKey + Default + 'static, V: CacheValue + 'static>
         .send(message)
         .map_err(|_| CacheOperationError::resource_exhausted("Worker queue full"))?;
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .map_err(|_| CacheOperationError::TimeoutError)
 }
 
 /// Get statistics from hot tier
 #[allow(dead_code)] // Hot tier SIMD - Statistics collection function for SIMD hot tier performance monitoring
-pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
 ) -> TierStatistics {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
@@ -470,7 +470,7 @@ pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         Err(_) => return TierStatistics::default(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetStats {
         response: response_tx,
     };
@@ -480,12 +480,12 @@ pub fn simd_hot_stats<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| TierStatistics::default())
 }
 
 /// Get frequently accessed keys from hot tier
-pub fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     access_threshold: u32,
     time_window: Duration,
@@ -495,7 +495,7 @@ pub fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheVal
         Err(_) => return Vec::new(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetFrequentKeys {
         threshold: access_threshold,
         window_ns: time_window.as_nanos() as u64,
@@ -507,12 +507,12 @@ pub fn get_frequently_accessed_keys<K: CacheKey + Default + 'static, V: CacheVal
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| Vec::new())
 }
 
 /// Get idle keys from hot tier (candidates for demotion)
-pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     idle_threshold: Duration,
 ) -> Vec<K> {
@@ -521,7 +521,7 @@ pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         Err(_) => return Vec::new(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetIdleKeys {
         threshold_ns: idle_threshold.as_nanos() as u64,
         response: response_tx,
@@ -532,31 +532,31 @@ pub fn get_idle_keys<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| Vec::new())
 }
 
 /// Remove entry from hot tier using service-based routing
-pub fn remove_entry<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn remove_entry<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     key: &K,
 ) -> Option<V> {
     // Use the standard remove operation which properly routes to service
-    simd_hot_remove::<K, V>(coordinator, key).unwrap_or_default()
+    simd_hot_remove::<K, V>(coordinator, key).await.unwrap_or_default()
 }
 
 /// Insert entry promoted from warm tier using service-based routing
-pub fn insert_promoted<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn insert_promoted<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
     // Use the standard put operation which properly routes to service
-    simd_hot_put(coordinator, key, value)
+    simd_hot_put(coordinator, key, value).await
 }
 
 /// Cleanup expired entries from hot tier
-pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
     ttl: Duration,
 ) -> usize {
@@ -565,7 +565,7 @@ pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 
         Err(_) => return 0,
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::CleanupExpired {
         ttl_ns: ttl.as_nanos() as u64,
         response: response_tx,
@@ -576,12 +576,12 @@ pub fn cleanup_expired_entries<K: CacheKey + Default + 'static, V: CacheValue + 
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or(0)
 }
 
 /// Process prefetch requests
-pub fn process_prefetch_requests<
+pub async fn process_prefetch_requests<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
 >(
@@ -592,7 +592,7 @@ pub fn process_prefetch_requests<
         Err(_) => return 0,
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::ProcessPrefetch {
         response: response_tx,
     };
@@ -602,12 +602,12 @@ pub fn process_prefetch_requests<
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or(0)
 }
 
 /// Compact hot tier and return compacted entries count
-pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>(
+pub async fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>(
     coordinator: &HotTierCoordinator,
 ) -> usize {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
@@ -615,7 +615,7 @@ pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + Partial
         Err(_) => return 0,
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::Compact {
         response: response_tx,
     };
@@ -625,12 +625,12 @@ pub fn compact_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + Partial
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or(0)
 }
 
 /// Clear all entries from hot tier
-pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
     coordinator: &HotTierCoordinator,
 ) {
     let handle = match coordinator.get_or_create_tier::<K, V>(None) {
@@ -638,7 +638,7 @@ pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         Err(_) => return,
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::Clear {
         response: response_tx,
     };
@@ -647,11 +647,11 @@ pub fn clear_hot_tier<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
         return;
     }
 
-    let _ = response_rx.recv_timeout(Duration::from_millis(100));
+    let _ = response_rx.await;
 }
 
 /// Check if hot tier should be optimized
-pub fn should_optimize_hot_tier<
+pub async fn should_optimize_hot_tier<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
 >(
@@ -662,7 +662,7 @@ pub fn should_optimize_hot_tier<
         Err(_) => return false,
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::ShouldOptimize {
         response: response_tx,
     };
@@ -672,12 +672,12 @@ pub fn should_optimize_hot_tier<
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or(false)
 }
 
 /// Get memory statistics from hot tier
-pub fn hot_tier_memory_stats<
+pub async fn hot_tier_memory_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
 >(
@@ -688,7 +688,7 @@ pub fn hot_tier_memory_stats<
         Err(_) => return super::memory_pool::MemoryPoolStats::default(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetMemoryStats {
         response: response_tx,
     };
@@ -698,12 +698,12 @@ pub fn hot_tier_memory_stats<
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| super::memory_pool::MemoryPoolStats::default())
 }
 
 /// Get eviction statistics from hot tier
-pub fn hot_tier_eviction_stats<
+pub async fn hot_tier_eviction_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
 >(
@@ -714,7 +714,7 @@ pub fn hot_tier_eviction_stats<
         Err(_) => return super::eviction::EvictionStats::default(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetEvictionStats {
         response: response_tx,
     };
@@ -724,12 +724,12 @@ pub fn hot_tier_eviction_stats<
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| super::eviction::EvictionStats::default())
 }
 
 /// Get prefetch statistics from hot tier
-pub fn hot_tier_prefetch_stats<
+pub async fn hot_tier_prefetch_stats<
     K: CacheKey + Default + 'static,
     V: CacheValue + PartialEq + 'static,
 >(
@@ -740,7 +740,7 @@ pub fn hot_tier_prefetch_stats<
         Err(_) => return super::prefetch::PrefetchStats::default(),
     };
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CacheRequest::<K, V>::GetPrefetchStats {
         response: response_tx,
     };
@@ -750,7 +750,7 @@ pub fn hot_tier_prefetch_stats<
     }
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .unwrap_or_else(|_| super::prefetch::PrefetchStats::default())
 }
 

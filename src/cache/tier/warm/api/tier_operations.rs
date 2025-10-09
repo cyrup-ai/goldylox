@@ -147,10 +147,11 @@ impl<K: CacheKey, V: CacheValue> LockFreeWarmTier<K, V> {
             self.stats.update_memory_usage(-(entry_size as i64));
             self.stats.update_entry_count(-1);
 
-            // Record eviction for tracking
+            // Record eviction for tracking with actual policy type
+            let actual_policy = self.eviction_policy.current_policy();
             self.eviction_policy.record_eviction_outcome(
                 &warm_key,
-                EvictionPolicyType::LRU, // Simplified - would track actual policy
+                actual_policy,
                 true,
                 None,
             );

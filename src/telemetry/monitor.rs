@@ -18,7 +18,7 @@ impl PerformanceMonitor {
     pub fn new(config: MonitorConfig) -> Self {
         Self {
             alert_history: AlertHistoryBuffer::new(), // Canonical version uses fixed capacity of 128
-            rate_limits: AlertRateLimits::with_single_limit(60), // 60 alerts per minute max for all types
+            rate_limits: AlertRateLimits::with_single_limit(config.alert_rate_limit_per_minute),
             config,
         }
     }

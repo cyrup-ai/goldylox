@@ -82,25 +82,86 @@ impl StorageManager {
         }
     }
 
-    /// Sync data file to disk
-    pub fn sync_data(&self) -> io::Result<()> {
+    /// Sync data file to disk (async, non-blocking)
+    pub async fn sync_data(&self) -> io::Result<()> {
+        // MmapMut is !Send, so we need to do sync operations in spawn_blocking
+        // Clone file handle before moving into spawn_blocking
+        let data_file_clone = self.data_handle.as_ref().and_then(|h| h.try_clone().ok());
+        
         if let Some(ref mmap) = self.data_file {
-            mmap.flush()?;
+            // Get raw pointer - we'll use it unsafely in spawn_blocking
+            let mmap_ptr = mmap as *const memmap2::MmapMut as usize;
+            
+            tokio::task::spawn_blocking(move || -> io::Result<()> {
+                // Safety: We ensure StorageManager outlives this task
+                // by awaiting the task before StorageManager can be dropped
+                unsafe {
+                    let mmap_ref = &*(mmap_ptr as *const memmap2::MmapMut);
+                    mmap_ref.flush()?;
+                }
+                
+                // Also sync file handle if available
+                if let Some(handle) = data_file_clone {
+                    handle.sync_all()?;
+                }
+                
+                Ok(())
+            })
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))??;
+        } else if let Some(handle) = data_file_clone {
+            // No mmap but we have a file handle
+            let async_file = tokio::fs::File::from_std(handle);
+            async_file.sync_all().await?;
         }
-        if let Some(ref handle) = self.data_handle {
-            handle.sync_all()?;
-        }
+        
         Ok(())
     }
 
-    /// Sync index file to disk
-    pub fn sync_index(&self) -> io::Result<()> {
+    /// Sync index file to disk (async, non-blocking)
+    pub async fn sync_index(&self) -> io::Result<()> {
+        // MmapMut is !Send, so we need to do sync operations in spawn_blocking
+        // Clone file handle before moving into spawn_blocking
+        let index_file_clone = self.index_handle.as_ref().and_then(|h| h.try_clone().ok());
+        
         if let Some(ref mmap) = self.index_file {
-            mmap.flush()?;
+            // Get raw pointer - convert to usize which is Send
+            let mmap_ptr = mmap as *const memmap2::MmapMut as usize;
+            
+            tokio::task::spawn_blocking(move || -> io::Result<()> {
+                // Safety: We ensure StorageManager outlives this task
+                unsafe {
+                    let mmap_ref = &*(mmap_ptr as *const memmap2::MmapMut);
+                    mmap_ref.flush()?;
+                }
+                
+                // Also sync file handle if available
+                if let Some(handle) = index_file_clone {
+                    handle.sync_all()?;
+                }
+                
+                Ok(())
+            })
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))??;
+        } else if let Some(handle) = index_file_clone {
+            // No mmap but we have a file handle
+            let async_file = tokio::fs::File::from_std(handle);
+            async_file.sync_all().await?;
         }
-        if let Some(ref handle) = self.index_handle {
-            handle.sync_all()?;
-        }
+        
+        Ok(())
+    }
+
+    /// Async shutdown: sync both data and index files
+    /// This should be called during graceful shutdown before Drop
+    pub async fn shutdown_async(&self) -> io::Result<()> {
+        // Sync data file first
+        self.sync_data().await?;
+        
+        // Then sync index file
+        self.sync_index().await?;
+        
         Ok(())
     }
 
@@ -287,8 +348,25 @@ pub struct StorageStats {
 
 impl Drop for StorageManager {
     fn drop(&mut self) {
-        // Ensure data is synced before dropping
-        let _ = self.sync_data();
-        let _ = self.sync_index();
+        // Best-effort synchronous sync (Drop cannot be async)
+        // WARNING: This is a fallback - call shutdown_async() explicitly for graceful shutdown
+        
+        // Synchronous mmap flush
+        if let Some(ref mmap) = self.data_file {
+            let _ = mmap.flush();
+        }
+        if let Some(ref mmap) = self.index_file {
+            let _ = mmap.flush();
+        }
+        
+        // Synchronous file sync
+        if let Some(ref handle) = self.data_handle {
+            let _ = handle.sync_all();
+        }
+        if let Some(ref handle) = self.index_handle {
+            let _ = handle.sync_all();
+        }
+        
+        log::debug!("StorageManager dropped with synchronous sync fallback");
     }
 }

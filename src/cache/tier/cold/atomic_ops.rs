@@ -7,7 +7,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Atomically put value only if key is not present in cold tier
-pub fn put_if_absent_atomic<
+pub async fn put_if_absent_atomic<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -22,12 +22,11 @@ pub fn put_if_absent_atomic<
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
     use crate::cache::tier::cold::ColdTierMessage;
-    use crossbeam_channel::bounded;
+    use tokio::sync::oneshot;
     use std::any::TypeId;
-    use std::time::Duration;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
 
     let key_clone = key.clone();
     let value_clone = value.clone();
@@ -67,7 +66,7 @@ pub fn put_if_absent_atomic<
         .map_err(|_| CacheOperationError::TierOperationFailed)?;
 
     let result_bytes = response_rx
-        .recv_timeout(Duration::from_millis(500))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)??;
 
     bincode::decode_from_slice(&result_bytes, bincode::config::standard())
@@ -80,7 +79,7 @@ pub fn put_if_absent_atomic<
 }
 
 /// Atomically replace existing value with new value in cold tier
-pub fn replace_atomic<
+pub async fn replace_atomic<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -95,12 +94,11 @@ pub fn replace_atomic<
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
     use crate::cache::tier::cold::ColdTierMessage;
-    use crossbeam_channel::bounded;
+    use tokio::sync::oneshot;
     use std::any::TypeId;
-    use std::time::Duration;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
 
     let key_clone = key.clone();
     let value_clone = value.clone();
@@ -137,7 +135,7 @@ pub fn replace_atomic<
         .map_err(|_| CacheOperationError::TierOperationFailed)?;
 
     let result_bytes = response_rx
-        .recv_timeout(Duration::from_millis(500))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)??;
 
     bincode::decode_from_slice(&result_bytes, bincode::config::standard())
@@ -148,7 +146,7 @@ pub fn replace_atomic<
 }
 
 /// Atomically compare and swap value if current equals expected in cold tier
-pub fn compare_and_swap_atomic<
+pub async fn compare_and_swap_atomic<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -165,12 +163,11 @@ pub fn compare_and_swap_atomic<
     new_value: V,
 ) -> Result<bool, CacheOperationError> {
     use crate::cache::tier::cold::ColdTierMessage;
-    use crossbeam_channel::bounded;
+    use tokio::sync::oneshot;
     use std::any::TypeId;
-    use std::time::Duration;
     let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
 
     let key_clone = key.clone();
     let expected_clone = expected.clone();
@@ -211,7 +208,7 @@ pub fn compare_and_swap_atomic<
         .map_err(|_| CacheOperationError::TierOperationFailed)?;
 
     let result_bytes = response_rx
-        .recv_timeout(Duration::from_millis(500))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)??;
 
     bincode::decode_from_slice(&result_bytes, bincode::config::standard())

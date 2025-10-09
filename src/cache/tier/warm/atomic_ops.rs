@@ -7,18 +7,17 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Atomically put value only if key is not present using service messages
-pub fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
     coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
     key: K,
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
     use crate::cache::tier::warm::global_api::WarmCacheRequest;
-    use crossbeam_channel::bounded;
-    use std::time::Duration;
+    use tokio::sync::oneshot;
 
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = WarmCacheRequest::PutIfAbsent {
         key,
         value,
@@ -28,23 +27,22 @@ pub fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'st
     handle.send_request(request)?;
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)
 }
 
 /// Atomically replace existing value with new value using service messages
-pub fn replace_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn replace_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
     coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
     key: K,
     value: V,
 ) -> Result<Option<V>, CacheOperationError> {
     use crate::cache::tier::warm::global_api::WarmCacheRequest;
-    use crossbeam_channel::bounded;
-    use std::time::Duration;
+    use tokio::sync::oneshot;
 
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = WarmCacheRequest::Replace {
         key,
         value,
@@ -54,12 +52,12 @@ pub fn replace_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
     handle.send_request(request)?;
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)
 }
 
 /// Atomically compare and swap value if current equals expected using service messages
-pub fn compare_and_swap_atomic<
+pub async fn compare_and_swap_atomic<
     K: CacheKey + 'static,
     V: CacheValue + Default + PartialEq + 'static,
 >(
@@ -69,12 +67,11 @@ pub fn compare_and_swap_atomic<
     new_value: V,
 ) -> Result<bool, CacheOperationError> {
     use crate::cache::tier::warm::global_api::WarmCacheRequest;
-    use crossbeam_channel::bounded;
-    use std::time::Duration;
+    use tokio::sync::oneshot;
 
     let handle = coordinator.get_or_create_tier::<K, V>(None)?;
 
-    let (response_tx, response_rx) = bounded(1);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = WarmCacheRequest::CompareAndSwap {
         key,
         expected,
@@ -85,6 +82,6 @@ pub fn compare_and_swap_atomic<
     handle.send_request(request)?;
 
     response_rx
-        .recv_timeout(Duration::from_millis(100))
+        .await
         .map_err(|_| CacheOperationError::TierOperationFailed)
 }

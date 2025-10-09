@@ -6,7 +6,7 @@
 //! This module implements sophisticated trend analysis using polynomial
 //! regression and pattern recognition for performance optimization.
 
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -41,31 +41,76 @@ pub struct TrendAnalyzer {
 impl TrendAnalyzer {
     /// Create new trend analyzer with initial parameters
     pub fn new() -> Result<Self, CacheOperationError> {
-        Ok(Self {
-            regression_coefficients: CachePadded::new([
-                AtomicU32::new(1000), // Linear coefficient * 1000
-                AtomicU32::new(0),    // Quadratic coefficient * 1000
-                AtomicU32::new(0),    // Cubic coefficient * 1000
-                AtomicU32::new(0),    // Constant term * 1000
-            ]),
-            prediction_accuracy: CachePadded::new(AtomicU32::new(500)), // 50% initial
-            sensitivity_threshold: CachePadded::new(AtomicU32::new(100)), // 10% threshold
-            trend_history: TrendHistoryBuffer {
-                samples: arrayvec::ArrayVec::new(),
-                write_pos: AtomicUsize::new(0),
-                sample_count: AtomicUsize::new(0),
-            },
-            trend_samples: CachePadded::new(AtomicU32::new(0)), // Initialize sample count
-            performance_history: None, // Initialize as None, can be set later
-            error_tracker: Some(ErrorRateTracker::new()),
-            fallback_provider: crate::cache::manager::error_recovery::FallbackErrorProvider::new(),
-        })
+        // Delegate to new_with_config with default configuration
+        // This ensures single source of truth for initialization logic
+        Self::new_with_config(MonitorConfig::default())
     }
 
     /// Create new trend analyzer with monitoring configuration
-    pub fn new_with_config(_config: MonitorConfig) -> Result<Self, CacheOperationError> {
-        // For now, just delegate to new() - could be enhanced to use config
-        Self::new()
+    pub fn new_with_config(config: MonitorConfig) -> Result<Self, CacheOperationError> {
+        // Validate configuration parameters
+        if config.sample_interval_ms == 0 {
+            return Err(CacheOperationError::InvalidConfiguration(
+                "sample_interval_ms must be greater than 0".to_string()
+            ));
+        }
+        
+        if config.history_size == 0 {
+            return Err(CacheOperationError::InvalidConfiguration(
+                "history_size must be greater than 0".to_string()
+            ));
+        }
+        
+        // TrendHistoryBuffer has fixed capacity of 256 - validate expectations
+        if config.history_size > 256 {
+            return Err(CacheOperationError::InvalidConfiguration(
+                format!(
+                    "history_size {} exceeds TrendHistoryBuffer capacity of 256",
+                    config.history_size
+                )
+            ));
+        }
+        
+        // Configure sensitivity threshold based on adaptive mode
+        // Adaptive mode uses lower threshold (more sensitive: 5% vs 10%)
+        let sensitivity = if config.adaptive_thresholds_active {
+            50  // 5% threshold for adaptive mode (more sensitive)
+        } else {
+            100 // 10% threshold for static mode (less sensitive)
+        };
+        
+        // Configure initial prediction accuracy based on adaptive mode
+        // Adaptive mode starts with higher confidence
+        let accuracy = if config.adaptive_thresholds_active {
+            700 // 70% initial accuracy for adaptive mode
+        } else {
+            500 // 50% initial accuracy for static mode
+        };
+        
+        // Configure linear coefficient based on sampling rate
+        // Faster sampling (< 100ms) uses higher coefficient for responsiveness
+        let linear_coeff = if config.sample_interval_ms < 100 {
+            1200 // More responsive for fast sampling
+        } else {
+            1000 // Standard responsiveness for normal sampling
+        };
+        
+        // Create analyzer with configured values
+        Ok(Self {
+            regression_coefficients: CachePadded::new([
+                AtomicU32::new(linear_coeff), // Linear coefficient (config-driven)
+                AtomicU32::new(0),            // Quadratic coefficient
+                AtomicU32::new(0),            // Cubic coefficient
+                AtomicU32::new(0),            // Constant term
+            ]),
+            prediction_accuracy: CachePadded::new(AtomicU32::new(accuracy)),
+            sensitivity_threshold: CachePadded::new(AtomicU32::new(sensitivity)),
+            trend_history: TrendHistoryBuffer::new(),
+            trend_samples: CachePadded::new(AtomicU32::new(0)),
+            performance_history: None,
+            error_tracker: Some(ErrorRateTracker::new()),
+            fallback_provider: crate::cache::manager::error_recovery::FallbackErrorProvider::new(),
+        })
     }
 
     /// Create trend analyzer with real system integration
@@ -96,11 +141,7 @@ impl TrendAnalyzer {
             ]),
             prediction_accuracy: CachePadded::new(AtomicU32::new(500)), // 50% initial
             sensitivity_threshold: CachePadded::new(AtomicU32::new(100)), // 10% threshold
-            trend_history: TrendHistoryBuffer {
-                samples: arrayvec::ArrayVec::new(),
-                write_pos: AtomicUsize::new(0),
-                sample_count: AtomicUsize::new(0),
-            },
+            trend_history: TrendHistoryBuffer::new(),
             trend_samples: CachePadded::new(AtomicU32::new(0)),
             performance_history,
             error_tracker: Some(ErrorRateTracker::new()), // Create a new instance since original was moved to Arc
@@ -347,21 +388,77 @@ impl TrendAnalyzer {
         predictions
     }
 
-    /// Add trend sample from TrendSample parameter data
-    pub fn add_trend_sample(&self, sample: TrendSample) -> Result<(), CacheOperationError> {
-        // Extract real data from TrendSample parameter
-        let coeffs = [
-            sample.value / 1000.0, // Use actual sample data
-            0.0,
-            0.0,
-            0.0,
-        ];
+    /// Calculate linear regression coefficients from sample history
+    /// Returns [slope, 0.0, 0.0, intercept] for linear model y = mx + b
+    ///
+    /// Algorithm adapted from: src/cache/tier/warm/monitoring/trend_analysis.rs
+    ///
+    /// # Performance
+    /// - Zero allocation (single-pass calculation)
+    /// - Lock-free (atomic reads only)
+    /// - Cache-friendly (sequential access)
+    fn calculate_linear_regression(&self) -> [f32; 4] {
+        let n = self.trend_history.len();
 
-        // Update existing sophisticated coefficient system with real data
+        // Need minimum 3 samples for meaningful regression
+        if n < 3 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+
+        // Single-pass calculation for cache efficiency
+        let mut sum_x: f64 = 0.0;
+        let mut sum_y: f64 = 0.0;
+        let mut sum_xy: f64 = 0.0;
+        let mut sum_x2: f64 = 0.0;
+
+        for i in 0..n {
+            if let Some(sample) = self.trend_history.get_sample(i) {
+                let x = sample.timestamp() as f64;
+                let y = sample.value() as f64;
+
+                sum_x += x;
+                sum_y += y;
+                sum_xy += x * y;
+                sum_x2 += x * x;
+            }
+        }
+
+        let n_f64 = n as f64;
+
+        // Calculate slope: m = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        let denominator = n_f64 * sum_x2 - sum_x * sum_x;
+
+        // Handle degenerate cases
+        if denominator.abs() < f64::EPSILON {
+            // All x-values identical (vertical line)
+            let mean_y = sum_y / n_f64;
+            return [0.0, 0.0, 0.0, mean_y as f32];
+        }
+
+        let slope = (n_f64 * sum_xy - sum_x * sum_y) / denominator;
+
+        // Calculate intercept: b = (Σy - m*Σx) / n
+        let intercept = (sum_y - slope * sum_x) / n_f64;
+
+        // Return coefficients: [slope, 0, 0, intercept] for linear model
+        [slope as f32, 0.0, 0.0, intercept as f32]
+    }
+
+    /// Add trend sample and update regression coefficients
+    pub fn add_trend_sample(&self, sample: TrendSample) -> Result<(), CacheOperationError> {
+        // Store sample in history buffer (lock-free operation)
+        self.trend_history.add_sample(sample);
+
+        // Calculate real regression coefficients from all historical samples
+        let coeffs = self.calculate_linear_regression();
+
+        // Update the regression coefficients atomically
+        // This feeds into predict_future_performance() and all ML systems
         self.update_coefficients(coeffs);
 
-        // Call existing record_sample
+        // Record sample for statistical confidence tracking
         self.record_sample();
+
         Ok(())
     }
 

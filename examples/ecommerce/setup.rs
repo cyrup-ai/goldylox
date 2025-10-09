@@ -8,9 +8,10 @@ use crossbeam_channel::bounded;
 use goldylox::prelude::*;
 use std::thread;
 
-/// Setup cache nodes with worker threads
+/// Setup cache nodes with worker threads (currently unused)
 #[allow(dead_code)]
-pub fn setup_cache_nodes(node_count: usize) -> Result<Vec<CacheNode>, Box<dyn std::error::Error>> {
+#[cfg(feature = "worker_based_cache")]
+pub async fn setup_cache_nodes(node_count: usize) -> Result<Vec<CacheNode>, Box<dyn std::error::Error>> {
     let mut nodes = Vec::new();
 
     for i in 0..node_count {
@@ -31,8 +32,9 @@ pub fn setup_cache_nodes(node_count: usize) -> Result<Vec<CacheNode>, Box<dyn st
             }));
 
             if let Err(e) = result {
-                eprintln!("Worker {} panicked: {:?}", panic_handler_name, e);
-                // In production, you might want to restart the worker here
+                eprintln!("Worker {} terminated with unrecoverable panic: {:?}", panic_handler_name, e);
+                eprintln!("This indicates a critical bug in CacheWorker::run() itself");
+                // Note: Individual command panics are handled inside worker.run()
             }
         })?;
 
@@ -41,19 +43,19 @@ pub fn setup_cache_nodes(node_count: usize) -> Result<Vec<CacheNode>, Box<dyn st
             .hot_tier_max_entries(1000)
             .warm_tier_max_entries(5000)
             .cold_tier_base_dir(format!("./cache/node_{}/products", i))
-            .build()?;
+            .build().await?;
 
         let session_cache = GoldyloxBuilder::<String, UserSession>::new()
             .hot_tier_max_entries(500)
             .warm_tier_max_entries(2500)
             .cold_tier_base_dir(format!("./cache/node_{}/sessions", i))
-            .build()?;
+            .build().await?;
 
         let analytics_cache = GoldyloxBuilder::<String, AnalyticsEvent>::new()
             .hot_tier_max_entries(1500)
             .warm_tier_max_entries(7500)
             .cold_tier_base_dir(format!("./cache/node_{}/analytics", i))
-            .build()?;
+            .build().await?;
 
         // Create node with messaging interface
         let node = CacheNode {
@@ -73,30 +75,30 @@ pub fn setup_cache_nodes(node_count: usize) -> Result<Vec<CacheNode>, Box<dyn st
 }
 
 /// Setup distributed cache nodes with actual cache instances
-pub fn setup_distributed_nodes() -> Result<WorkloadState, Box<dyn std::error::Error>> {
+pub async fn setup_distributed_nodes() -> Result<WorkloadState, Box<dyn std::error::Error>> {
     // Create cache instances using the builders
     let product_cache = GoldyloxBuilder::<String, Product>::new()
         .hot_tier_max_entries(10000)
         .warm_tier_max_entries(50000)
         .cold_tier_base_dir("./cache/products")
-        .build()?;
+        .build().await?;
 
     let session_cache = GoldyloxBuilder::<String, UserSession>::new()
         .hot_tier_max_entries(5000)
         .warm_tier_max_entries(25000)
         .cold_tier_base_dir("./cache/sessions")
-        .build()?;
+        .build().await?;
 
     let analytics_cache = GoldyloxBuilder::<String, AnalyticsEvent>::new()
         .hot_tier_max_entries(15000)
         .warm_tier_max_entries(75000)
         .cold_tier_base_dir("./cache/analytics")
-        .build()?;
+        .build().await?;
 
-    // Create command channel (dummy for now)
+    // Create command channel (unused but required by CacheNode structure)
     let (command_sender, _command_receiver) = bounded::<CacheCommand>(1000);
 
-    // Create cache node with actual cache instances
+    // Create cache node with actual cache instances (direct access, no worker)
     let node = CacheNode {
         node_id: "node-1".to_string(),
         location: "us-east-1".to_string(),

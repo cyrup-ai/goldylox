@@ -1,7 +1,7 @@
 //! Error types for warm tier initialization
 //!
 //! This module defines error types for safe warm tier construction,
-//! replacing panic-prone expect() calls with proper error handling.
+//! providing proper Result-based error handling instead of panics.
 
 use std::fmt;
 use std::time::Duration;

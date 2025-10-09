@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 use crossbeam_utils::CachePadded;
 
 use crossbeam::channel::{Receiver, Sender};
+use tokio::sync::mpsc;
 
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
@@ -50,22 +51,24 @@ pub struct CacheMaintenanceWorker {
     pub worker_handle: Option<JoinHandle<()>>,
     /// Shutdown signal
     pub shutdown: AtomicBool,
-    /// Task channel sender (uses canonical MaintenanceTask)
-    pub task_sender: Sender<MaintenanceTask>,
-    /// Task channel receiver (moved to worker thread on start)
-    task_receiver: Option<Receiver<MaintenanceTask>>,
+    /// Task channel sender (uses canonical MaintenanceTask) - async tokio channel
+    pub task_sender: mpsc::UnboundedSender<MaintenanceTask>,
+    /// Task channel receiver (moved to worker thread on start) - async tokio channel
+    task_receiver: Option<mpsc::UnboundedReceiver<MaintenanceTask>>,
     /// Stats update sender for worker to send updates
     pub stat_sender: Sender<StatUpdate>,
     /// Stats update receiver for manager to process updates
     pub stat_receiver: Receiver<StatUpdate>,
     /// Worker statistics
     pub stats: WorkerStats,
+    /// Cold tier coordinator for compaction operations
+    pub cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
 }
 
 impl CacheMaintenanceWorker {
     /// Create a new maintenance worker
-    pub fn new() -> Self {
-        let (task_sender, task_receiver) = crossbeam::channel::unbounded();
+    pub fn new(cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator) -> Self {
+        let (task_sender, task_receiver) = mpsc::unbounded_channel();
         let (stat_sender, stat_receiver) = crossbeam::channel::unbounded();
         Self {
             worker_handle: None,
@@ -75,6 +78,7 @@ impl CacheMaintenanceWorker {
             stat_sender,
             stat_receiver,
             stats: WorkerStats::default(),
+            cold_tier_coordinator,
         }
     }
 
@@ -82,9 +86,11 @@ impl CacheMaintenanceWorker {
     pub fn submit_task(&self, task: MaintenanceTask) -> Result<(), CacheOperationError> {
         // Send stats update for task queued
         let _ = self.stat_sender.send(StatUpdate::TaskQueued);
+        // Tokio mpsc send returns Result
         self.task_sender
             .send(task)
-            .map_err(|_| CacheOperationError::OperationFailed)
+            .map_err(|_| CacheOperationError::OperationFailed)?;
+        Ok(())
     }
 
     /// Get worker statistics

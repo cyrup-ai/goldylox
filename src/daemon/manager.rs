@@ -37,9 +37,9 @@ pub struct CacheManager {
 
 impl CacheManager {
     /// Create a new cache manager with configuration
-    pub fn new(_cfg: &ServiceConfig) -> Result<Self> {
+    pub async fn new(_cfg: &ServiceConfig) -> Result<Self> {
         // Build the cache with configuration
-        let cache = GoldyloxBuilder::new().build()?;
+        let cache = GoldyloxBuilder::new().build().await?;
 
         Ok(Self {
             cache,
@@ -204,7 +204,7 @@ async fn start_api_server(
         Path(key): Path<String>,
         State(cache): State<Goldylox<String, Vec<u8>>>,
     ) -> impl IntoResponse {
-        match cache.get(&key) {
+        match cache.get(&key).await {
             Some(value) => {
                 let encoded_value = base64::prelude::BASE64_STANDARD.encode(&value);
                 let response = CacheResponse {
@@ -235,7 +235,7 @@ async fn start_api_server(
         Json(request): Json<SetValueRequest>,
     ) -> impl IntoResponse {
         match BASE64_STANDARD.decode(&request.value) {
-            Ok(decoded_value) => match cache.put(key.clone(), decoded_value.clone()) {
+            Ok(decoded_value) => match cache.put(key.clone(), decoded_value.clone()).await {
                 Ok(_) => {
                     let response = CacheResponse {
                         success: true,
@@ -272,7 +272,7 @@ async fn start_api_server(
         Path(key): Path<String>,
         State(cache): State<Goldylox<String, Vec<u8>>>,
     ) -> impl IntoResponse {
-        if cache.remove(&key) {
+        if cache.remove(&key).await {
             let response: CacheResponse<()> = CacheResponse {
                 success: true,
                 data: None,
@@ -293,7 +293,7 @@ async fn start_api_server(
         // Use per-instance telemetry system for accurate statistics
         let telemetry = cache.get_unified_stats();
         let (total_keys, hit_rate, memory_usage_bytes, _ops_per_second, estimated_uptime_seconds) = {
-                let metrics = telemetry.get_performance_metrics();
+                let metrics = telemetry.get_performance_metrics().await;
 
                     // Calculate total keys by summing entry counts from all tiers with overflow protection
                     let total_keys = metrics.hot_tier.entry_count.saturating_add(
@@ -359,7 +359,7 @@ async fn start_api_server(
         Path(key): Path<String>,
         State(cache): State<Goldylox<String, Vec<u8>>>,
     ) -> impl IntoResponse {
-        let contains = cache.contains_key(&key);
+        let contains = cache.contains_key(&key).await;
         let response = CacheResponse {
             success: true,
             data: Some(contains),
@@ -387,7 +387,7 @@ async fn start_api_server(
         Json(request): Json<SetValueRequest>,
     ) -> impl IntoResponse {
         match BASE64_STANDARD.decode(&request.value) {
-            Ok(decoded_value) => match cache.put_if_absent(key.clone(), decoded_value.clone()) {
+            Ok(decoded_value) => match cache.put_if_absent(key.clone(), decoded_value.clone()).await {
                 Ok(previous) => {
                     let response_data = previous.as_ref().map(|prev_val| CacheValue {
                         key: key.clone(),
@@ -432,7 +432,7 @@ async fn start_api_server(
         Json(request): Json<SetValueRequest>,
     ) -> impl IntoResponse {
         match BASE64_STANDARD.decode(&request.value) {
-            Ok(decoded_value) => match cache.replace(key.clone(), decoded_value.clone()) {
+            Ok(decoded_value) => match cache.replace(key.clone(), decoded_value.clone()).await {
                 Ok(previous) => {
                     let response_data = previous.as_ref().map(|prev_val| CacheValue {
                         key: key.clone(),
@@ -500,7 +500,7 @@ async fn start_api_server(
             }
         };
 
-        match cache.compare_and_swap(key, expected_bytes, new_bytes) {
+        match cache.compare_and_swap(key, expected_bytes, new_bytes).await {
             Ok(swapped) => {
                 let response = CacheResponse {
                     success: true,
@@ -530,7 +530,7 @@ async fn start_api_server(
         Json(request): Json<SetValueRequest>,
     ) -> impl IntoResponse {
         match BASE64_STANDARD.decode(&request.value) {
-            Ok(decoded_value) => match cache.get_or_insert(key.clone(), || decoded_value.clone()) {
+            Ok(decoded_value) => match cache.get_or_insert(key.clone(), || decoded_value.clone()).await {
                 Ok(result_value) => {
                     let response = CacheResponse {
                         success: true,
@@ -566,7 +566,7 @@ async fn start_api_server(
     async fn clear_cache_handler(
         State(cache): State<Goldylox<String, Vec<u8>>>,
     ) -> impl IntoResponse {
-        match cache.clear() {
+        match cache.clear().await {
             Ok(_) => {
                 let response: CacheResponse<()> = CacheResponse {
                     success: true,
@@ -591,7 +591,7 @@ async fn start_api_server(
     ) -> impl IntoResponse {
         // Use professional telemetry system for detailed tier-specific statistics
         let telemetry = cache.get_unified_stats();
-        let metrics = telemetry.get_performance_metrics();
+        let metrics = telemetry.get_performance_metrics().await;
 
         // Calculate aggregated statistics with overflow protection
         let total_keys = metrics
@@ -657,7 +657,7 @@ async fn start_api_server(
         State(cache): State<Goldylox<String, Vec<u8>>>,
         Json(request): Json<BatchGetRequest>,
     ) -> impl IntoResponse {
-        let summary = cache.batch_get(request.keys);
+        let summary = cache.batch_get(request.keys).await;
         let successful_ops = summary.total_operations - summary.failed_count;
         let total_ops = summary.total_operations;
         let response = CacheResponse {
@@ -694,7 +694,7 @@ async fn start_api_server(
             }
         }
 
-        let summary = cache.batch_put(decoded_entries);
+        let summary = cache.batch_put(decoded_entries).await;
         let successful_ops = summary.total_operations - summary.failed_count;
         let total_ops = summary.total_operations;
         let response = CacheResponse {
@@ -712,7 +712,7 @@ async fn start_api_server(
         State(cache): State<Goldylox<String, Vec<u8>>>,
         Json(request): Json<BatchRemoveRequest>,
     ) -> impl IntoResponse {
-        let summary = cache.batch_remove(request.keys);
+        let summary = cache.batch_remove(request.keys).await;
         let successful_ops = summary.total_operations - summary.failed_count;
         let total_ops = summary.total_operations;
         let response = CacheResponse {

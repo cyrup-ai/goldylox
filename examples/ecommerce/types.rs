@@ -97,8 +97,9 @@ pub enum CacheCommand {
     Shutdown,
 }
 
-/// Cache worker that owns cache instances
+/// Cache worker that owns cache instances (currently unused in examples)
 #[allow(dead_code)]
+#[cfg(feature = "worker_based_cache")]
 pub struct CacheWorker {
     receiver: Receiver<CacheCommand>,
     product_cache: Goldylox<String, Product>,
@@ -106,6 +107,7 @@ pub struct CacheWorker {
     analytics_cache: Goldylox<String, AnalyticsEvent>,
 }
 
+#[cfg(feature = "worker_based_cache")]
 impl CacheWorker {
     pub fn new(receiver: Receiver<CacheCommand>) -> Result<Self, Box<dyn std::error::Error>> {
         // Create separate builders for each cache type
@@ -124,101 +126,133 @@ impl CacheWorker {
             .warm_tier_max_entries(75000)
             .cold_tier_base_dir("./cache/analytics");
 
+        // Use tokio runtime handle to build caches synchronously in this context
+        let rt = tokio::runtime::Handle::current();
         Ok(Self {
             receiver,
-            product_cache: product_config.build()?,
-            session_cache: session_config.build()?,
-            analytics_cache: analytics_config.build()?,
+            product_cache: rt.block_on(product_config.build())?,
+            session_cache: rt.block_on(session_config.build())?,
+            analytics_cache: rt.block_on(analytics_config.build())?,
         })
     }
 
     pub fn run(self) {
+        let mut panic_count = 0;
+        const MAX_CONSECUTIVE_PANICS: u32 = 5;
+        let mut should_shutdown = false;
+
         loop {
+            if should_shutdown {
+                log::info!("Cache worker shutting down gracefully");
+                break;
+            }
+
             match self.receiver.recv() {
-                Ok(command) => match command {
-                    CacheCommand::ProductGet { key, response } => {
-                        let result = self.product_cache.get(&key);
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send ProductGet response: {:?}", e);
+                Ok(command) => {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        match command {
+                            CacheCommand::ProductGet { key, response } => {
+                                let result = self.product_cache.get(&key);
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send ProductGet response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::ProductPut {
+                                key,
+                                value,
+                                response,
+                            } => {
+                                let result = self
+                                    .product_cache
+                                    .put(key, value)
+                                    .map_err(|e| e.to_string());
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send ProductPut response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::SessionGet { key, response } => {
+                                let result = self.session_cache.get(&key);
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send SessionGet response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::SessionPut {
+                                key,
+                                value,
+                                response,
+                            } => {
+                                let result = self
+                                    .session_cache
+                                    .put(key, value)
+                                    .map_err(|e| e.to_string());
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send SessionPut response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::AnalyticsGet { key, response } => {
+                                let result = self.analytics_cache.get(&key);
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send AnalyticsGet response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::AnalyticsPut {
+                                key,
+                                value,
+                                response,
+                            } => {
+                                let result = self
+                                    .analytics_cache
+                                    .put(key, value)
+                                    .map_err(|e| e.to_string());
+                                if let Err(e) = response.send(result) {
+                                    log::warn!("Failed to send AnalyticsPut response: {:?}", e);
+                                }
+                            }
+                            CacheCommand::GetStats { response } => {
+                                let product_stats = self
+                                    .product_cache
+                                    .stats()
+                                    .unwrap_or_else(|_| "error".to_string());
+                                let session_stats = self
+                                    .session_cache
+                                    .stats()
+                                    .unwrap_or_else(|_| "error".to_string());
+                                let analytics_stats = self
+                                    .analytics_cache
+                                    .stats()
+                                    .unwrap_or_else(|_| "error".to_string());
+                                let combined_stats = format!(
+                                    "Product: {}, Session: {}, Analytics: {}",
+                                    product_stats, session_stats, analytics_stats
+                                );
+                                if let Err(e) = response.send(combined_stats) {
+                                    log::warn!("Failed to send GetStats response: {}", e);
+                                }
+                            }
+                            CacheCommand::Shutdown => {
+                                should_shutdown = true;
+                            }
+                        }
+                    }));
+
+                    match result {
+                        Ok(_) => {
+                            panic_count = 0;
+                        }
+                        Err(panic_payload) => {
+                            panic_count += 1;
+                            log::error!(
+                                "Cache worker command processing panicked: {:?} (consecutive: {}/{})",
+                                panic_payload, panic_count, MAX_CONSECUTIVE_PANICS
+                            );
+
+                            if panic_count >= MAX_CONSECUTIVE_PANICS {
+                                log::error!("Max consecutive panics reached, shutting down worker");
+                                break;
+                            }
                         }
                     }
-                    CacheCommand::ProductPut {
-                        key,
-                        value,
-                        response,
-                    } => {
-                        let result = self
-                            .product_cache
-                            .put(key, value)
-                            .map_err(|e| e.to_string());
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send ProductPut response: {:?}", e);
-                        }
-                    }
-                    CacheCommand::SessionGet { key, response } => {
-                        let result = self.session_cache.get(&key);
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send SessionGet response: {:?}", e);
-                        }
-                    }
-                    CacheCommand::SessionPut {
-                        key,
-                        value,
-                        response,
-                    } => {
-                        let result = self
-                            .session_cache
-                            .put(key, value)
-                            .map_err(|e| e.to_string());
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send SessionPut response: {:?}", e);
-                        }
-                    }
-                    CacheCommand::AnalyticsGet { key, response } => {
-                        let result = self.analytics_cache.get(&key);
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send AnalyticsGet response: {:?}", e);
-                        }
-                    }
-                    CacheCommand::AnalyticsPut {
-                        key,
-                        value,
-                        response,
-                    } => {
-                        let result = self
-                            .analytics_cache
-                            .put(key, value)
-                            .map_err(|e| e.to_string());
-                        if let Err(e) = response.send(result) {
-                            log::warn!("Failed to send AnalyticsPut response: {:?}", e);
-                        }
-                    }
-                    CacheCommand::GetStats { response } => {
-                        let product_stats = self
-                            .product_cache
-                            .stats()
-                            .unwrap_or_else(|_| "error".to_string());
-                        let session_stats = self
-                            .session_cache
-                            .stats()
-                            .unwrap_or_else(|_| "error".to_string());
-                        let analytics_stats = self
-                            .analytics_cache
-                            .stats()
-                            .unwrap_or_else(|_| "error".to_string());
-                        let combined_stats = format!(
-                            "Product: {}, Session: {}, Analytics: {}",
-                            product_stats, session_stats, analytics_stats
-                        );
-                        if let Err(e) = response.send(combined_stats) {
-                            log::warn!("Failed to send GetStats response: {}", e);
-                        }
-                    }
-                    CacheCommand::Shutdown => {
-                        log::info!("Cache worker shutting down gracefully");
-                        break;
-                    }
-                },
+                }
                 Err(e) => {
                     log::error!("Cache worker receiver error: {}", e);
                     break;

@@ -269,9 +269,48 @@ impl PoolCleanupWorker {
                     let _ = response.send(result);
                 }
                 PoolCleanupRequest::TriggerDefragmentation { response } => {
-                    // Defragmentation logic would go here
-                    // For now, return success with 0 bytes (actual implementation needed)
-                    let result = Ok(0);
+                    log::debug!("Starting pool defragmentation across all pools");
+                    
+                    let mut total_reclaimed = 0usize;
+                    let mut pools_cleaned = 0usize;
+                    
+                    // Process each pool: small, medium, large
+                    let pools = [
+                        self.pool_manager.small_pool(),
+                        self.pool_manager.medium_pool(),
+                        self.pool_manager.large_pool(),
+                    ];
+                    
+                    for pool in pools.iter() {
+                        let before_util = pool.current_utilization();
+                        let obj_size = pool.object_size();
+                        
+                        if pool.try_cleanup() {
+                            let after_util = pool.current_utilization();
+                            let entries_freed = before_util.saturating_sub(after_util);
+                            let bytes_freed = entries_freed * obj_size;
+                            
+                            total_reclaimed += bytes_freed;
+                            pools_cleaned += 1;
+                            
+                            log::debug!(
+                                "Pool '{}' defragmented: {} entries freed ({} bytes)",
+                                pool.name(),
+                                entries_freed,
+                                bytes_freed
+                            );
+                        } else {
+                            log::debug!("Pool '{}': no cleanup needed", pool.name());
+                        }
+                    }
+                    
+                    log::info!(
+                        "Defragmentation complete: {} bytes reclaimed across {} pools",
+                        total_reclaimed,
+                        pools_cleaned
+                    );
+                    
+                    let result = Ok(total_reclaimed);
                     let _ = response.send(result);
                 }
             }
@@ -295,6 +334,9 @@ impl<
     #[allow(dead_code)] // Memory management - new used in allocation manager initialization
     pub fn new(
         config: &CacheConfig,
+        hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+        warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Result<(Self, std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>), CacheOperationError> {
         // Create channels for background services
         let (efficiency_sender, efficiency_receiver) = bounded(256);
@@ -332,29 +374,28 @@ impl<
 
         // Spawn maintenance scheduler worker
         let pool_coord_clone = pool_coordinator.clone();
+        let hot_coord_for_thread = hot_tier_coordinator.clone();
+        let warm_coord_for_thread = warm_tier_coordinator.clone();
+        let cold_coord_for_thread = cold_tier_coordinator.clone();
+        
+        // Capture tokio runtime handle BEFORE spawning thread (from current async context)
+        let runtime_handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| CacheOperationError::initialization_failed(
+                "Tokio runtime required but not found - ensure AllocationManager::new is called from async context with tokio runtime"
+            ))?;
+        
         std::thread::Builder::new()
             .name("maintenance-scheduler".to_string())
             .spawn(move || {
-                let unified_stats_arc = std::sync::Arc::new(crate::telemetry::unified_stats::UnifiedCacheStatistics::new());
-                let coherence_stats_arc = std::sync::Arc::new(crate::cache::coherence::statistics::core_statistics::CoherenceStatistics::new());
-                // Create placeholder coordinators for this maintenance scheduler
-                let hot_coord = crate::cache::tier::hot::thread_local::HotTierCoordinator {
-                    hot_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
-                    instance_selector: std::sync::atomic::AtomicUsize::new(0),
-                };
-                let warm_coord = crate::cache::tier::warm::global_api::WarmTierCoordinator {
-                    warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
-                    instance_selector: std::sync::atomic::AtomicUsize::new(0),
-                };
-                let cold_coord = match crate::cache::tier::cold::ColdTierCoordinator::new() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::error!("Failed to create cold tier coordinator: {:?}", e);
-                        return;
-                    }
-                };
+                // Enter the captured tokio runtime context
+                let _guard = runtime_handle.enter();
                 
-                let scheduler = match MaintenanceScheduler::<K, V>::new(MaintenanceConfig::default(), unified_stats_arc, coherence_stats_arc, hot_coord, warm_coord, cold_coord, pool_coord_clone) {
+                let unified_stats_arc = std::sync::Arc::new(crate::telemetry::unified_stats::UnifiedCacheStatistics::new(
+                    std::sync::Arc::new(warm_coord_for_thread.clone()),
+                ));
+                let coherence_stats_arc = std::sync::Arc::new(crate::cache::coherence::statistics::core_statistics::CoherenceStatistics::new());
+                
+                let scheduler = match MaintenanceScheduler::<K, V>::new(MaintenanceConfig::default(), unified_stats_arc, coherence_stats_arc, hot_coord_for_thread, warm_coord_for_thread, cold_coord_for_thread, pool_coord_clone) {
                     Ok(s) => s,
                     Err(e) => {
                         log::error!("Maintenance scheduler failed to start: {:?}", e);

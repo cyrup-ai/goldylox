@@ -6,6 +6,7 @@
 // Internal coherence architecture - components may not be used in minimal API
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::CachePadded;
@@ -25,7 +26,7 @@ pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     /// Inter-tier communication channels
     pub communication_hub: super::communication::CommunicationHub<K, V>,
     /// Atomic coherence statistics
-    pub coherence_stats: crate::cache::coherence::CoherenceStatistics,
+    pub coherence_stats: Arc<crate::cache::coherence::CoherenceStatistics>,
     /// Protocol configuration - used in protocol validation and coordination
     #[allow(dead_code)]
     // MESI coherence - used in protocol validation and configuration management
@@ -394,12 +395,17 @@ impl<
         warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     ) -> Self {
+        // Create Arc-wrapped stats to share with validator
+        let coherence_stats = Arc::new(crate::cache::coherence::CoherenceStatistics::new());
+        
         Self {
             cache_line_states: SkipMap::new(),
             communication_hub: super::communication::CommunicationHub::new(),
-            coherence_stats: crate::cache::coherence::CoherenceStatistics::new(),
+            coherence_stats: coherence_stats.clone(),
             protocol_config: config,
-            transition_validator: super::state_management::StateTransitionValidator::new(),
+            transition_validator: super::state_management::StateTransitionValidator::new(
+                coherence_stats.clone()
+            ),
             invalidation_manager: InvalidationManager::new(1000),
             write_propagation: super::write_propagation::WritePropagationSystem::new(
                 1_000_000_000,
@@ -855,16 +861,16 @@ impl<
     }
 
     /// Perform background maintenance including write propagation completion processing
-    pub fn perform_maintenance(&self) {
+    pub async fn perform_maintenance(&self) {
         // Process pending write propagation tasks and generate completions
-        self.process_write_propagation_tasks();
+        self.process_write_propagation_tasks().await;
 
         // Process write propagation worker completions
         self.write_propagation.process_worker_completions();
     }
 
     /// Process write propagation background tasks
-    fn process_write_propagation_tasks(&self) {
+    async fn process_write_propagation_tasks(&self) {
         use super::write_propagation::worker_system::WriteBackCompletion;
         use std::time::Instant;
 
@@ -874,7 +880,7 @@ impl<
                 let start_time = Instant::now();
 
                 // Execute actual tier write operation using crossbeam channels
-                let result = self.execute_tier_write_operation(&task.request);
+                let result = self.execute_tier_write_operation(&task.request).await;
 
                 let processing_time = start_time.elapsed().as_nanos() as u64;
 
@@ -900,7 +906,7 @@ impl<
     }
 
     /// Execute actual tier write operation using crossbeam channels
-    fn execute_tier_write_operation(
+    async fn execute_tier_write_operation(
         &self,
         request: &super::write_propagation::types::WriteBackRequest<CoherenceKey<K>, V>,
     ) -> super::write_propagation::worker_system::WriteBackResult {
@@ -915,15 +921,15 @@ impl<
         let write_result = match request.target_tier {
             CacheTier::Hot => {
                 // Write to hot tier using SIMD-optimized crossbeam messaging
-                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value)
+                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value).await
             }
             CacheTier::Warm => {
                 // Write to warm tier using balanced crossbeam messaging
-                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value)
+                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value).await
             }
             CacheTier::Cold => {
                 // Write to cold tier using insert_demoted function
-                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key.original_key, cache_value)
+                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key.original_key, cache_value).await
             }
         };
 

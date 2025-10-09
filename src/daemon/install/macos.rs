@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
-// use plist::Value; // Using string template instead for now
+// use plist::Value; // Using string template instead of plist crate
 
 use crate::daemon::install::builder::CommandBuilder;
 use crate::daemon::install::{InstallerBuilder, InstallerError};

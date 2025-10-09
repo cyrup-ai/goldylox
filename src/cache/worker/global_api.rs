@@ -12,8 +12,8 @@ use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Create a new maintenance worker
 #[inline]
-pub fn create_worker() -> CacheMaintenanceWorker {
-    CacheMaintenanceWorker::new()
+pub fn create_worker(cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator) -> CacheMaintenanceWorker {
+    CacheMaintenanceWorker::new(cold_tier_coordinator)
 }
 
 /// Promote entry to hot tier directly using tier API
@@ -26,7 +26,7 @@ pub fn async_promote<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
 }
 
 /// Demote entry to cold tier directly using tier API  
-pub fn async_demote<
+pub async fn async_demote<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -41,7 +41,7 @@ pub fn async_demote<
     value: V,
 ) -> Result<(), CacheOperationError> {
     // Use proper cold tier insertion through coordinator infrastructure
-    crate::cache::tier::cold::insert_demoted(coordinator, key.clone(), value)
+    crate::cache::tier::cold::insert_demoted(coordinator, key.clone(), value).await
 }
 
 /// Schedule maintenance task with worker

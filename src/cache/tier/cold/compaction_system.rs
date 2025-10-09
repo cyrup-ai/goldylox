@@ -21,8 +21,8 @@ pub use super::data_structures::{
     CompactionState, CompactionSystem, CompactionTask, RecoverySystem, SyncState,
 };
 
-impl CompactionSystem {
-    pub fn new(_compact_interval_ns: u64) -> io::Result<Self> {
+impl<K: CacheKey> CompactionSystem<K> {
+    pub fn new() -> io::Result<Self> {
         let (compaction_tx, compaction_rx) = unbounded();
 
         Ok(Self {
@@ -32,6 +32,7 @@ impl CompactionSystem {
             last_compaction_ns: AtomicU64::new(0),
             compaction_handle: None,
             last_checkpoint: None,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -70,25 +71,21 @@ impl CompactionSystem {
             .load(Ordering::Relaxed)
     }
 
-    /// Start background compaction worker
-    pub fn start_background_worker(&mut self) -> Result<(), CompactionError> {
-        if self.compaction_handle.is_some() {
-            return Err(CompactionError::AlreadyRunning);
-        }
-
-        let rx = self.compaction_rx.clone();
-        let state = CompactionState::new(); // Create a new state for the worker
-
-        let handle = std::thread::spawn(move || {
-            Self::compaction_worker(rx, state);
-        });
-
-        self.compaction_handle = Some(handle);
-        Ok(())
+    /// Poll for pending compaction tasks
+    /// Returns the next task if one is available, or None if the queue is empty
+    /// The caller (ColdTierService worker) will execute the task on the owned tier data
+    pub fn poll_task(&self) -> Option<CompactionTask> {
+        self.compaction_rx.try_recv().ok()
     }
 
     /// Background compaction worker thread
-    fn compaction_worker(rx: Receiver<CompactionTask>, state: CompactionState) {
+    fn compaction_worker(
+        rx: Receiver<CompactionTask>,
+        state: CompactionState,
+        storage_manager: std::sync::Arc<std::sync::Mutex<super::data_structures::StorageManager>>,
+        metadata_index: std::sync::Arc<std::sync::Mutex<super::data_structures::MetadataIndex<K>>>,
+        compression_engine: std::sync::Arc<super::data_structures::CompressionEngine>,
+    ) {
         while let Ok(task) = rx.recv() {
             state.is_compacting.store(true, Ordering::SeqCst);
             state.progress.store(0.0);
@@ -97,16 +94,16 @@ impl CompactionSystem {
 
             match task {
                 CompactionTask::CompactData => {
-                    Self::compact_data_file(&state);
+                    Self::compact_data_file(&state, &storage_manager, &metadata_index);
                 }
                 CompactionTask::RebuildIndex => {
                     Self::rebuild_index_file(&state);
                 }
                 CompactionTask::CleanupExpired => {
-                    Self::cleanup_expired_entries(&state);
+                    Self::cleanup_expired_entries(&state, &metadata_index, &storage_manager);
                 }
                 CompactionTask::OptimizeCompression => {
-                    Self::optimize_compression_parameters(&state);
+                    Self::optimize_compression_parameters(&state, &storage_manager, &metadata_index, &compression_engine);
                 }
             }
 
@@ -119,13 +116,121 @@ impl CompactionSystem {
         }
     }
 
-    /// Compact data file to remove fragmentation - delegates to sophisticated defragmentation
-    fn compact_data_file(state: &CompactionState) {
+    /// Compact data file to remove fragmentation - actual cold tier compaction
+    fn compact_data_file(
+        state: &CompactionState,
+        storage_manager: &std::sync::Arc<std::sync::Mutex<super::data_structures::StorageManager>>,
+        metadata_index: &std::sync::Arc<std::sync::Mutex<super::data_structures::MetadataIndex<K>>>,
+    ) {
         state.progress.store(0.1);
 
-        // Defragmentation logic (requires pool_coordinator access - placeholder for now)
-        state.bytes_reclaimed.store(0, Ordering::Relaxed);
+        // Step 1: Acquire locks
+        let storage = match storage_manager.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire storage lock: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+        let mut index = match metadata_index.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire index lock: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+
+        state.progress.store(0.2);
+
+        // Step 2: Collect all valid entries with their data
+        let mut valid_entries = Vec::new();
+
+        if let Some(ref mmap) = storage.data_file {
+            for (key, entry) in index.key_index.iter() {
+                let start = entry.file_offset as usize;
+                let end = start + entry.compressed_size as usize;
+
+                if end <= mmap.len() {
+                    let data = mmap[start..end].to_vec();
+                    valid_entries.push((key.clone(), data, entry.clone()));
+                }
+            }
+        } else {
+            log::warn!("No data file available for compaction");
+            state.progress.store(1.0);
+            return;
+        }
+
+        state.progress.store(0.5);
+
+        // Step 3: Write compacted data to temp file
+        let temp_path = storage.data_path.with_extension("tmp");
+        let mut temp_file = match std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path) {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("Failed to create temp file: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+
+        let mut new_offset = 0u64;
+        let mut new_index_entries = Vec::new();
+
+        use std::io::Write;
+        for (key, data, mut entry) in valid_entries {
+            if let Err(e) = temp_file.write_all(&data) {
+                log::error!("Failed to write compacted data: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+
+            // Update entry with new offset
+            entry.file_offset = new_offset;
+            new_offset += data.len() as u64;
+
+            new_index_entries.push((key, entry));
+        }
+
+        if let Err(e) = temp_file.sync_all() {
+            log::error!("Failed to sync temp file: {}", e);
+            state.progress.store(1.0);
+            return;
+        }
+        drop(temp_file);
+
+        state.progress.store(0.8);
+
+        // Step 4: Calculate bytes reclaimed
+        let old_size = storage.write_position.load(Ordering::Relaxed);
+        let new_size = new_offset;
+        let bytes_reclaimed = old_size.saturating_sub(new_size);
+
+        // Step 5: Atomically replace old file with compacted file
+        if let Err(e) = std::fs::rename(&temp_path, &storage.data_path) {
+            log::error!("Failed to replace data file: {}", e);
+            state.progress.store(1.0);
+            return;
+        }
+
+        // Step 6: Update metadata index with new offsets
+        for (key, entry) in new_index_entries {
+            index.key_index.insert(key, entry);
+        }
+
+        // Step 7: Update write position
+        storage.write_position.store(new_size, Ordering::Relaxed);
+
+        state.bytes_reclaimed.store(bytes_reclaimed, Ordering::Relaxed);
         state.progress.store(1.0);
+
+        log::info!("Compaction completed: {} bytes reclaimed", bytes_reclaimed);
     }
 
     /// Rebuild index file - delegates to sophisticated efficiency analysis
@@ -153,36 +258,191 @@ impl CompactionSystem {
         }
     }
 
-    /// Cleanup expired entries - delegates to sophisticated emergency cleanup
-    pub fn cleanup_expired_entries(state: &CompactionState) {
+    /// Cleanup expired entries - remove expired entries from cold tier storage
+    pub fn cleanup_expired_entries(
+        state: &CompactionState,
+        metadata_index: &std::sync::Arc<std::sync::Mutex<super::data_structures::MetadataIndex<K>>>,
+        _storage_manager: &std::sync::Arc<std::sync::Mutex<super::data_structures::StorageManager>>,
+    ) {
         state.progress.store(0.2);
 
-        // Emergency cleanup logic (requires pool_coordinator access - placeholder for now)
-        state.progress.store(1.0);
-    }
-
-    /// Optimize compression parameters - delegates to sophisticated analysis
-    fn optimize_compression_parameters(state: &CompactionState) {
-        state.progress.store(0.4);
-
-        // Compression optimization logic (requires pool_coordinator access - placeholder for now)
-        let config = CacheConfig::default();
-        match MemoryEfficiencyAnalyzer::new(&config) {
-            Ok(analyzer) => {
-                match analyzer.analyze_efficiency() {
-                    Ok(_analysis) => {
-                        // Use efficiency analysis for compression optimization
-                        state.progress.store(1.0);
-                    }
-                    Err(_) => {
-                        state.progress.store(1.0);
-                    }
-                }
-            }
-            Err(_) => {
+        let current_time_ns = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_nanos() as u64,
+            Err(e) => {
+                log::error!("Failed to get current time: {}", e);
                 state.progress.store(1.0);
+                return;
+            }
+        };
+
+        // Expiration threshold: 7 days of no access
+        const MAX_IDLE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
+
+        state.progress.store(0.3);
+
+        // Step 1: Acquire index lock and identify expired entries
+        let mut index = match metadata_index.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire index lock: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+
+        let expired_keys: Vec<_> = index
+            .key_index
+            .iter()
+            .filter_map(|(key, entry)| {
+                let idle_time = current_time_ns.saturating_sub(entry.last_access_ns);
+                if idle_time > MAX_IDLE_NS {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        state.progress.store(0.6);
+
+        // Step 2: Remove from metadata index
+        let mut total_bytes_freed = 0u64;
+        for key in &expired_keys {
+            if let Some(entry) = index.key_index.remove(key) {
+                total_bytes_freed += entry.compressed_size as u64;
             }
         }
+
+        state.progress.store(0.9);
+
+        // Step 3: Mark space as reclaimable (actual file cleanup happens during compaction)
+
+        state.progress.store(1.0);
+
+        log::info!(
+            "Expired entry cleanup: removed {} entries, {} bytes marked for reclaim",
+            expired_keys.len(),
+            total_bytes_freed
+        );
+    }
+
+    /// Optimize compression parameters - test and select best compression algorithm
+    fn optimize_compression_parameters(
+        state: &CompactionState,
+        storage_manager: &std::sync::Arc<std::sync::Mutex<super::data_structures::StorageManager>>,
+        metadata_index: &std::sync::Arc<std::sync::Mutex<super::data_structures::MetadataIndex<K>>>,
+        compression_engine: &std::sync::Arc<super::data_structures::CompressionEngine>,
+    ) {
+        state.progress.store(0.1);
+
+        // Step 1: Sample entries from cold tier
+        let index = match metadata_index.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire index lock: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+
+        let storage = match storage_manager.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire storage lock: {}", e);
+                state.progress.store(1.0);
+                return;
+            }
+        };
+
+        let sample_size = 100.min(index.key_index.len());
+        let sample_entries: Vec<_> = index.key_index.values().take(sample_size).collect();
+
+        state.progress.store(0.3);
+
+        // Step 2: Read sample data
+        let mut sample_data = Vec::new();
+        if let Some(ref mmap) = storage.data_file {
+            for entry in sample_entries {
+                let start = entry.file_offset as usize;
+                let end = start + entry.compressed_size as usize;
+
+                if end <= mmap.len() {
+                    sample_data.push(mmap[start..end].to_vec());
+                }
+            }
+        } else {
+            log::warn!("No data file available for compression optimization");
+            state.progress.store(1.0);
+            return;
+        }
+
+        drop(storage); // Release locks before compression tests
+        drop(index);
+
+        state.progress.store(0.5);
+
+        // Step 3: Test compression algorithms
+        use super::data_structures::CompressionAlgorithm;
+
+        let algorithms = vec![
+            CompressionAlgorithm::Lz4,
+            CompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Snappy,
+            CompressionAlgorithm::Brotli,
+        ];
+
+        let mut best_algorithm = CompressionAlgorithm::Lz4;
+        let mut best_score = 0.0f64;
+
+        for algo in algorithms {
+            compression_engine.set_algorithm(algo);
+
+            let mut total_ratio = 0.0;
+            let mut test_count = 0;
+
+            // Test on samples
+            for data in &sample_data {
+                let original_size = data.len();
+
+                // Compress
+                let start = std::time::Instant::now();
+                if let Ok(compressed) = compression_engine.compress(data, algo) {
+                    let compress_time = start.elapsed();
+
+                    let ratio = compressed.data.len() as f64 / original_size as f64;
+                    let speed = original_size as f64 / compress_time.as_secs_f64();
+
+                    // Score = compression ratio + speed factor
+                    let score = (1.0 - ratio) + (speed / 1_000_000.0); // Normalize speed
+                    total_ratio += score;
+                    test_count += 1;
+                }
+            }
+
+            let avg_score = if test_count > 0 {
+                total_ratio / test_count as f64
+            } else {
+                0.0
+            };
+
+            if avg_score > best_score {
+                best_score = avg_score;
+                best_algorithm = algo;
+            }
+        }
+
+        state.progress.store(0.9);
+
+        // Step 4: Apply best algorithm
+        compression_engine.set_algorithm(best_algorithm);
+
+        state.progress.store(1.0);
+
+        log::info!(
+            "Compression optimization: selected {:?} (score: {:.4})",
+            best_algorithm,
+            best_score
+        );
     }
 }
 

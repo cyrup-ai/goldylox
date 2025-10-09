@@ -25,11 +25,22 @@ use crate::telemetry::unified_stats::UnifiedCacheStatistics;
 use crate::telemetry::unified_stats::UnifiedStats;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
+use tokio::sync::{mpsc, oneshot};
 use crate::cache::tier::hot::thread_local::HotTierCoordinator;
 use crate::cache::tier::warm::global_api::WarmTierCoordinator;
 use crate::cache::tier::cold::ColdTierCoordinator;
 
-/// PrefetchPredictor channel communication types
+/// Prefetch predictor communication requests
+///
+/// All requests follow fire-and-forget pattern for critical path operations.
+/// Monitoring/maintenance requests (GetStats, GetQueueStatus, CleanupExpired)
+/// use blocking responses but are NEVER called from get() critical path.
+///
+/// The PrefetchWorker operates autonomously, generating predictions periodically
+/// (every 100ms) without being asked. RecordAccess messages accumulate pattern
+/// data which the worker processes independently using ML-based analysis.
+///
+/// See PREFETCH_1 and PREFETCH_2 task files for architecture details.
 #[derive(Debug)]
 pub enum PrefetchRequest<K: CacheKey> {
     /// Record access pattern for prediction
@@ -38,26 +49,14 @@ pub enum PrefetchRequest<K: CacheKey> {
         access_time_ns: u64,
         context_hash: u64,
     },
-    /// Process prefetch predictions
-    ProcessPrefetches {
-        max_count: usize,
-        response: crossbeam_channel::Sender<
-            Vec<crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>>,
-        >,
-    },
-    /// Check if key should be prefetched
-    ShouldPrefetch {
-        key: K,
-        response: crossbeam_channel::Sender<bool>,
-    },
     /// Get queue status
     GetQueueStatus {
-        response: crossbeam_channel::Sender<(usize, usize)>,
+        response: tokio::sync::oneshot::Sender<(usize, usize)>,
     },
     /// Cleanup expired requests
     CleanupExpired {
         current_time_ns: u64,
-        response: crossbeam_channel::Sender<usize>,
+        response: tokio::sync::oneshot::Sender<usize>,
     },
     /// Update configuration
     UpdateConfig { config: PrefetchConfig },
@@ -65,71 +64,140 @@ pub enum PrefetchRequest<K: CacheKey> {
     ClearState,
     /// Get statistics
     GetStats {
-        response: crossbeam_channel::Sender<PrefetchStats>,
+        response: tokio::sync::oneshot::Sender<PrefetchStats>,
     },
 }
 
 /// PrefetchPredictor worker that owns the predictor state
 pub struct PrefetchWorker<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> {
-    receiver: Receiver<PrefetchRequest<K>>,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<PrefetchRequest<K>>,
     predictor: PrefetchPredictor<K>,
 }
 
 impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> PrefetchWorker<K> {
-    pub fn new(receiver: Receiver<PrefetchRequest<K>>, config: PrefetchConfig) -> Self {
+    pub fn new(receiver: tokio::sync::mpsc::UnboundedReceiver<PrefetchRequest<K>>, config: PrefetchConfig) -> Self {
         Self {
             receiver,
             predictor: PrefetchPredictor::new(config),
         }
     }
 
-    /// Run the prefetch worker loop
-    pub fn run(mut self) {
-        while let Ok(request) = self.receiver.recv() {
-            match request {
-                PrefetchRequest::RecordAccess {
-                    key,
-                    access_time_ns,
-                    context_hash,
-                } => {
-                    self.predictor
-                        .record_access(&key, access_time_ns, context_hash);
+    /// Run the prefetch worker loop with autonomous prediction generation
+    pub async fn run<V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
+        mut self,
+        task_coordinator: std::sync::Arc<TaskCoordinator<K, V>>,
+    ) {
+        use std::time::{Duration, Instant};
+
+        let mut last_prediction = Instant::now();
+        let prediction_interval = Duration::from_millis(100);
+        let recv_timeout = Duration::from_millis(10);
+
+        loop {
+            match tokio::time::timeout(recv_timeout, self.receiver.recv()).await {
+                Ok(Some(request)) => {
+                    match request {
+                        PrefetchRequest::RecordAccess {
+                            key,
+                            access_time_ns,
+                            context_hash,
+                        } => {
+                            // Accumulate access patterns in predictor
+                            self.predictor.record_access(&key, access_time_ns, context_hash);
+
+                            // Check if it's time to generate predictions
+                            if last_prediction.elapsed() >= prediction_interval {
+                                self.generate_and_enqueue_predictions(&task_coordinator);
+                                last_prediction = Instant::now();
+                            }
+                        }
+                        PrefetchRequest::GetStats { response } => {
+                            let stats = self.predictor.get_stats();
+                            let _ = response.send(stats);
+                        }
+                        PrefetchRequest::UpdateConfig { config } => {
+                            self.predictor.update_config(config);
+                        }
+                        PrefetchRequest::ClearState => {
+                            self.predictor.clear();
+                        }
+                        PrefetchRequest::CleanupExpired {
+                            current_time_ns,
+                            response,
+                        } => {
+                            let cleaned = self.predictor.cleanup_expired_requests(
+                                current_time_ns,
+                                30_000_000_000,
+                            );
+                            let _ = response.send(cleaned);
+                        }
+                        PrefetchRequest::GetQueueStatus { response } => {
+                            let status = self.predictor.queue_status();
+                            let _ = response.send(status);
+                        }
+                    }
                 }
-                PrefetchRequest::ProcessPrefetches {
-                    max_count,
-                    response,
-                } => {
-                    let prefetches = self.predictor.get_next_prefetches(max_count);
-                    let _ = response.send(prefetches);
+                Ok(None) => {
+                    // Channel closed - graceful shutdown
+                    break;
                 }
-                PrefetchRequest::ShouldPrefetch { key, response } => {
-                    let should_prefetch = self.predictor.should_prefetch(&key);
-                    let _ = response.send(should_prefetch);
-                }
-                PrefetchRequest::GetQueueStatus { response } => {
-                    let status = self.predictor.queue_status();
-                    let _ = response.send(status);
-                }
-                PrefetchRequest::CleanupExpired {
-                    current_time_ns,
-                    response,
-                } => {
-                    let cleaned = self
-                        .predictor
-                        .cleanup_expired_requests(current_time_ns, 30_000_000_000); // 30 second threshold
-                    let _ = response.send(cleaned);
-                }
-                PrefetchRequest::UpdateConfig { config } => {
-                    self.predictor.update_config(config);
-                }
-                PrefetchRequest::ClearState => {
-                    self.predictor.clear();
-                }
-                PrefetchRequest::GetStats { response } => {
-                    let stats = self.predictor.get_stats();
-                    let _ = response.send(stats);
+                Err(_) => {
+                    // Timeout - check prediction timer anyway
+                    if last_prediction.elapsed() >= prediction_interval {
+                        self.generate_and_enqueue_predictions(&task_coordinator);
+                        last_prediction = Instant::now();
+                    }
                 }
             }
+        }
+    }
+
+    /// Generate prefetch predictions and enqueue them autonomously
+    fn generate_and_enqueue_predictions<V: CacheValue + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + 'static>(
+        &mut self,
+        task_coordinator: &TaskCoordinator<K, V>,
+    ) {
+        // Generate predictions from accumulated access patterns
+        let prefetch_requests = self.predictor.get_next_prefetches(5);
+
+        if prefetch_requests.is_empty() {
+            // Not enough pattern data yet - skip this cycle
+            return;
+        }
+
+        let mut enqueued_count = 0;
+
+        // Enqueue prefetch commands - non-blocking!
+        for request in prefetch_requests {
+            // Check confidence threshold
+            if !self.predictor.should_prefetch(&request.key) {
+                continue;
+            }
+
+            let prefetch_command = CacheCommand::Prefetch {
+                key: request.key.clone(),
+                confidence: request.confidence.as_f64(),
+                timestamp: std::time::Instant::now(),
+            };
+
+            // Non-blocking enqueue - if queue full, skip and retry next cycle
+            match task_coordinator.enqueue_command(prefetch_command) {
+                Ok(_) => {
+                    enqueued_count += 1;
+                }
+                Err(_) => {
+                    // Queue full - stop this cycle, will retry in 100ms
+                    break;
+                }
+            }
+        }
+
+        // Optional trace logging (can be removed if too noisy)
+        if enqueued_count > 0 {
+            log::trace!(
+                "PrefetchWorker: enqueued {} prefetch predictions",
+                enqueued_count
+            );
         }
     }
 }
@@ -137,7 +205,7 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static> Pr
 /// Channel-based PrefetchPredictor interface
 #[derive(Debug, Clone)]
 pub struct PrefetchChannel<K: CacheKey> {
-    sender: Sender<PrefetchRequest<K>>,
+    sender: tokio::sync::mpsc::UnboundedSender<PrefetchRequest<K>>,
 }
 
 impl<K: CacheKey> PrefetchChannel<K> {
@@ -150,52 +218,25 @@ impl<K: CacheKey> PrefetchChannel<K> {
         });
     }
 
-    /// Get next prefetches (blocking)
-    pub fn get_next_prefetches(
-        &self,
-        max_count: usize,
-    ) -> Vec<crate::cache::tier::hot::prefetch::types::PrefetchRequest<K>> {
-        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
-        match self.sender.send(PrefetchRequest::ProcessPrefetches {
-            max_count,
-            response: response_sender,
-        }) {
-            Ok(_) => response_receiver.recv().unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
-    }
-
-    /// Check if key should be prefetched
-    pub fn should_prefetch(&self, key: &K) -> bool {
-        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
-        match self.sender.send(PrefetchRequest::ShouldPrefetch {
-            key: key.clone(),
-            response: response_sender,
-        }) {
-            Ok(_) => response_receiver.recv().unwrap_or(false),
-            Err(_) => false,
-        }
-    }
-
     /// Get queue status
-    pub fn queue_status(&self) -> (usize, usize) {
-        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+    pub async fn queue_status(&self) -> (usize, usize) {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         match self.sender.send(PrefetchRequest::GetQueueStatus {
-            response: response_sender,
+            response: response_tx,
         }) {
-            Ok(_) => response_receiver.recv().unwrap_or((0, 0)),
+            Ok(_) => response_rx.await.unwrap_or((0, 0)),
             Err(_) => (0, 0),
         }
     }
 
     /// Cleanup expired requests
-    pub fn cleanup_expired(&self, current_time_ns: u64) -> usize {
-        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+    pub async fn cleanup_expired(&self, current_time_ns: u64) -> usize {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         match self.sender.send(PrefetchRequest::CleanupExpired {
             current_time_ns,
-            response: response_sender,
+            response: response_tx,
         }) {
-            Ok(_) => response_receiver.recv().unwrap_or(0),
+            Ok(_) => response_rx.await.unwrap_or(0),
             Err(_) => 0,
         }
     }
@@ -211,12 +252,12 @@ impl<K: CacheKey> PrefetchChannel<K> {
     }
 
     /// Get statistics
-    pub fn get_stats(&self) -> PrefetchStats {
-        let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
+    pub async fn get_stats(&self) -> PrefetchStats {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         match self.sender.send(PrefetchRequest::GetStats {
-            response: response_sender,
+            response: response_tx,
         }) {
-            Ok(_) => response_receiver.recv().unwrap_or_default(),
+            Ok(_) => response_rx.await.unwrap_or_default(),
             Err(_) => PrefetchStats::default(),
         }
     }
@@ -254,8 +295,8 @@ pub struct UnifiedCacheManager<
     error_recovery: ManagerErrorRecoverySystem<K, V>,
     /// Tier operations handler
     tier_operations: TierOperations<K, V>,
-    /// Task coordinator for async cache operations  
-    task_coordinator: TaskCoordinator<K, V>,
+    /// Task coordinator for async cache operations (Arc-wrapped for sharing with prefetch worker)
+    task_coordinator: std::sync::Arc<TaskCoordinator<K, V>>,
     /// Prefetch predictor channel for hot tier access pattern analysis and prefetching
     prefetch_channel: PrefetchChannel<K>,
     
@@ -265,6 +306,9 @@ pub struct UnifiedCacheManager<
 
     /// Per-instance allocation manager for memory pool operations
     pub(crate) allocation_manager: crate::cache::memory::allocation_manager::AllocationManager<K, V>,
+
+    /// Pool coordinator for memory cleanup operations
+    pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
 }
 
 impl<
@@ -282,7 +326,7 @@ impl<
     const DEFAULT_TASK_PRIORITY: u16 = 5;
 
     /// Create new unified cache manager with full tier coordination
-    pub fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
+    pub async fn new(config: CacheConfig) -> Result<Self, CacheOperationError> {
         // Initialize all cache tiers with SIMD optimization
         let hot_tier_config = crate::cache::config::types::HotTierConfig {
             max_entries: config.hot_tier.max_entries,
@@ -299,6 +343,26 @@ impl<
         // No global init needed - coordinator handles tier creation
         // NOTE: Cold tier initialization moved after coordinator creation below
 
+        // ========== Create coordinators BEFORE stats and coherence ==========
+        
+        // Create per-instance hot tier coordinator (replaces global static)
+        let hot_tier_coordinator = HotTierCoordinator {
+            hot_tiers: std::sync::Arc::new(DashMap::new()),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        };
+        
+        // Initialize hot tier with proper generic types using the coordinator
+        crate::cache::tier::hot::init_simd_hot_tier::<K, V>(&hot_tier_coordinator, hot_tier_config).await?;
+        
+        // Create per-instance warm tier coordinator (replaces global static)
+        let warm_tier_coordinator = WarmTierCoordinator {
+            warm_tiers: std::sync::Arc::new(DashMap::new()),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        };
+        
+        // Create per-instance cold tier coordinator with dedicated service thread
+        let cold_tier_coordinator = ColdTierCoordinator::new()?;
+
         // Initialize coherence protocol with atomic coordination
         let _coherence_config = ProtocolConfiguration {
             optimistic_concurrency: true,
@@ -311,48 +375,37 @@ impl<
         let coherence_system: crate::cache::coherence::protocol::global_api::CoherenceSystem<
             K,
             V,
-        > = crate::cache::coherence::protocol::global_api::CoherenceSystem::new()
-            .map_err(|_| CacheOperationError::InternalError)?;
+        > = crate::cache::coherence::protocol::global_api::CoherenceSystem::new(
+            hot_tier_coordinator.clone(),
+            warm_tier_coordinator.clone(),
+            cold_tier_coordinator.clone(),
+        ).map_err(|_| CacheOperationError::InternalError)?;
 
         // Initialize all subsystems with atomic state management
         let strategy_selector = CacheStrategySelector::new(&config)?;
         let tier_manager = TierPromotionManager::new(&config)?;
-        let unified_stats = UnifiedCacheStatistics::new();
+        let unified_stats = UnifiedCacheStatistics::new(
+            std::sync::Arc::new(warm_tier_coordinator.clone()),
+        );
         
         // Create Arc-wrapped statistics for sharing with worker threads
-        let unified_stats_arc = std::sync::Arc::new(UnifiedCacheStatistics::new());
+        let unified_stats_arc = std::sync::Arc::new(UnifiedCacheStatistics::new(
+            std::sync::Arc::new(warm_tier_coordinator.clone()),
+        ));
         let coherence_stats_arc = std::sync::Arc::new(coherence_system.coherence_stats().clone());
         
-        // ========== Create coordinators BEFORE MaintenanceScheduler ==========
-        
-        // Create per-instance hot tier coordinator (replaces global static)
-        let hot_tier_coordinator = HotTierCoordinator {
-            hot_tiers: std::sync::Arc::new(DashMap::new()),
-            instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        };
-        
-        // Initialize hot tier with proper generic types using the coordinator
-        crate::cache::tier::hot::init_simd_hot_tier::<K, V>(&hot_tier_coordinator, hot_tier_config)?;
-        
-        // Create per-instance warm tier coordinator (replaces global static)
-        let warm_tier_coordinator = WarmTierCoordinator {
-            warm_tiers: std::sync::Arc::new(DashMap::new()),
-            instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        };
-        
-        // Create per-instance cold tier coordinator with dedicated service thread
-        let cold_tier_coordinator = ColdTierCoordinator::new()?;
+        // Create allocation manager (which creates the working pool coordinator)
+        let (allocation_manager, pool_coordinator) = crate::cache::memory::allocation_manager::AllocationManager::new(&config, hot_tier_coordinator.clone(), warm_tier_coordinator.clone(), cold_tier_coordinator.clone())?;
         
         // Initialize cold tier with proper generic types (using per-instance coordinator)
+        // NOTE: Must happen AFTER pool_coordinator creation as it's needed for compaction
         crate::cache::tier::cold::init_cold_tier::<K, V>(
             &cold_tier_coordinator,
             config.cold_tier.base_dir.as_str(),
             &config.cache_id,
-        )
+            pool_coordinator.clone(),
+        ).await
         .map_err(|e| CacheOperationError::io_failed(format!("Cold tier init failed: {}", e)))?;
-        
-        // Create allocation manager (which creates the working pool coordinator)
-        let (allocation_manager, pool_coordinator) = crate::cache::memory::allocation_manager::AllocationManager::new(&config)?;
         
         // Create maintenance config with worker parameters from config
         let mut maintenance_config = MaintenanceConfig {
@@ -372,13 +425,19 @@ impl<
             pool_coordinator.clone(),
         )?;
         let policy_engine =
-            CachePolicyEngine::new(&config, crate::cache::eviction::PolicyType::default(), cold_tier_coordinator.clone())?;
+            CachePolicyEngine::new(
+                &config, 
+                crate::cache::eviction::PolicyType::default(), 
+                cold_tier_coordinator.clone(),
+                warm_tier_coordinator.clone(),
+            )?;
         let performance_monitor = PerformanceMonitor::new();
         let error_recovery = ManagerErrorRecoverySystem::new();
 
-        // Initialize task coordinator directly
-        let task_coordinator =
-            TaskCoordinator::new_direct(config.worker.task_queue_capacity as usize)?;
+        // Initialize task coordinator directly (Arc-wrapped for sharing with prefetch worker)
+        let task_coordinator = std::sync::Arc::new(
+            TaskCoordinator::new_direct(config.worker.task_queue_capacity as usize)?
+        );
 
         // Initialize prefetch predictor with configuration
         let prefetch_config = PrefetchConfig {
@@ -391,20 +450,19 @@ impl<
         };
 
         // Create prefetch worker with channels
-        let (prefetch_sender, prefetch_receiver) = bounded::<PrefetchRequest<K>>(256);
+        let (prefetch_sender, prefetch_receiver) = tokio::sync::mpsc::unbounded_channel::<PrefetchRequest<K>>();
         let prefetch_channel = PrefetchChannel {
             sender: prefetch_sender,
         };
 
-        // Spawn prefetch worker thread
+        // Spawn prefetch worker thread with task coordinator for autonomous operation
         let worker_config = prefetch_config.clone();
-        std::thread::Builder::new()
-            .name("prefetch-predictor".to_string())
-            .spawn(move || {
-                let worker = PrefetchWorker::new(prefetch_receiver, worker_config);
-                worker.run();
-            })
-            .map_err(|e| CacheOperationError::initialization_failed(e.to_string()))?;
+        let task_coordinator_clone = task_coordinator.clone(); // Arc::clone is cheap
+
+        tokio::spawn(async move {
+            let worker = PrefetchWorker::new(prefetch_receiver, worker_config);
+            worker.run(task_coordinator_clone).await;
+        });
 
         // Create TierOperations with injected coordinators
         let tier_operations = TierOperations::new_with_coordinators(
@@ -427,6 +485,7 @@ impl<
             prefetch_channel,
             cold_tier_coordinator,
             allocation_manager,
+            pool_coordinator,
         };
 
         // Start background processing with work-stealing scheduler
@@ -442,7 +501,7 @@ impl<
     }
 
     /// Get value from unified cache with intelligent tier selection - zero-copy crossbeam reference
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub async fn get(&self, key: &K) -> Option<V> {
         let timer = PrecisionTimer::start();
         let mut access_path = AccessPath::new();
 
@@ -452,9 +511,16 @@ impl<
         // Record operation start with atomic increment
         self.unified_stats.record_miss(0); // Will be updated with actual timing later
 
+        // Cache timestamp once to avoid multiple syscalls (used for prefetch pattern recording)
+        let current_time_ns =
+            match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos() as u64,
+                Err(_) => 0, // Fallback for system clock before UNIX epoch
+            };
+
         // Try hot tier first (SIMD-optimized, fastest access) with error recovery
         if self.error_recovery.is_tier_available(0) {
-            if let Some(value) = self.tier_operations.try_hot_tier_get(key, &mut access_path) {
+            if let Some(value) = self.tier_operations.try_hot_tier_get(key, &mut access_path).await {
                 let elapsed_ns = timer.elapsed_ns();
                 self.record_hit(crate::cache::coherence::CacheTier::Hot, elapsed_ns);
                 let _ = self.policy_engine.pattern_analyzer.record_access(key);
@@ -471,12 +537,7 @@ impl<
 
                 // ML-based access pattern analysis is handled by the policy engine internally
 
-                // Record access pattern for prefetch prediction
-                let current_time_ns =
-                    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                        Ok(duration) => duration.as_nanos() as u64,
-                        Err(_) => 0, // Use 0 as fallback timestamp
-                    };
+                // Record access pattern for prefetch prediction (using cached timestamp)
                 let context_hash = key.cache_hash();
                 self.prefetch_channel
                     .record_access(key.clone(), current_time_ns, context_hash);
@@ -495,7 +556,7 @@ impl<
         if self.error_recovery.is_tier_available(1) {
             if let Some(value) = self
                 .tier_operations
-                .try_warm_tier_get(key, &mut access_path)
+                .try_warm_tier_get(key, &mut access_path).await
             {
                 let elapsed_ns = timer.elapsed_ns();
                 self.record_hit(crate::cache::coherence::CacheTier::Warm, elapsed_ns);
@@ -520,12 +581,7 @@ impl<
                     &access_path,
                 );
 
-                // Record access pattern for prefetch prediction
-                let current_time_ns =
-                    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                        Ok(duration) => duration.as_nanos() as u64,
-                        Err(_) => 0, // Use 0 as fallback timestamp
-                    };
+                // Record access pattern for prefetch prediction (using cached timestamp)
                 let context_hash = key.cache_hash();
                 self.prefetch_channel
                     .record_access(key.clone(), current_time_ns, context_hash);
@@ -543,7 +599,7 @@ impl<
         // Try cold tier last (highest capacity, persistent storage)
         if let Some(value) = self
             .tier_operations
-            .try_cold_tier_get(key, &mut access_path)
+            .try_cold_tier_get(key, &mut access_path).await
         {
             let elapsed_ns = timer.elapsed_ns();
             self.record_hit(crate::cache::coherence::CacheTier::Cold, elapsed_ns);
@@ -555,12 +611,7 @@ impl<
             // Consider multi-tier promotion based on access patterns
             self.consider_multi_tier_promotion(key, &value, &access_path);
 
-            // Record access pattern for prefetch prediction
-            let current_time_ns =
-                match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                    Ok(duration) => duration.as_nanos() as u64,
-                    Err(_) => 0, // Use 0 as fallback timestamp
-                };
+            // Record access pattern for prefetch prediction (using cached timestamp)
             let context_hash = key.cache_hash();
             self.prefetch_channel
                 .record_access(key.clone(), current_time_ns, context_hash);
@@ -576,102 +627,130 @@ impl<
         // Record miss in performance monitor with atomic operations
         self.performance_monitor.record_miss(elapsed_ns);
 
-        // Process prefetch predictions after cache miss - check if we should prefetch related keys
-        let current_time_ns =
-            match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                Ok(duration) => duration.as_nanos() as u64,
-                Err(_) => 0, // Use 0 as fallback timestamp
-            };
+        // Record access pattern for prefetch prediction (using cached timestamp)
         let context_hash = key.cache_hash();
         self.prefetch_channel
             .record_access(key.clone(), current_time_ns, context_hash);
 
-        // Get potential prefetch requests
-        let prefetch_requests = self.prefetch_channel.get_next_prefetches(3); // Get up to 3 prefetch requests
-
-        // Schedule prefetch requests through background task system
-        for request in prefetch_requests {
-            if self.prefetch_channel.should_prefetch(&request.key) {
-                // Schedule prefetch command instead of direct execution to avoid recursive get() calls
-                let prefetch_command = CacheCommand::Prefetch {
-                    key: request.key.clone(),
-                    confidence: request.confidence.as_f64(),
-                    timestamp: std::time::Instant::now(),
-                };
-
-                // Enqueue for background processing
-                if self
-                    .task_coordinator
-                    .enqueue_command(prefetch_command)
-                    .is_err()
-                {
-                    // Queue full - skip this prefetch attempt
-                }
-            }
-        }
+        // Prefetch prediction happens autonomously in PrefetchWorker background thread
+        // (see PREFETCH_2 task). The worker periodically analyzes accumulated access
+        // patterns and enqueues prefetch commands directly to the task coordinator
+        // without blocking get(). This design keeps the critical cache miss path
+        // fast (<1μs overhead) while still enabling intelligent ML-based prefetching.
+        // See PrefetchWorker::run() at line 87 for autonomous prediction loop.
 
         None
     }
 
     /// Put value in unified cache with optimal tier placement
-    pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
+    pub async fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
         let timer = PrecisionTimer::start();
-
-        // Analyze value characteristics for intelligent placement
-        let placement_decision =
-            self.tier_operations
-                .analyze_placement(&key, &value, &self.policy_engine);
-
-        match placement_decision.primary_tier {
-            crate::cache::coherence::CacheTier::Hot => {
-                // Place in hot tier with potential replication
-                match self.tier_operations.put_with_replication(
-                    key,
-                    value,
-                    crate::cache::coherence::CacheTier::Hot,
-                    placement_decision.replication_tiers,
-                ) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        // Use error recovery system for sophisticated retry logic
-                        self.error_recovery.handle_error(
-                            crate::cache::types::statistics::multi_tier::ErrorType::GenericError,
-                            placement_decision.primary_tier as u8,
-                        );
-                        return Err(e);
+        
+        let placement_decision = self.tier_operations
+            .analyze_placement(&key, &value, &self.policy_engine);
+        
+        let mut current_tier = placement_decision.primary_tier;
+        let mut last_error = None;
+        
+        // Try primary tier, then failover chain if needed
+        loop {
+            match current_tier {
+                crate::cache::coherence::CacheTier::Hot => {
+                    if self.error_recovery.is_tier_available(0) {
+                        match self.tier_operations.put_with_replication(
+                            key.clone(),
+                            value.clone(),
+                            crate::cache::coherence::CacheTier::Hot,
+                            placement_decision.replication_tiers.clone(),
+                        ).await {
+                            Ok(_) => {
+                                self.error_recovery.record_success(0);
+                                break; // Success
+                            }
+                            Err(e) => {
+                                log::warn!("Hot tier put failed: {:?}, initiating failover", e);
+                                self.error_recovery.execute_recovery(
+                                    crate::cache::types::statistics::multi_tier::ErrorType::TierTransition,
+                                    0,
+                                );
+                                last_error = Some(e);
+                                current_tier = crate::cache::coherence::CacheTier::Warm; // Failover to Warm
+                                continue;
+                            }
+                        }
+                    } else {
+                        log::debug!("Hot tier unavailable (circuit breaker open), failing over to Warm");
+                        current_tier = crate::cache::coherence::CacheTier::Warm;
+                        continue;
+                    }
+                }
+                
+                crate::cache::coherence::CacheTier::Warm => {
+                    if self.error_recovery.is_tier_available(1) {
+                        match self.tier_operations.put_with_replication(
+                            key.clone(),
+                            value.clone(),
+                            crate::cache::coherence::CacheTier::Warm,
+                            vec![], // No replication for failover puts
+                        ).await {
+                            Ok(_) => {
+                                self.error_recovery.record_success(1);
+                                log::info!("Successfully failed over PUT to Warm tier");
+                                break;
+                            }
+                            Err(e) => {
+                                log::warn!("Warm tier put failed: {:?}, failing over to Cold", e);
+                                self.error_recovery.execute_recovery(
+                                    crate::cache::types::statistics::multi_tier::ErrorType::TierTransition,
+                                    1,
+                                );
+                                last_error = Some(e);
+                                current_tier = crate::cache::coherence::CacheTier::Cold; // Failover to Cold
+                                continue;
+                            }
+                        }
+                    } else {
+                        log::debug!("Warm tier unavailable (circuit breaker open), failing over to Cold");
+                        current_tier = crate::cache::coherence::CacheTier::Cold;
+                        continue;
+                    }
+                }
+                
+                crate::cache::coherence::CacheTier::Cold => {
+                    // Cold tier is final fallback - no more failover options
+                    match self.tier_operations.put_cold_tier_only(key, value).await {
+                        Ok(_) => {
+                            self.error_recovery.record_success(2);
+                            log::info!("Successfully failed over PUT to Cold tier");
+                            break;
+                        }
+                        Err(e) => {
+                            log::error!("Cold tier put failed - no more failover options: {:?}", e);
+                            self.error_recovery.execute_recovery(
+                                crate::cache::types::statistics::multi_tier::ErrorType::TierTransition,
+                                2,
+                            );
+                            return Err(last_error.unwrap_or(e));
+                        }
                     }
                 }
             }
-            crate::cache::coherence::CacheTier::Warm => {
-                // Place in warm tier with selective replication
-                self.tier_operations.put_with_replication(
-                    key,
-                    value,
-                    crate::cache::coherence::CacheTier::Warm,
-                    placement_decision.replication_tiers,
-                )?;
-            }
-            crate::cache::coherence::CacheTier::Cold => {
-                // Place only in cold tier (large, infrequently accessed)
-                self.tier_operations.put_cold_tier_only(key, value)?;
-            }
         }
-
-        // Update access latency with running average calculation
+        
+        // Update metrics
         let elapsed_ns = timer.elapsed_ns();
-        self.unified_stats.update_memory_usage(elapsed_ns); // Use available public method
-
-        // Submit background maintenance task after put operation
-        let canonical_task =
-            crate::cache::worker::types::WorkerMaintenanceOps::update_statistics_task();
+        self.unified_stats.update_memory_usage(elapsed_ns);
+        
+        // Submit background maintenance task
+        let canonical_task = crate::cache::worker::types::WorkerMaintenanceOps::update_statistics_task();
         let _ = self.maintenance_scheduler.submit_task(canonical_task, 1000);
-
+        
         Ok(())
     }
 
     /// Remove value from all cache tiers with atomic consistency
-    pub fn remove(&self, key: &K) -> bool {
-        let removed = self.tier_operations.remove_from_all_tiers(key);
+    pub async fn remove(&self, key: &K) -> bool {
+        let removed = self.tier_operations.remove_from_all_tiers(key).await;
 
         if removed {
             // Update operation counter atomically using public method
@@ -687,8 +766,8 @@ impl<
     }
 
     /// Clear all cache tiers with atomic coordination
-    pub fn clear(&self) -> Result<(), CacheOperationError> {
-        self.tier_operations.clear_all_tiers()?;
+    pub async fn clear(&self) -> Result<(), CacheOperationError> {
+        self.tier_operations.clear_all_tiers().await?;
 
         // Reset unified statistics atomically
         self.unified_stats.reset_all_counters();
@@ -1000,22 +1079,32 @@ impl<
 
     /// Execute pending cache commands through task coordinator
     #[allow(dead_code)] // Unified manager - command queue flushing API with batch execution
-    pub fn flush_pending_commands(&mut self) -> Result<usize, CacheOperationError> {
+    pub async fn flush_pending_commands(&mut self) -> Result<usize, CacheOperationError> {
         // Create a closure that captures the necessary components to avoid borrowing issues
         let tier_operations = &self.tier_operations;
         let policy_engine = &self.policy_engine;
 
-        self.task_coordinator.flush_command_queue(move |command| {
-            Self::execute_cache_command_static(command, tier_operations, policy_engine)
+        let pool_coordinator = &self.pool_coordinator;
+        
+        // Get mutable access to TaskCoordinator through Arc
+        let task_coordinator_mut = std::sync::Arc::get_mut(&mut self.task_coordinator)
+            .ok_or_else(|| CacheOperationError::InvalidState("Cannot get mutable access to task_coordinator (shared references exist)".to_string()))?;
+        
+        task_coordinator_mut.flush_command_queue(move |command| {
+            // Note: This closure is sync but calls async function - needs tokio runtime
+            tokio::runtime::Handle::current().block_on(
+                Self::execute_cache_command_static(command, tier_operations, policy_engine, pool_coordinator)
+            )
         })
     }
 
     /// Execute a cache command from the task coordination system (static version for borrowing)
     #[allow(dead_code)] // Unified manager - static command execution for task coordination integration
-    fn execute_cache_command_static(
+    async fn execute_cache_command_static(
         command: CacheCommand<K, V>,
         tier_operations: &TierOperations<K, V>,
         policy_engine: &CachePolicyEngine<K, V>,
+        _pool_coordinator: &std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
     ) -> Result<(), CacheOperationError> {
         use crate::cache::worker::task_coordination::CacheCommand;
 
@@ -1035,27 +1124,29 @@ impl<
                 };
 
                 if coherence_tier == crate::cache::coherence::CacheTier::Cold {
-                    tier_operations.put_cold_tier_only(key, value)
+                    tier_operations.put_cold_tier_only(key, value).await
                 } else {
                     // Use private put_in_tier method through public interface
-                    tier_operations.put_with_replication(key, value, coherence_tier, vec![])
+                    tier_operations.put_with_replication(key, value, coherence_tier, vec![]).await
                 }
             }
             CacheCommand::Remove { key, .. } => {
                 // Convert tier type and use remove_from_all_tiers for simplicity
-                let _ = tier_operations.remove_from_all_tiers(&key);
+                let _ = tier_operations.remove_from_all_tiers(&key).await;
                 Ok(())
             }
             CacheCommand::Move { key, to_tier, .. } => {
                 // Try to get value from all tiers (since we don't have individual tier getters)
                 let mut access_path = AccessPath::new();
-                let value = tier_operations
-                    .try_hot_tier_get(&key, &mut access_path)
-                    .or_else(|| tier_operations.try_warm_tier_get(&key, &mut access_path))
-                    .or_else(|| tier_operations.try_cold_tier_get(&key, &mut access_path))
-                    .ok_or_else(|| {
-                        CacheOperationError::InvalidState("Key not found in any tier".to_string())
-                    })?;
+                let value = if let Some(v) = tier_operations.try_hot_tier_get(&key, &mut access_path).await {
+                    v
+                } else if let Some(v) = tier_operations.try_warm_tier_get(&key, &mut access_path).await {
+                    v
+                } else if let Some(v) = tier_operations.try_cold_tier_get(&key, &mut access_path).await {
+                    v
+                } else {
+                    return Err(CacheOperationError::InvalidState("Key not found in any tier".to_string()));
+                };
 
                 // Convert tier types
                 let target_coherence_tier = match to_tier {
@@ -1070,18 +1161,18 @@ impl<
 
                 // Insert in target tier
                 if target_coherence_tier == crate::cache::coherence::CacheTier::Cold {
-                    tier_operations.put_cold_tier_only(key.clone(), value)?;
+                    tier_operations.put_cold_tier_only(key.clone(), value).await?;
                 } else {
                     tier_operations.put_with_replication(
                         key.clone(),
                         value,
                         target_coherence_tier,
                         vec![],
-                    )?;
+                    ).await?;
                 }
 
                 // Remove from all tiers (will clean up from source)
-                let _ = tier_operations.remove_from_all_tiers(&key);
+                let _ = tier_operations.remove_from_all_tiers(&key).await;
 
                 Ok(())
             }
@@ -1103,10 +1194,13 @@ impl<
                 if confidence >= PREFETCH_CONFIDENCE_THRESHOLD {
                     // Try to find the key in available tiers using tier_operations
                     let mut access_path = AccessPath::new();
-                    let prefetch_result = tier_operations
-                        .try_hot_tier_get(&key, &mut access_path)
-                        .or_else(|| tier_operations.try_warm_tier_get(&key, &mut access_path))
-                        .or_else(|| tier_operations.try_cold_tier_get(&key, &mut access_path));
+                    let prefetch_result = if let Some(v) = tier_operations.try_hot_tier_get(&key, &mut access_path).await {
+                        Some(v)
+                    } else if let Some(v) = tier_operations.try_warm_tier_get(&key, &mut access_path).await {
+                        Some(v)
+                    } else {
+                        tier_operations.try_cold_tier_get(&key, &mut access_path).await
+                    };
 
                     match prefetch_result {
                         Some(value) => {
@@ -1116,7 +1210,7 @@ impl<
                                 value,
                                 crate::cache::coherence::CacheTier::Hot,
                                 vec![],
-                            );
+                            ).await;
                         }
                         None => {
                             // Prefetch failed - key not found in any tier
@@ -1130,12 +1224,15 @@ impl<
                 // Flush dirty entries by ensuring they're persisted to cold tier
                 for key in keys {
                     let mut access_path = AccessPath::new();
-                    if let Some(value) = tier_operations
-                        .try_hot_tier_get(&key, &mut access_path)
-                        .or_else(|| tier_operations.try_warm_tier_get(&key, &mut access_path))
-                    {
+                    let value = if let Some(v) = tier_operations.try_hot_tier_get(&key, &mut access_path).await {
+                        Some(v)
+                    } else {
+                        tier_operations.try_warm_tier_get(&key, &mut access_path).await
+                    };
+                    
+                    if let Some(value) = value {
                         // Ensure persistence in cold tier
-                        let _ = tier_operations.put_cold_tier_only(key, value);
+                        let _ = tier_operations.put_cold_tier_only(key, value).await;
                     }
                 }
                 Ok(())
@@ -1143,23 +1240,16 @@ impl<
             CacheCommand::Compact {
                 tier, target_size, ..
             } => {
-                use crate::cache::tier::cold::compaction_system::{
-                    CompactionSystem, CompactionTask,
-                };
-
-                // Use the existing sophisticated compaction system
-                let compaction_system = CompactionSystem::new(target_size as u64).map_err(|e| {
-                    CacheOperationError::io_failed(format!("Compaction system init failed: {}", e))
-                })?;
-                let task = match tier {
-                    crate::cache::types::CacheTier::Cold => CompactionTask::CompactData,
-                    _ => CompactionTask::OptimizeCompression, // Hot/Warm use compression optimization
-                };
-
-                compaction_system
-                    .schedule_compaction(task)
-                    .map_err(|_| CacheOperationError::InternalError)?;
-                Ok(())
+                // Compaction is handled by the ColdTierCoordinator's trigger_maintenance method
+                // This static method doesn't have access to the coordinator, so compaction
+                // must be triggered through the UnifiedCacheManager instance methods instead
+                log::warn!(
+                    "Compaction command received for tier {:?} with target {} but cannot be executed from static context",
+                    tier, target_size
+                );
+                Err(CacheOperationError::invalid_state(
+                    "Compaction must be triggered through ColdTierCoordinator.trigger_maintenance()"
+                ))
             }
         }
     }
@@ -1232,23 +1322,23 @@ impl<
 
     /// Atomically put value only if key is not present
     /// Returns the previous value if key was present, None if key was absent
-    pub fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+    pub async fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
         // Use lock-free tier-native atomic operations
-        self.tier_operations.put_if_absent_atomic(key, value)
+        self.tier_operations.put_if_absent_atomic(key, value).await
     }
 
     /// Atomically replace existing value with new value, returning the old value
     /// Returns None if key was not present
-    pub fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+    pub async fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
         // Use lock-free tier-native atomic operations
-        self.tier_operations.replace_atomic(key, value)
+        self.tier_operations.replace_atomic(key, value).await
     }
 
     /// Atomically replace value only if current value equals expected value
     /// Returns true if replacement occurred, false otherwise
     ///
     /// Note: This method is only available when V implements PartialEq
-    pub fn compare_and_swap(
+    pub async fn compare_and_swap(
         &self,
         key: K,
         expected: V,
@@ -1259,27 +1349,36 @@ impl<
     {
         // Use lock-free tier-native atomic operations
         self.tier_operations
-            .compare_and_swap_atomic(key, expected, new_value)
+            .compare_and_swap_atomic(key, expected, new_value).await
     }
 
     /// Check if key exists in cache without retrieving the value
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.get(key).is_some()
+    pub async fn contains_key(&self, key: &K) -> bool {
+        self.get(key).await.is_some()
     }
 
     /// Atomically get value or insert using factory function if key is absent
-    pub fn get_or_insert_atomic<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
+    pub async fn get_or_insert_atomic<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
     where
         F: FnOnce() -> V,
     {
-        self.tier_operations.get_or_insert_atomic(key, factory)
+        self.tier_operations.get_or_insert_atomic(key, factory).await
     }
 
     /// Shutdown cache system gracefully with proper cleanup
     #[allow(dead_code)] // Unified manager - graceful shutdown API for proper cleanup and resource management
-    pub fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
+    pub async fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
         // Stop maintenance operations gracefully
         self.maintenance_scheduler.stop_maintenance()?;
+
+        // Sync cold tier storage to disk (async, non-blocking)
+        // This ensures all pending writes are flushed before shutdown
+        if let Err(e) = crate::cache::tier::cold::sync_storage::<K, V>(
+            &self.cold_tier_coordinator
+        ).await {
+            log::error!("Failed to sync cold tier storage during shutdown: {}", e);
+            // Continue shutdown even if sync fails
+        }
 
         // Note: Full shutdown with thread joining requires ownership of MaintenanceScheduler
         // This is handled during UnifiedCacheManager Drop if needed
@@ -1306,78 +1405,78 @@ impl<
     // =======================================================================
 
     /// Get total space saved by cold tier compression
-    pub fn get_cold_tier_space_saved(&self) -> u64 {
+    pub async fn get_cold_tier_space_saved(&self) -> u64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
             Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::total_space_saved(&stats))
-        }).unwrap_or(0)
+        }).await.unwrap_or(0)
     }
 
     /// Get cold tier compression effectiveness (ratio)
-    pub fn get_cold_tier_compression_effectiveness(&self) -> f64 {
+    pub async fn get_cold_tier_compression_effectiveness(&self) -> f64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, f64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
             Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::compression_effectiveness(&stats))
-        }).unwrap_or(0.0)
+        }).await.unwrap_or(0.0)
     }
 
     /// Get average cold tier compression time in nanoseconds
-    pub fn get_cold_tier_avg_compression_time(&self) -> u64 {
+    pub async fn get_cold_tier_avg_compression_time(&self) -> u64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
             Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::avg_compression_time_ns(&stats))
-        }).unwrap_or(0)
+        }).await.unwrap_or(0)
     }
 
     /// Get average cold tier decompression time in nanoseconds
-    pub fn get_cold_tier_avg_decompression_time(&self) -> u64 {
+    pub async fn get_cold_tier_avg_decompression_time(&self) -> u64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator.execute_read_operation::<K, V, u64, _>(|tier| {
             let stats = tier.compression_engine.get_stats();
             Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::avg_decompression_time_ns(&stats))
-        }).unwrap_or(0)
+        }).await.unwrap_or(0)
     }
 
     /// Get cold tier compression throughput in MB/s
-    pub fn get_cold_tier_compression_throughput(&self) -> f64 {
+    pub async fn get_cold_tier_compression_throughput(&self) -> f64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, f64, _>(|tier| {
                 let stats = tier.compression_engine.get_stats();
                 Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::compression_throughput(&stats) / 1_048_576.0) // Convert bytes/s to MB/s
-            })
+            }).await
             .unwrap_or(0.0)
     }
 
     /// Get cold tier decompression throughput in MB/s
-    pub fn get_cold_tier_decompression_throughput(&self) -> f64 {
+    pub async fn get_cold_tier_decompression_throughput(&self) -> f64 {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, f64, _>(|tier| {
                 let stats = tier.compression_engine.get_stats();
                 Ok(crate::cache::tier::cold::compression::CompressionStatsSnapshot::decompression_throughput(&stats) / 1_048_576.0) // Convert bytes/s to MB/s
-            })
+            }).await
             .unwrap_or(0.0)
     }
 
     /// Get current cold tier compression algorithm
-    pub fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
+    pub async fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
         let coordinator = &self.cold_tier_coordinator;
 
         coordinator
             .execute_read_operation::<K, V, String, _>(|tier| {
                 let algorithm = tier.compression_engine.get_algorithm();
                 Ok(format!("{:?}", algorithm))
-            })
+            }).await
             .map_err(|e| {
                 CacheOperationError::TierError(format!(
                     "Failed to get compression algorithm: {}",
@@ -1417,65 +1516,22 @@ impl<
     // PREFETCH SYSTEM INTEGRATION - PRODUCTION GRADE IMPLEMENTATION
     // =======================================================================
 
-    /// Process prefetch requests and execute them in the background
-    #[allow(dead_code)] // Unified manager - prefetch processing method for background request execution
-    pub fn process_prefetch_requests(&self) -> usize {
-        let mut processed_count = 0;
-
-        // Get available prefetch requests
-        let prefetch_requests = self.prefetch_channel.get_next_prefetches(5); // Process up to 5 requests
-
-        for request in prefetch_requests {
-            // Check if key should be prefetched
-            if self.prefetch_channel.should_prefetch(&request.key) {
-                // Execute prefetch request by trying to load the key
-                match self.get(&request.key) {
-                    Some(_) => {
-                        // Prefetch successful - the key was found
-                        processed_count += 1;
-                    }
-                    None => {
-                        // Prefetch failed - the key wasn't available
-                    }
-                }
-            }
-        }
-
-        processed_count
-    }
-
-    /// Execute a single prefetch request for a specific key
-    #[allow(dead_code)] // Unified manager - single prefetch execution for specific key requests  
-    pub fn execute_prefetch(&self, key: &K) -> bool {
-        if self.prefetch_channel.should_prefetch(key) {
-            match self.get(key) {
-                Some(_) => {
-                    return true;
-                }
-                None => {
-                    // Prefetch failed - key not available
-                }
-            }
-        }
-        false
-    }
-
     /// Get pending prefetch queue status
     #[allow(dead_code)] // Unified manager - prefetch queue monitoring for capacity management
-    pub fn get_prefetch_queue_status(&self) -> (usize, usize) {
-        self.prefetch_channel.queue_status()
+    pub async fn get_prefetch_queue_status(&self) -> (usize, usize) {
+        self.prefetch_channel.queue_status().await
     }
 
     /// Cleanup expired prefetch requests
     #[allow(dead_code)] // Unified manager - prefetch cleanup for memory management
-    pub fn cleanup_expired_prefetch_requests(&self) -> usize {
+    pub async fn cleanup_expired_prefetch_requests(&self) -> usize {
         let current_time_ns =
             match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
                 Ok(duration) => duration.as_nanos() as u64,
                 Err(_) => 0, // Use 0 as fallback timestamp
             };
 
-        self.prefetch_channel.cleanup_expired(current_time_ns)
+        self.prefetch_channel.cleanup_expired(current_time_ns).await
     }
 
     /// Update prefetch configuration
@@ -1491,35 +1547,35 @@ impl<
     }
 
     /// Get comprehensive prefetch statistics
-    pub fn get_prefetch_stats(&self) -> PrefetchStats {
-        self.prefetch_channel.get_stats()
+    pub async fn get_prefetch_stats(&self) -> PrefetchStats {
+        self.prefetch_channel.get_stats().await
     }
 
     /// Get prefetch prediction accuracy
     #[allow(dead_code)] // Unified manager - prefetch accuracy analysis for performance monitoring
-    pub fn get_prefetch_accuracy(&self) -> f64 {
-        self.get_prefetch_stats().accuracy
+    pub async fn get_prefetch_accuracy(&self) -> f64 {
+        self.get_prefetch_stats().await.accuracy
     }
 
     /// Get prefetch hit rate
     #[allow(dead_code)] // Unified manager - prefetch hit rate monitoring for effectiveness analysis
-    pub fn get_prefetch_hit_rate(&self) -> f64 {
-        self.get_prefetch_stats().hit_rate
+    pub async fn get_prefetch_hit_rate(&self) -> f64 {
+        self.get_prefetch_stats().await.hit_rate
     }
 
     /// Get number of detected access patterns
     #[allow(dead_code)] // Unified manager - pattern detection monitoring for prediction analysis
-    pub fn get_detected_patterns_count(&self) -> usize {
-        self.get_prefetch_stats().patterns_detected
+    pub async fn get_detected_patterns_count(&self) -> usize {
+        self.get_prefetch_stats().await.patterns_detected
     }
 
     /// Get prefetch queue utilization
     #[allow(dead_code)] // Unified manager - queue utilization monitoring for capacity planning
-    pub fn get_prefetch_queue_utilization(&self) -> f64 {
-        let stats = self.get_prefetch_stats();
+    pub async fn get_prefetch_queue_utilization(&self) -> f64 {
+        let stats = self.get_prefetch_stats().await;
         if stats.queue_size > 0 {
             // Get capacity from queue status
-            let capacity = self.prefetch_channel.queue_status().1;
+            let capacity = self.prefetch_channel.queue_status().await.1;
             stats.queue_size as f64 / capacity as f64
         } else {
             0.0
@@ -1528,21 +1584,21 @@ impl<
 
     /// Check if prefetching is effective
     #[allow(dead_code)] // Unified manager - prefetch effectiveness evaluation for optimization decisions
-    pub fn is_prefetching_effective(&self, threshold: f64) -> bool {
-        self.get_prefetch_stats().is_effective(threshold)
+    pub async fn is_prefetching_effective(&self, threshold: f64) -> bool {
+        self.get_prefetch_stats().await.is_effective(threshold)
     }
 
     /// Get prefetch effectiveness score
     #[allow(dead_code)] // Unified manager - prefetch effectiveness scoring for performance comparison
-    pub fn get_prefetch_effectiveness_score(&self) -> f64 {
-        self.get_prefetch_stats().effectiveness_score()
+    pub async fn get_prefetch_effectiveness_score(&self) -> f64 {
+        self.get_prefetch_stats().await.effectiveness_score()
     }
 
     /// Get access history length for pattern analysis
     #[allow(dead_code)] // Unified manager - access history monitoring for pattern detection analysis
-    pub fn get_access_history_length(&self) -> usize {
+    pub async fn get_access_history_length(&self) -> usize {
         // Return queue size as proxy for access history length
-        self.prefetch_channel.queue_status().0
+        self.prefetch_channel.queue_status().await.0
     }
 
     /// Get current prefetch configuration
@@ -1554,7 +1610,7 @@ impl<
     }
 
     /// Select optimal compression algorithm for current workload
-    pub fn select_cold_tier_compression_for_workload(&self, workload_type: &str) -> String {
+    pub async fn select_cold_tier_compression_for_workload(&self, workload_type: &str) -> String {
         let coordinator = &self.cold_tier_coordinator;
 
         let workload_type = workload_type.to_string(); // Clone to avoid lifetime issues
@@ -1572,6 +1628,7 @@ impl<
                     .select_algorithm_for_workload(&[], workload);
                 Ok(format!("{:?}", algorithm))
             })
+            .await
             .unwrap_or_else(|_| "LZ4".to_string())
     }
 }

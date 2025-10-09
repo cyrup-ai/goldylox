@@ -189,35 +189,35 @@ where
     }
 
     /// Create new cache with default configuration
-    pub fn new() -> Result<Self, CacheOperationError> {
-        Self::builder().build()
+    pub async fn new() -> Result<Self, CacheOperationError> {
+        Self::builder().build().await
     }
 
     /// Store value in cache with direct access to all sophisticated features
-    pub fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
+    pub async fn put(&self, key: K, value: V) -> Result<(), CacheOperationError> {
         let cache_key = SerdeCacheKey(key);
         let cache_value = SerdeCacheValue(value);
 
-        self.manager.put(cache_key, cache_value)
+        self.manager.put(cache_key, cache_value).await
     }
 
     /// Retrieve value from cache with full type safety
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub async fn get(&self, key: &K) -> Option<V> {
         let cache_key = SerdeCacheKey(key.clone());
         self.manager
-            .get(&cache_key)
+            .get(&cache_key).await
             .map(|cache_value| cache_value.0)
     }
 
     /// Remove value from cache
-    pub fn remove(&self, key: &K) -> bool {
+    pub async fn remove(&self, key: &K) -> bool {
         let cache_key = SerdeCacheKey(key.clone());
-        self.manager.remove(&cache_key)
+        self.manager.remove(&cache_key).await
     }
 
     /// Clear all entries from cache
-    pub fn clear(&self) -> Result<(), CacheOperationError> {
-        self.manager.clear()
+    pub async fn clear(&self) -> Result<(), CacheOperationError> {
+        self.manager.clear().await
     }
 
     /// Get the hash value for a key (for testing and debugging)
@@ -269,29 +269,29 @@ where
 
     /// Store value only if key is not already present
     /// Returns the previous value if key was present, None if key was absent
-    pub fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+    pub async fn put_if_absent(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
         let cache_key = SerdeCacheKey(key);
         let cache_value = SerdeCacheValue(value);
 
         self.manager
-            .put_if_absent(cache_key, cache_value)
+            .put_if_absent(cache_key, cache_value).await
             .map(|opt| opt.map(|cache_value| cache_value.0))
     }
 
     /// Replace existing value with new value, returning the old value
     /// Returns None if key was not present
-    pub fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
+    pub async fn replace(&self, key: K, value: V) -> Result<Option<V>, CacheOperationError> {
         let cache_key = SerdeCacheKey(key);
         let cache_value = SerdeCacheValue(value);
 
         self.manager
-            .replace(cache_key, cache_value)
+            .replace(cache_key, cache_value).await
             .map(|opt| opt.map(|cache_value| cache_value.0))
     }
 
     /// Atomically replace value only if current value equals expected value
     /// Returns true if replacement occurred, false otherwise
-    pub fn compare_and_swap(
+    pub async fn compare_and_swap(
         &self,
         key: K,
         expected: V,
@@ -305,12 +305,12 @@ where
         let new_cache_value = SerdeCacheValue(new_value);
 
         self.manager
-            .compare_and_swap(cache_key, expected_cache_value, new_cache_value)
+            .compare_and_swap(cache_key, expected_cache_value, new_cache_value).await
     }
 
     /// Get value or insert using factory function if key is absent
     /// Returns the existing value if present, or the newly inserted value
-    pub fn get_or_insert<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
+    pub async fn get_or_insert<F>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
     where
         F: FnOnce() -> V,
     {
@@ -318,19 +318,19 @@ where
         let cache_key = SerdeCacheKey(key);
         let result = self
             .manager
-            .get_or_insert_atomic(cache_key, || SerdeCacheValue(factory()))?;
+            .get_or_insert_atomic(cache_key, || SerdeCacheValue(factory())).await?;
         Ok(result.0)
     }
 
     /// Get value or insert using fallible factory function if key is absent
     /// Returns the existing value if present, or the newly inserted value
-    pub fn get_or_insert_with<F, E>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
+    pub async fn get_or_insert_with<F, E>(&self, key: K, factory: F) -> Result<V, CacheOperationError>
     where
         F: FnOnce() -> Result<V, E>,
         E: Into<CacheOperationError>,
     {
         // First check if key exists (fast path)
-        if let Some(existing_value) = self.get(&key) {
+        if let Some(existing_value) = self.get(&key).await {
             return Ok(existing_value);
         }
 
@@ -339,16 +339,16 @@ where
         let cache_key = SerdeCacheKey(key);
         let cache_value = SerdeCacheValue(new_value.clone());
 
-        match self.manager.put_if_absent(cache_key, cache_value)? {
+        match self.manager.put_if_absent(cache_key, cache_value).await? {
             Some(existing) => Ok(existing.0), // Another thread inserted first
             None => Ok(new_value),            // We successfully inserted
         }
     }
 
     /// Check if key exists in cache without retrieving the value
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub async fn contains_key(&self, key: &K) -> bool {
         let cache_key = SerdeCacheKey(key.clone());
-        self.manager.contains_key(&cache_key)
+        self.manager.contains_key(&cache_key).await
     }
 
     // =======================================================================
@@ -356,38 +356,38 @@ where
     // =======================================================================
 
     /// Get total space saved by cold tier compression
-    pub fn get_cold_tier_space_saved(&self) -> u64 {
-        self.manager.get_cold_tier_space_saved()
+    pub async fn get_cold_tier_space_saved(&self) -> u64 {
+        self.manager.get_cold_tier_space_saved().await
     }
 
     /// Get cold tier compression effectiveness (ratio)
-    pub fn get_cold_tier_compression_effectiveness(&self) -> f64 {
-        self.manager.get_cold_tier_compression_effectiveness()
+    pub async fn get_cold_tier_compression_effectiveness(&self) -> f64 {
+        self.manager.get_cold_tier_compression_effectiveness().await
     }
 
     /// Get average cold tier compression time in nanoseconds
-    pub fn get_cold_tier_avg_compression_time(&self) -> u64 {
-        self.manager.get_cold_tier_avg_compression_time()
+    pub async fn get_cold_tier_avg_compression_time(&self) -> u64 {
+        self.manager.get_cold_tier_avg_compression_time().await
     }
 
     /// Get average cold tier decompression time in nanoseconds
-    pub fn get_cold_tier_avg_decompression_time(&self) -> u64 {
-        self.manager.get_cold_tier_avg_decompression_time()
+    pub async fn get_cold_tier_avg_decompression_time(&self) -> u64 {
+        self.manager.get_cold_tier_avg_decompression_time().await
     }
 
     /// Get cold tier compression throughput in MB/s
-    pub fn get_cold_tier_compression_throughput(&self) -> f64 {
-        self.manager.get_cold_tier_compression_throughput()
+    pub async fn get_cold_tier_compression_throughput(&self) -> f64 {
+        self.manager.get_cold_tier_compression_throughput().await
     }
 
     /// Get cold tier decompression throughput in MB/s
-    pub fn get_cold_tier_decompression_throughput(&self) -> f64 {
-        self.manager.get_cold_tier_decompression_throughput()
+    pub async fn get_cold_tier_decompression_throughput(&self) -> f64 {
+        self.manager.get_cold_tier_decompression_throughput().await
     }
 
     /// Get current cold tier compression algorithm
-    pub fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
-        self.manager.get_cold_tier_compression_algorithm()
+    pub async fn get_cold_tier_compression_algorithm(&self) -> Result<String, CacheOperationError> {
+        self.manager.get_cold_tier_compression_algorithm().await
     }
 
     /// Update cold tier compression thresholds
@@ -412,13 +412,11 @@ where
     }
 
     /// Select optimal compression algorithm for current workload
-    pub fn select_cold_tier_compression_for_workload(
+    pub async fn select_cold_tier_compression_for_workload(
         &self,
         workload_type: &str,
     ) -> Result<String, CacheOperationError> {
-        Ok(self
-            .manager
-            .select_cold_tier_compression_for_workload(workload_type))
+        Ok(self.manager.select_cold_tier_compression_for_workload(workload_type).await)
     }
 
     // =======================================================================
@@ -447,7 +445,7 @@ where
     /// Execute batch get operations with comprehensive timing and statistics
     ///
     /// Returns simplified batch result with success/failure counts and timing data
-    pub fn batch_get(&self, keys: Vec<K>) -> BatchOperationSummary<V> {
+    pub async fn batch_get(&self, keys: Vec<K>) -> BatchOperationSummary<V> {
         let mut successful_results = Vec::new();
         let mut failed_keys = Vec::new();
         let mut total_time_ns = 0u64;
@@ -455,7 +453,7 @@ where
 
         for key in keys {
             let start = std::time::Instant::now();
-            match self.get(&key) {
+            match self.get(&key).await {
                 Some(value) => {
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
                     successful_results.push(value);
@@ -498,7 +496,7 @@ where
     /// Execute batch put operations with comprehensive timing and statistics
     ///
     /// Returns simplified batch result with success/failure counts and timing data
-    pub fn batch_put(&self, entries: Vec<(K, V)>) -> BatchOperationSummary<()> {
+    pub async fn batch_put(&self, entries: Vec<(K, V)>) -> BatchOperationSummary<()> {
         let mut successful_operations = 0;
         let mut failed_operations = 0;
         let mut total_time_ns = 0u64;
@@ -506,7 +504,7 @@ where
 
         for (key, value) in entries {
             let start = std::time::Instant::now();
-            match self.put(key, value) {
+            match self.put(key, value).await {
                 Ok(()) => {
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
                     successful_operations += 1;
@@ -553,7 +551,7 @@ where
     /// Execute batch remove operations with comprehensive timing and statistics
     ///
     /// Returns simplified batch result with success/failure counts and timing data
-    pub fn batch_remove(&self, keys: Vec<K>) -> BatchOperationSummary<bool> {
+    pub async fn batch_remove(&self, keys: Vec<K>) -> BatchOperationSummary<bool> {
         let mut successful_results = Vec::new();
         let mut failed_operations = 0;
         let mut total_time_ns = 0u64;
@@ -561,7 +559,7 @@ where
 
         for key in keys {
             let start = std::time::Instant::now();
-            let removed = self.remove(&key);
+            let removed = self.remove(&key).await;
             let elapsed_ns = start.elapsed().as_nanos() as u64;
 
             if removed {
@@ -740,15 +738,15 @@ where
     }
 
     /// Shutdown the policy engine gracefully
-    pub fn shutdown_policy_engine(&self) -> Result<(), CacheOperationError> {
+    pub async fn shutdown_policy_engine(&self) -> Result<(), CacheOperationError> {
         // Policy engine shutdown is handled as part of graceful system shutdown
         // The sophisticated policy engine cleanup is integrated into the unified shutdown process
-        self.manager.shutdown_gracefully()
+        self.manager.shutdown_gracefully().await
     }
 
     /// Shutdown the cache system gracefully
-    pub fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
-        self.manager.shutdown_gracefully()
+    pub async fn shutdown_gracefully(&self) -> Result<(), CacheOperationError> {
+        self.manager.shutdown_gracefully().await
     }
 }
 
@@ -887,9 +885,9 @@ where
     /// This initializes all cache tiers, crossbeam channels, workers, etc.
     /// All complex initialization is handled by UnifiedCacheManager.
     /// Spawns ~18-24 background worker threads.
-    pub fn build(self) -> Result<Goldylox<K, V>, CacheOperationError> {
+    pub async fn build(self) -> Result<Goldylox<K, V>, CacheOperationError> {
         // Delegate all complex initialization to UnifiedCacheManager
-        let manager = UnifiedCacheManager::new(self.config)?;
+        let manager = UnifiedCacheManager::new(self.config).await?;
 
         // Arc-wrap for cheap cloning without spawning new threads
         Ok(Goldylox { 

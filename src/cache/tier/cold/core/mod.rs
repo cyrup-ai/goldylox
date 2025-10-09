@@ -3,6 +3,7 @@
 //! This module provides the decomposed implementation of the PersistentColdTier
 //! cache, organized into logical submodules for maintainability.
 
+pub mod compaction;
 pub mod initialization;
 pub mod operations;
 pub mod storage;

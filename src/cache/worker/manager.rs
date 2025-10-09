@@ -4,10 +4,10 @@
 //! management, task submission, and worker thread spawning.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::Sender;
+use tokio::sync::mpsc;
 
 use super::types::{CacheMaintenanceWorker, MaintenanceTask, StatUpdate, WorkerMaintenanceOps};
 use crate::cache::traits::types_and_enums::CacheOperationError;
@@ -34,6 +34,7 @@ impl CacheMaintenanceWorker {
                     &self.shutdown as *const AtomicBool,
                     task_receiver,
                     stat_sender,
+                    self.cold_tier_coordinator.clone(),
                 );
 
             self.worker_handle = Some(worker_handle);
@@ -70,28 +71,41 @@ impl CacheMaintenanceWorker {
         Ok(())
     }
 
-    /// Spawn worker thread
+    /// Spawn async worker task
     pub fn spawn_worker(
         shutdown_ptr: *const AtomicBool,
-        task_receiver: Receiver<MaintenanceTask>,
+        task_receiver: mpsc::UnboundedReceiver<MaintenanceTask>,
         stat_sender: Sender<StatUpdate>,
-    ) -> JoinHandle<()> {
-        thread::spawn(move || {
+        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
             // SAFETY: The shutdown flag lives as long as the CacheMaintenanceWorker
             // and we only read from it. The worker thread is joined before Drop.
             let shutdown = unsafe { &*shutdown_ptr };
             
             let start_time = Instant::now();
-
-            while !shutdown.load(Ordering::Relaxed) {
-                // Try to receive task with timeout
-                match task_receiver.recv_timeout(Duration::from_millis(100)) {
-                    Ok(task) => {
+            let mut task_receiver = task_receiver;  // Make mutable for async recv
+            
+            // Periodic maintenance interval (100ms to match previous behavior)
+            let mut maintenance_interval = tokio::time::interval(Duration::from_millis(100));
+            maintenance_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            
+            loop {
+                tokio::select! {
+                    // Priority 1: Process incoming tasks instantly
+                    Some(task) = task_receiver.recv() => {
                         let task_start = Instant::now();
-                        super::task_processor::process_task(task, &stat_sender);
+                        
+                        // Pass cold_tier_coordinator to fix signature
+                        super::task_processor::process_task(
+                            task, 
+                            &stat_sender,
+                            &cold_tier_coordinator
+                        );
+                        
                         let task_duration = task_start.elapsed();
 
-                        // Send statistics updates through channel
+                        // Send statistics updates
                         let _ = stat_sender.send(StatUpdate::TaskProcessed);
                         let _ = stat_sender.send(StatUpdate::TaskTime(
                             task_duration.as_nanos() as u64
@@ -99,16 +113,33 @@ impl CacheMaintenanceWorker {
                         let _ = stat_sender.send(StatUpdate::UpdateUptime(
                             start_time.elapsed().as_secs()
                         ));
-                    }
-                    Err(_) => {
-                        // Timeout - perform periodic maintenance
-                        super::task_processor::perform_periodic_maintenance(&stat_sender);
                         
-                        // Update uptime periodically
-                        let _ = stat_sender.send(StatUpdate::UpdateUptime(
-                            start_time.elapsed().as_secs()
-                        ));
+                        // Check shutdown after processing
+                        if shutdown.load(Ordering::Relaxed) {
+                            break;
+                        }
                     }
+                    
+                    // Priority 2: Periodic maintenance every 100ms when idle
+                    _ = maintenance_interval.tick() => {
+                        // Only run if not shutting down
+                        if !shutdown.load(Ordering::Relaxed) {
+                            super::task_processor::perform_periodic_maintenance(
+                                &stat_sender,
+                                &cold_tier_coordinator
+                            );
+                            
+                            // Update uptime periodically
+                            let _ = stat_sender.send(StatUpdate::UpdateUptime(
+                                start_time.elapsed().as_secs()
+                            ));
+                        }
+                    }
+                }
+                
+                // Break if shutdown flag is set
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
                 }
             }
 
@@ -126,8 +157,4 @@ impl Drop for CacheMaintenanceWorker {
     }
 }
 
-impl Default for CacheMaintenanceWorker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Note: Default trait removed because new() now requires cold_tier_coordinator parameter

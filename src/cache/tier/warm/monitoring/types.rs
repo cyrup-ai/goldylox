@@ -158,8 +158,8 @@ impl From<crate::cache::types::statistics::tier_stats::TierStatistics> for TierS
         Self {
             entry_count: stats.entry_count,
             memory_usage: stats.memory_usage as u64,
-            total_hits: 0, // Would need to be calculated from hit_rate and total accesses
-            total_misses: 0, // Would need to be calculated from hit_rate and total accesses
+            total_hits: stats.hits,
+            total_misses: stats.misses,
             hit_rate: stats.hit_rate,
             avg_access_latency_ns: stats.avg_access_time_ns as f64,
             peak_access_latency_ns: stats.avg_access_time_ns,

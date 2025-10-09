@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .compression_level(8)
         .background_worker_threads(8)
         .cache_id("base_operations_test")
-        .build()?;
+        .build().await?;
 
     test_basic_operations(&cache).await?;
     test_statistics_analytics(&cache).await?;
@@ -59,14 +59,14 @@ async fn test_basic_operations(
 
     // Put operation with performance timing
     let start = std::time::Instant::now();
-    cache.put(test_key1.clone(), test_value1.clone())?;
-    cache.put(test_key2.clone(), test_value2.clone())?;
-    cache.put(test_key3.clone(), test_value3.clone())?;
+    cache.put(test_key1.clone(), test_value1.clone()).await?;
+    cache.put(test_key2.clone(), test_value2.clone()).await?;
+    cache.put(test_key3.clone(), test_value3.clone()).await?;
     let put_latency = start.elapsed();
     println!("✓ put() - 3 operations in {:?}", put_latency);
 
     // Get operation with cache hit validation
-    match cache.get(&test_key1) {
+    match cache.get(&test_key1).await {
         Some(value) => {
             assert_eq!(value, "value1");
             println!("✓ get() - Retrieved: key1 -> {}", value);
@@ -75,7 +75,7 @@ async fn test_basic_operations(
     }
 
     // Contains key check
-    let contains = cache.contains_key(&test_key2);
+    let contains = cache.contains_key(&test_key2).await;
     assert!(contains);
     println!("✓ contains_key() - key2 exists: {}", contains);
 
@@ -84,17 +84,17 @@ async fn test_basic_operations(
     println!("✓ hash_key() - Hash of 'key1': 0x{:016x}", hash);
 
     // Remove operation
-    let removed = cache.remove(&test_key3);
+    let removed = cache.remove(&test_key3).await;
     assert!(removed);
     println!("✓ remove() - Removed key3: {}", removed);
 
     // Verify removal
-    let should_be_none = cache.get(&test_key3);
+    let should_be_none = cache.get(&test_key3).await;
     assert!(should_be_none.is_none());
 
     // Clear operation
-    cache.clear()?;
-    let should_be_empty = cache.contains_key(&test_key1);
+    cache.clear().await?;
+    let should_be_empty = cache.contains_key(&test_key1).await;
     assert!(!should_be_empty);
     println!("✓ clear() - Cache cleared successfully\n");
 
@@ -317,7 +317,7 @@ async fn test_statistics_analytics(
 
     // Populate with test data for meaningful statistics (zero allocations)
     for i in 0..100 {
-        cache.put(STATS_KEYS[i].to_string(), STATS_VALUES[i].to_string())?;
+        cache.put(STATS_KEYS[i].to_string(), STATS_VALUES[i].to_string()).await?;
     }
 
     // Basic statistics with JSON structure validation
@@ -358,12 +358,12 @@ async fn test_concurrent_operations(
     println!("------------------------");
 
     // Put if absent - first insertion
-    let result1 = cache.put_if_absent("concurrent_key".to_string(), "first_value".to_string())?;
+    let result1 = cache.put_if_absent("concurrent_key".to_string(), "first_value".to_string()).await?;
     assert!(result1.is_none());
     println!("✓ put_if_absent() - New key inserted");
 
     // Put if absent - key exists
-    let result2 = cache.put_if_absent("concurrent_key".to_string(), "second_value".to_string())?;
+    let result2 = cache.put_if_absent("concurrent_key".to_string(), "second_value".to_string()).await?;
     match result2 {
         Some(existing) => {
             assert_eq!(existing, "first_value");
@@ -373,7 +373,7 @@ async fn test_concurrent_operations(
     }
 
     // Replace operation
-    let replaced = cache.replace("concurrent_key".to_string(), "replaced_value".to_string())?;
+    let replaced = cache.replace("concurrent_key".to_string(), "replaced_value".to_string()).await?;
     match replaced {
         Some(old_value) => {
             assert_eq!(old_value, "first_value");
@@ -383,7 +383,7 @@ async fn test_concurrent_operations(
     }
 
     // Verify current value before compare and swap
-    let current_value = match cache.get(&"concurrent_key".to_string()) {
+    let current_value = match cache.get(&"concurrent_key".to_string()).await {
         Some(value) => {
             println!("  Current value before CAS: {}", value);
             value
@@ -396,7 +396,7 @@ async fn test_concurrent_operations(
         "concurrent_key".to_string(),
         current_value,
         "swapped_value".to_string(),
-    )?;
+    ).await?;
     if swapped {
         println!("✓ compare_and_swap() - Success: {}", swapped);
     } else {
@@ -409,14 +409,14 @@ async fn test_concurrent_operations(
     // Get or insert with factory
     let factory_value = cache.get_or_insert("new_factory_key".to_string(), || {
         "factory_created".to_string()
-    })?;
+    }).await?;
     assert_eq!(factory_value, "factory_created");
     println!("✓ get_or_insert() - Factory created: {}", factory_value);
 
     // Get or insert with fallible factory
     let fallible_value = cache.get_or_insert_with("fallible_key".to_string(), || {
         Ok::<String, goldylox::prelude::CacheOperationError>("fallible_success".to_string())
-    })?;
+    }).await?;
     assert_eq!(fallible_value, "fallible_success");
     println!(
         "✓ get_or_insert_with() - Fallible success: {}",
@@ -442,7 +442,7 @@ async fn test_batch_operations(
 
     // Batch put with performance measurement
     let start = std::time::Instant::now();
-    let put_summary = cache.batch_put(batch_data);
+    let put_summary = cache.batch_put(batch_data).await;
     let batch_put_time = start.elapsed();
 
     assert!(put_summary.all_succeeded());
@@ -463,7 +463,7 @@ async fn test_batch_operations(
         get_keys.push(format!("nonexistent_key_{}", i));
     }
 
-    let get_summary = cache.batch_get(get_keys);
+    let get_summary = cache.batch_get(get_keys).await;
     println!(
         "✓ batch_get() - {}/{} found ({:.1}% hit rate, {:.2} ops/sec)",
         get_summary.successful_results.len(),
@@ -478,7 +478,7 @@ async fn test_batch_operations(
         remove_keys.push(format!("batch_key_{}", i));
     }
 
-    let remove_summary = cache.batch_remove(remove_keys);
+    let remove_summary = cache.batch_remove(remove_keys).await;
     println!(
         "✓ batch_remove() - {}/{} removed ({:.2} ops/sec)",
         remove_summary.successful_results.len(),
@@ -507,14 +507,14 @@ async fn test_cold_tier_compression(
 
     // Add data to trigger cold tier usage
     for (key, value) in &cold_tier_test_data {
-        cache.put(key.clone(), value.clone())?;
+        cache.put(key.clone(), value.clone()).await?;
     }
 
     // Poll for background compression completion with deterministic timing
     let mut attempts = 0;
     let max_attempts = 50;
     while attempts < max_attempts {
-        let space_saved = cache.get_cold_tier_space_saved();
+        let space_saved = cache.get_cold_tier_space_saved().await;
         if space_saved > 0 || attempts >= max_attempts - 1 {
             break;
         }
@@ -522,40 +522,40 @@ async fn test_cold_tier_compression(
         attempts += 1;
     }
 
-    let space_saved = cache.get_cold_tier_space_saved();
+    let space_saved = cache.get_cold_tier_space_saved().await;
     println!(
         "✓ get_cold_tier_space_saved() - {} bytes saved",
         space_saved
     );
 
-    let effectiveness = cache.get_cold_tier_compression_effectiveness();
+    let effectiveness = cache.get_cold_tier_compression_effectiveness().await;
     println!(
         "✓ get_cold_tier_compression_effectiveness() - {:.2}x ratio",
         effectiveness
     );
 
-    let comp_time = cache.get_cold_tier_avg_compression_time();
+    let comp_time = cache.get_cold_tier_avg_compression_time().await;
     println!("✓ get_cold_tier_avg_compression_time() - {} ns", comp_time);
 
-    let decomp_time = cache.get_cold_tier_avg_decompression_time();
+    let decomp_time = cache.get_cold_tier_avg_decompression_time().await;
     println!(
         "✓ get_cold_tier_avg_decompression_time() - {} ns",
         decomp_time
     );
 
-    let comp_throughput = cache.get_cold_tier_compression_throughput();
+    let comp_throughput = cache.get_cold_tier_compression_throughput().await;
     println!(
         "✓ get_cold_tier_compression_throughput() - {:.2} MB/s",
         comp_throughput
     );
 
-    let decomp_throughput = cache.get_cold_tier_decompression_throughput();
+    let decomp_throughput = cache.get_cold_tier_decompression_throughput().await;
     println!(
         "✓ get_cold_tier_decompression_throughput() - {:.2} MB/s",
         decomp_throughput
     );
 
-    let algorithm = cache.get_cold_tier_compression_algorithm()?;
+    let algorithm = cache.get_cold_tier_compression_algorithm().await?;
     println!("✓ get_cold_tier_compression_algorithm() - {}", algorithm);
 
     cache.update_cold_tier_compression_thresholds(2048, 0.75, 15.0)?;
@@ -564,7 +564,7 @@ async fn test_cold_tier_compression(
     cache.adapt_cold_tier_compression()?;
     println!("✓ adapt_cold_tier_compression() - Algorithm adapted");
 
-    let optimal = cache.select_cold_tier_compression_for_workload("high_throughput")?;
+    let optimal = cache.select_cold_tier_compression_for_workload("high_throughput").await?;
     println!(
         "✓ select_cold_tier_compression_for_workload() - {}",
         optimal
@@ -735,10 +735,10 @@ async fn test_shutdown_operations(
     println!("🛑 SHUTDOWN OPERATIONS");
     println!("----------------------");
 
-    cache.shutdown_policy_engine()?;
+    cache.shutdown_policy_engine().await?;
     println!("✓ shutdown_policy_engine() - ML engine stopped");
 
-    cache.shutdown_gracefully()?;
+    cache.shutdown_gracefully().await?;
     println!("✓ shutdown_gracefully() - System shutdown complete");
     println!();
 

@@ -16,9 +16,10 @@ pub use seeding::*;
 pub use workloads::*;
 
 use std::sync::atomic::Ordering;
+use types::CacheCommand;
 
 /// Main entry point for the e-commerce implementation
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Goldylox Real-World E-commerce Cache Implementation");
     println!("═════════════════════════════════════════════════════════");
     println!("   Multi-tier cache with ML eviction, SIMD ops, and coherence");
@@ -27,12 +28,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Set up distributed cache nodes across multiple data centers
-    let workload = setup::setup_distributed_nodes()?;
+    let workload = setup::setup_distributed_nodes().await?;
 
     // Seed the cache with realistic e-commerce data
     println!("🌱 Seeding cache with realistic e-commerce data...");
-    seed_product_catalog(&workload)?;
-    seed_user_sessions(&workload)?;
+    seed_product_catalog(&workload).await?;
+    seed_user_sessions(&workload).await?;
     println!(
         "   ✅ Seeded {} nodes with product catalog and user sessions\n",
         workload.nodes.len()
@@ -74,7 +75,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.product_cache
             .force_cache_strategy(CacheStrategy::MLPredictive);
     }
-    generate_black_friday_rush(&workload)?;
+    generate_black_friday_rush(&workload).await?;
 
     display_cache_stats(&workload);
     println!();
@@ -89,7 +90,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.product_cache
             .force_cache_strategy(CacheStrategy::AdaptiveLRU);
     }
-    generate_regular_browsing(&workload)?;
+    generate_regular_browsing(&workload).await?;
 
     display_cache_stats(&workload);
     println!();
@@ -103,10 +104,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for node in &workload.nodes {
         node.product_cache.force_cache_strategy(CacheStrategy::ARC);
     }
-    generate_clearance_sale(&workload)?;
+    generate_clearance_sale(&workload).await?;
 
     // Schedule async maintenance operations after intensive workload
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     for node in &workload.nodes {
         let analytics_cache = &node.analytics_cache;
         let operation = |_ctx: &str| -> Result<u32, goldylox::prelude::CacheOperationError> {
@@ -115,11 +115,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(42u32) // Return a result value
         };
 
-        let result = rt.block_on(analytics_cache.schedule_async_operation(
+        let result = analytics_cache.schedule_async_operation(
             operation,
             "maintenance".to_string(),
             Vec::<String>::new(),
-        ));
+        ).await;
         match result {
             Ok(task_id) => println!(
                 "   ✅ Async maintenance task scheduled with ID: {}",
@@ -134,22 +134,34 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Stop workload
     workload.running.store(false, Ordering::Relaxed);
 
+    // Send shutdown command to worker threads
+    for node in &workload.nodes {
+        let shutdown_command = CacheCommand::Shutdown;
+        if let Err(e) = node.command_sender.send(shutdown_command) {
+            eprintln!("Failed to send shutdown command: {}", e);
+        }
+    }
+
+    // Brief delay to allow worker thread to process shutdown
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
     // Gracefully shutdown background processors after workload completes
+    let handle = tokio::runtime::Handle::current();
     for node in &workload.nodes {
         // Shutdown policy engines first
-        if let Err(e) = node.product_cache.shutdown_policy_engine() {
+        if let Err(e) = handle.block_on(node.product_cache.shutdown_policy_engine()) {
             println!(
                 "⚠️  Failed to shutdown product cache policy engine: {:?}",
                 e
             );
         }
-        if let Err(e) = node.session_cache.shutdown_policy_engine() {
+        if let Err(e) = handle.block_on(node.session_cache.shutdown_policy_engine()) {
             println!(
                 "⚠️  Failed to shutdown session cache policy engine: {:?}",
                 e
             );
         }
-        if let Err(e) = node.analytics_cache.shutdown_policy_engine() {
+        if let Err(e) = handle.block_on(node.analytics_cache.shutdown_policy_engine()) {
             println!(
                 "⚠️  Failed to shutdown analytics cache policy engine: {:?}",
                 e
@@ -157,13 +169,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Then shutdown the main cache systems
-        if let Err(e) = node.product_cache.shutdown_gracefully() {
+        if let Err(e) = handle.block_on(node.product_cache.shutdown_gracefully()) {
             println!("⚠️  Failed to shutdown product cache gracefully: {:?}", e);
         }
-        if let Err(e) = node.session_cache.shutdown_gracefully() {
+        if let Err(e) = handle.block_on(node.session_cache.shutdown_gracefully()) {
             println!("⚠️  Failed to shutdown session cache gracefully: {:?}", e);
         }
-        if let Err(e) = node.analytics_cache.shutdown_gracefully() {
+        if let Err(e) = handle.block_on(node.analytics_cache.shutdown_gracefully()) {
             println!("⚠️  Failed to shutdown analytics cache gracefully: {:?}", e);
         }
     }

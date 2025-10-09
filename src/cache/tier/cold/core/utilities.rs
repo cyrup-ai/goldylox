@@ -71,7 +71,7 @@ impl<
     pub fn validate_integrity(
         &self,
     ) -> Result<bool, crate::cache::traits::types_and_enums::CacheOperationError> {
-        // Delegate to storage manager's validate_integrity method
+        // Access storage manager directly (worker owns the data, no locks needed)
         self.storage_manager.validate_integrity()
     }
 

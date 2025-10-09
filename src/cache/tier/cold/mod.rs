@@ -7,8 +7,10 @@
 //! lock-free message passing architecture for thread safety.
 
 use bincode::{Decode, Encode, config, decode_from_slice, encode_to_vec};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use tokio::sync::{mpsc, oneshot};
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 
 use self::data_structures::{ColdCacheKey, PersistentColdTier};
 use crate::cache::config::types::ColdTierConfig;
@@ -32,6 +34,9 @@ pub mod sync;
 // Type aliases for complex function types to improve readability
 type MutateOperation = Box<dyn FnOnce(&mut dyn std::any::Any) -> Vec<u8> + Send>;
 type ReadOperation = Box<dyn FnOnce(&dyn std::any::Any) -> Vec<u8> + Send>;
+type AsyncMutateOperation = Box<
+    dyn for<'a> FnOnce(&'a mut dyn std::any::Any) -> Pin<Box<dyn Future<Output = Vec<u8>> + Send + 'a>> + Send
+>;
 
 /// Maintenance operation types for cold tier coordination
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,31 +56,36 @@ pub enum ColdTierMessage {
     Register {
         type_key: (TypeId, TypeId),
         tier: Box<dyn std::any::Any + Send + Sync>,
-        response: Sender<Result<(), CacheOperationError>>,
+        response: oneshot::Sender<Result<(), CacheOperationError>>,
     },
     ExecuteOp {
         type_key: (TypeId, TypeId),
         op: MutateOperation,
-        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+        response: oneshot::Sender<Result<Vec<u8>, CacheOperationError>>,
     },
     ExecuteReadOp {
         type_key: (TypeId, TypeId),
         op: ReadOperation,
-        response: Sender<Result<Vec<u8>, CacheOperationError>>,
+        response: oneshot::Sender<Result<Vec<u8>, CacheOperationError>>,
+    },
+    ExecuteAsyncOp {
+        type_key: (TypeId, TypeId),
+        op: AsyncMutateOperation,
+        response: oneshot::Sender<Result<Vec<u8>, CacheOperationError>>,
     },
     Maintenance {
         operation: MaintenanceOperation,
-        response: Sender<Result<(), CacheOperationError>>,
+        response: oneshot::Sender<Result<(), CacheOperationError>>,
     },
 }
 
 /// Cold tier service that owns all state (no locks needed)
 struct ColdTierService {
-    receiver: Receiver<ColdTierMessage>,
+    receiver: mpsc::UnboundedReceiver<ColdTierMessage>,
 }
 
 impl ColdTierService {
-    fn run(self) {
+    async fn run(mut self) {
         log::info!("Cold tier service starting...");
         // Service thread owns ALL tier instances - no sharing, no locks
         let mut tiers = std::collections::HashMap::<
@@ -83,7 +93,7 @@ impl ColdTierService {
             Box<dyn std::any::Any + Send + Sync>,
         >::new();
 
-        while let Ok(msg) = self.receiver.recv() {
+        while let Some(msg) = self.receiver.recv().await {
             log::debug!("Cold tier service received message");
             match msg {
                 ColdTierMessage::Register {
@@ -115,6 +125,21 @@ impl ColdTierService {
                 } => {
                     if let Some(tier) = tiers.get(&type_key) {
                         let result = op(&**tier);
+                        let _ = response.send(Ok(result));
+                    } else {
+                        let _ = response.send(Err(CacheOperationError::resource_exhausted(
+                            "Cold tier not initialized for type",
+                        )));
+                    }
+                }
+                ColdTierMessage::ExecuteAsyncOp {
+                    type_key,
+                    op,
+                    response,
+                } => {
+                    if let Some(tier) = tiers.get_mut(&type_key) {
+                        let future = op(&mut **tier);
+                        let result = future.await;
                         let _ = response.send(Ok(result));
                     } else {
                         let _ = response.send(Err(CacheOperationError::resource_exhausted(
@@ -161,7 +186,7 @@ impl ColdTierService {
 /// Cold tier coordinator for managing mutable operations
 #[derive(Debug)]
 pub struct ColdTierCoordinator {
-    sender: Sender<ColdTierMessage>,
+    sender: mpsc::UnboundedSender<ColdTierMessage>,
 }
 
 impl Clone for ColdTierCoordinator {
@@ -174,32 +199,27 @@ impl Clone for ColdTierCoordinator {
 
 impl ColdTierCoordinator {
     /// Get the sender channel for direct message sending
-    pub fn sender(&self) -> &Sender<ColdTierMessage> {
+    pub fn sender(&self) -> &mpsc::UnboundedSender<ColdTierMessage> {
         &self.sender
     }
 
     /// Create new per-instance cold tier coordinator with dedicated service thread
     pub fn new() -> Result<Self, CacheOperationError> {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = mpsc::unbounded_channel();
         
-        // Spawn PER-INSTANCE service thread (like PrefetchWorker pattern)
-        std::thread::Builder::new()
-            .name("cold-tier-service".to_string())
-            .spawn(move || {
-                log::info!("Cold tier service thread started");
-                let service = ColdTierService { receiver: rx };
-                service.run();
-                log::warn!("Cold tier service thread exited");
-            })
-            .map_err(|e| CacheOperationError::initialization_failed(format!(
-                "Failed to spawn cold tier service: {}", e
-            )))?;
+        // Spawn PER-INSTANCE async worker (like PrefetchWorker pattern)
+        tokio::spawn(async move {
+            log::info!("Cold tier service task started");
+            let service = ColdTierService { receiver: rx };
+            service.run().await;
+            log::warn!("Cold tier service task exited");
+        });
         
         Ok(Self { sender: tx })
     }
 
     /// Trigger maintenance operation (compaction, defragmentation, etc.)
-    pub fn trigger_maintenance<
+    pub async fn trigger_maintenance<
         K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: CacheValue
             + Default
@@ -212,25 +232,28 @@ impl ColdTierCoordinator {
         &self,
         operation: &str,
     ) -> Result<(), CacheOperationError> {
-        use self::data_structures::CompactionTask;
-
         let operation = operation.to_string(); // Clone to avoid lifetime issues
         self.execute_operation::<K, V, (), _>(move |tier| {
             match operation.as_str() {
                 "compact" => {
-                    tier.compaction_system
-                        .schedule_compaction(CompactionTask::CompactData)
-                        .map_err(|_| {
-                            CacheOperationError::internal_error("Compaction scheduling failed")
-                        })?;
+                    // Execute compaction directly with lock-free access to tier data
+                    tier.compact_data_file()?;
+                    Ok(())
+                }
+                "cleanup_expired" => {
+                    // Remove expired entries from metadata index
+                    tier.cleanup_expired_entries()?;
+                    Ok(())
+                }
+                "optimize_compression" => {
+                    // Test and select best compression algorithm
+                    tier.optimize_compression_parameters()?;
                     Ok(())
                 }
                 "defragment" => {
-                    tier.compaction_system
-                        .schedule_compaction(CompactionTask::OptimizeCompression)
-                        .map_err(|_| {
-                            CacheOperationError::internal_error("Compaction scheduling failed")
-                        })?;
+                    // Defragmentation = cleanup + compaction
+                    tier.cleanup_expired_entries()?;
+                    tier.compact_data_file()?;
                     Ok(())
                 }
                 "clear" => {
@@ -253,16 +276,16 @@ impl ColdTierCoordinator {
                     operation
                 ))),
             }
-        })
+        }).await
     }
 
     /// Execute maintenance operation (works with all stored K,V types)
-    pub fn execute_maintenance(
+    pub async fn execute_maintenance(
         &self,
         operation: MaintenanceOperation,
     ) -> Result<(), CacheOperationError> {
         // Send maintenance message to worker that handles all registered types
-        let (tx, rx) = unbounded();
+        let (tx, rx) = oneshot::channel();
 
         self.sender
             .send(ColdTierMessage::Maintenance {
@@ -271,11 +294,11 @@ impl ColdTierCoordinator {
             })
             .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
 
-        rx.recv().map_err(|_| CacheOperationError::TimeoutError)?
+        rx.await.map_err(|_| CacheOperationError::TimeoutError)?
     }
 
     /// Execute maintenance operation from string (compatibility layer)
-    pub fn execute_type_erased_maintenance(
+    pub async fn execute_type_erased_maintenance(
         &self,
         operation: &str,
     ) -> Result<(), CacheOperationError> {
@@ -292,10 +315,10 @@ impl ColdTierCoordinator {
             }
         };
 
-        self.execute_maintenance(maintenance_op)
+        self.execute_maintenance(maintenance_op).await
     }
 
-    pub fn register<
+    pub async fn register<
         K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: CacheValue
             + Default
@@ -310,7 +333,7 @@ impl ColdTierCoordinator {
     ) -> Result<(), CacheOperationError> {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
         let boxed_tier = Box::new(tier) as Box<dyn std::any::Any + Send + Sync>;
-        let (tx, rx) = unbounded();
+        let (tx, rx) = oneshot::channel();
 
         self.sender
             .send(ColdTierMessage::Register {
@@ -320,10 +343,10 @@ impl ColdTierCoordinator {
             })
             .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
 
-        rx.recv().map_err(|_| CacheOperationError::TimeoutError)?
+        rx.await.map_err(|_| CacheOperationError::TimeoutError)?
     }
 
-    pub fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
+    pub async fn execute_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
     where
         K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: CacheValue
@@ -337,7 +360,7 @@ impl ColdTierCoordinator {
         R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let (tx, rx) = unbounded();
+        let (tx, rx) = oneshot::channel();
 
         let op = Box::new(move |tier_any: &mut dyn std::any::Any| -> Vec<u8> {
             if let Some(tier) = tier_any.downcast_mut::<PersistentColdTier<K, V>>() {
@@ -358,7 +381,13 @@ impl ColdTierCoordinator {
             })
             .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
 
-        let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
+        let serialized = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx
+        )
+        .await
+        .map_err(|_| CacheOperationError::TimeoutError)?
+        .map_err(|_| CacheOperationError::internal_error("Response channel closed"))??;
 
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
@@ -368,7 +397,7 @@ impl ColdTierCoordinator {
             ))
     }
 
-    pub fn execute_read_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
+    pub async fn execute_read_operation<K, V, R, F>(&self, operation: F) -> Result<R, CacheOperationError>
     where
         K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: CacheValue
@@ -382,7 +411,7 @@ impl ColdTierCoordinator {
         R: Encode + Decode<()> + 'static,
     {
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
-        let (tx, rx) = unbounded();
+        let (tx, rx) = oneshot::channel();
 
         let op = Box::new(move |tier_any: &dyn std::any::Any| -> Vec<u8> {
             if let Some(tier) = tier_any.downcast_ref::<PersistentColdTier<K, V>>() {
@@ -403,7 +432,13 @@ impl ColdTierCoordinator {
             })
             .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
 
-        let serialized = rx.recv().map_err(|_| CacheOperationError::TimeoutError)??;
+        let serialized = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx
+        )
+        .await
+        .map_err(|_| CacheOperationError::TimeoutError)?
+        .map_err(|_| CacheOperationError::internal_error("Response channel closed"))??;
 
         decode_from_slice(&serialized, config::standard())
             .map(|(decoded, _len)| decoded)
@@ -412,10 +447,64 @@ impl ColdTierCoordinator {
                          serialized.len(), e)
             ))
     }
+
+    pub async fn execute_async_operation<K, V, R, F, Fut>(&self, operation: F) -> Result<R, CacheOperationError>
+    where
+        K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
+        V: CacheValue
+            + Default
+            + serde::Serialize
+            + serde::de::DeserializeOwned
+            + bincode::Encode
+            + bincode::Decode<()>
+            + 'static,
+        F: FnOnce(&mut PersistentColdTier<K, V>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, CacheOperationError>> + Send + 'static,
+        R: Encode + Decode<()> + 'static,
+    {
+        let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
+        let (tx, rx) = oneshot::channel();
+
+        let op = Box::new(move |tier_any: &mut dyn std::any::Any| -> Pin<Box<dyn Future<Output = Vec<u8>> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(tier) = tier_any.downcast_mut::<PersistentColdTier<K, V>>() {
+                    match operation(tier).await {
+                        Ok(result) => encode_to_vec(&result, config::standard()).unwrap_or_default(),
+                        Err(_) => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                }
+            })
+        });
+
+        self.sender
+            .send(ColdTierMessage::ExecuteAsyncOp {
+                type_key,
+                op,
+                response: tx,
+            })
+            .map_err(|_| CacheOperationError::internal_error("Service unavailable"))?;
+
+        let serialized = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx
+        )
+        .await
+        .map_err(|_| CacheOperationError::TimeoutError)?
+        .map_err(|_| CacheOperationError::internal_error("Response channel closed"))??;
+
+        decode_from_slice(&serialized, config::standard())
+            .map(|(decoded, _len)| decoded)
+            .map_err(|e| CacheOperationError::internal_error(
+                format!("Cold tier async operation result deserialization failed: serialized_size={}, error={:?}", 
+                         serialized.len(), e)
+            ))
+    }
 }
 
 /// Initialize cold tier for specific key-value types
-pub fn init_cold_tier<
+pub async fn init_cold_tier<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -428,6 +517,7 @@ pub fn init_cold_tier<
     coordinator: &ColdTierCoordinator,
     base_dir: &str,
     cache_id: &str,
+    pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
 ) -> Result<(), CacheOperationError> {
     log::info!(
         "Initializing cold tier: base_dir={}, cache_id={}",
@@ -448,15 +538,15 @@ pub fn init_cold_tier<
         _padding: [0; 3],
     };
 
-    let tier = PersistentColdTier::<K, V>::new(config, cache_id).map_err(|e| {
+    let tier = PersistentColdTier::<K, V>::new(config, cache_id, pool_coordinator).map_err(|e| {
         CacheOperationError::io_failed(format!("Failed to initialize cold tier: {}", e))
     })?;
 
-    coordinator.register::<K, V>(tier)
+    coordinator.register::<K, V>(tier).await
 }
 
 /// Get value from cold tier cache
-pub fn cold_get<
+pub async fn cold_get<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -470,11 +560,11 @@ pub fn cold_get<
     key: &K,
 ) -> Result<Option<V>, CacheOperationError> {
     let key = key.clone(); // Clone to avoid lifetime issues
-    coordinator.execute_read_operation::<K, V, Option<V>, _>(move |tier| Ok(tier.get(&key)))
+    coordinator.execute_read_operation::<K, V, Option<V>, _>(move |tier| Ok(tier.get(&key))).await
 }
 
 /// Get cache statistics  
-pub fn get_stats<
+pub async fn get_stats<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -488,11 +578,11 @@ pub fn get_stats<
 ) -> Result<crate::cache::types::TierStatistics, CacheOperationError> {
     coordinator.execute_read_operation::<K, V, crate::cache::types::TierStatistics, _>(|tier| {
         Ok(tier.stats())
-    })
+    }).await
 }
 
 /// Get frequently accessed keys for promotion analysis
-pub fn get_frequently_accessed_keys<
+pub async fn get_frequently_accessed_keys<
     K: CacheKey + Clone + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -522,11 +612,12 @@ pub fn get_frequently_accessed_keys<
                 .collect();
             Ok(keys)
         })
+        .await
         .unwrap_or_else(|_| Vec::new())
 }
 
 /// Check if entry should be promoted to warm tier
-pub fn should_promote_to_warm<
+pub async fn should_promote_to_warm<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -549,11 +640,12 @@ pub fn should_promote_to_warm<
                 Ok(false)
             }
         })
+        .await
         .unwrap_or(false)
 }
 
 /// Insert demoted entry from warm tier (for tier transitions)
-pub fn insert_demoted<
+pub async fn insert_demoted<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -567,11 +659,11 @@ pub fn insert_demoted<
     key: K,
     value: V,
 ) -> Result<(), CacheOperationError> {
-    coordinator.execute_operation::<K, V, (), _>(|tier| tier.put(key, value))
+    coordinator.execute_operation::<K, V, (), _>(|tier| tier.put(key, value)).await
 }
 
 /// Remove entry for promotion to warm tier (for tier transitions)
-pub fn remove_entry<
+pub async fn remove_entry<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -585,14 +677,14 @@ pub fn remove_entry<
     key: &K,
 ) -> Result<bool, CacheOperationError> {
     let key = key.clone(); // Clone to avoid lifetime issues
-    coordinator.execute_operation::<K, V, bool, _>(move |tier| Ok(tier.remove(&key)))
+    coordinator.execute_operation::<K, V, bool, _>(move |tier| Ok(tier.remove(&key))).await
 }
 
 // Re-export atomic operations
 pub use atomic_ops::{compare_and_swap_atomic, put_if_absent_atomic, replace_atomic};
 
 /// Get detailed cold tier statistics including file metrics
-pub fn get_detailed_stats<
+pub async fn get_detailed_stats<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -613,11 +705,11 @@ pub fn get_detailed_stats<
             entries: tier.metadata_index.entry_count(),
             storage_bytes: storage_stats.used_data_size,
         })
-    })
+    }).await
 }
 
 /// Get cold tier hit/miss ratio
-pub fn get_hit_miss_ratio<
+pub async fn get_hit_miss_ratio<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -634,11 +726,12 @@ pub fn get_hit_miss_ratio<
             let snapshot = tier.stats.snapshot();
             Ok(snapshot.hit_rate)
         })
+        .await
         .unwrap_or(0.0)
 }
 
 /// Get cold tier storage utilization metrics
-pub fn get_storage_utilization<
+pub async fn get_storage_utilization<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -658,11 +751,11 @@ pub fn get_storage_utilization<
             storage_stats.used_data_size,
             needs_compaction,
         ))
-    })
+    }).await
 }
 
 /// Validate cold tier data integrity
-pub fn validate_integrity<
+pub async fn validate_integrity<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -675,11 +768,11 @@ pub fn validate_integrity<
     coordinator: &ColdTierCoordinator,
 ) -> Result<bool, CacheOperationError> {
     coordinator
-        .execute_read_operation::<K, V, bool, _>(|tier| tier.storage_manager.validate_integrity())
+        .execute_read_operation::<K, V, bool, _>(|tier| tier.storage_manager.validate_integrity()).await
 }
 
 /// Cleanup expired entries in cold tier
-pub fn cleanup_expired<
+pub async fn cleanup_expired<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -732,11 +825,11 @@ pub fn cleanup_expired<
             cleaned_count
         );
         Ok(cleaned_count)
-    })
+    }).await
 }
 
 /// Check if cold tier contains a specific key
-pub fn contains_key<
+pub async fn contains_key<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -752,11 +845,11 @@ pub fn contains_key<
     // Use coordinator to check if key exists
     // This integrates the unused key containment checking methods
     let key = key.clone();
-    coordinator.execute_read_operation::<K, V, bool, _>(move |tier| Ok(tier.get(&key).is_some()))
+    coordinator.execute_read_operation::<K, V, bool, _>(move |tier| Ok(tier.get(&key).is_some())).await
 }
 
 /// Get number of entries in cold tier
-pub fn entry_count<
+pub async fn entry_count<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -769,11 +862,11 @@ pub fn entry_count<
     coordinator: &ColdTierCoordinator,
 ) -> Result<usize, CacheOperationError> {
     coordinator
-        .execute_read_operation::<K, V, usize, _>(|tier| Ok(tier.metadata_index.entry_count()))
+        .execute_read_operation::<K, V, usize, _>(|tier| Ok(tier.metadata_index.entry_count())).await
 }
 
 /// Check if cold tier is empty
-pub fn is_empty<
+pub async fn is_empty<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -786,11 +879,11 @@ pub fn is_empty<
     coordinator: &ColdTierCoordinator,
 ) -> Result<bool, CacheOperationError> {
     coordinator
-        .execute_read_operation::<K, V, bool, _>(|tier| Ok(tier.metadata_index.entry_count() == 0))
+        .execute_read_operation::<K, V, bool, _>(|tier| Ok(tier.metadata_index.entry_count() == 0)).await
 }
 
 /// Clear all entries from cold tier
-pub fn clear<
+pub async fn clear<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
@@ -808,7 +901,34 @@ pub fn clear<
 
         log::debug!("Cold tier cleared: all entries removed");
         Ok(())
-    })
+    }).await
+}
+
+/// Sync storage files to disk (async, non-blocking)
+/// Call this during graceful shutdown to ensure data persistence
+///
+/// This function performs async I/O to flush memory-mapped files and sync file handles
+/// using tokio::task::spawn_blocking for safe operations on !Send types.
+pub async fn sync_storage<
+    K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
+    V: CacheValue
+        + Default
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + bincode::Encode
+        + bincode::Decode<()>
+        + 'static,
+>(
+    coordinator: &ColdTierCoordinator,
+) -> Result<(), CacheOperationError> {
+    coordinator.execute_async_operation::<K, V, (), _, _>(|tier| {
+        Box::pin(async {
+            tier.storage_manager.shutdown_async().await
+                .map_err(|e| CacheOperationError::io_failed(
+                    format!("Failed to sync storage: {}", e)
+                ))
+        })
+    }).await
 }
 
 

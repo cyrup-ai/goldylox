@@ -17,7 +17,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 pub struct MemoryUsageHistory {
     /// Circular buffer of usage samples
     pub samples: [CachePadded<AtomicU64>; 256],
-    /// Actual capacity being used (may be less than 256)
+    /// Capacity being used (may be less than 256)
     pub actual_capacity: usize,
     /// Current position in circular buffer
     pub position: CachePadded<AtomicUsize>,

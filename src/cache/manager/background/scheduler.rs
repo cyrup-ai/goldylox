@@ -47,16 +47,12 @@ where
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
         pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
     ) -> Result<Self, CacheOperationError> {
-        let (task_sender, task_queue) = if config.queue_capacity > 0 {
-            crossbeam_channel::bounded(config.queue_capacity)
-        } else {
-            crossbeam_channel::unbounded()
-        };
+        let (task_sender, task_queue) = tokio::sync::mpsc::unbounded_channel();
 
-        let (shutdown_sender, shutdown_signal) = crossbeam_channel::bounded(1);
+        let (shutdown_sender, shutdown_signal) = tokio::sync::mpsc::unbounded_channel();
 
         // Create scaling request channels for dynamic worker management
-        let (scaling_request_sender, scaling_request_receiver) = crossbeam_channel::bounded(10);
+        let (scaling_request_sender, scaling_request_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         // Create per-instance worker registry for status tracking
         let worker_registry = std::sync::Arc::new(dashmap::DashMap::new());
@@ -75,26 +71,21 @@ where
             pool_coordinator: pool_coordinator.clone(),
         };
 
-        // Spawn coordinator thread that owns worker management via crossbeam messaging
+        // Spawn coordinator task that owns worker management via async messaging
         let coordinator_handle = {
-            let scaling_receiver = scaling_request_receiver.clone();
-            let task_queue_clone = task_queue.clone();
-            let shutdown_clone = shutdown_signal.clone();
             let config_clone = config.clone();
             let context_clone = context.clone();
 
-            std::thread::Builder::new()
-                .name("maintenance-coordinator".to_string())
-                .spawn(move || {
-                    Self::coordinator_loop(
-                        config_clone,
-                        scaling_receiver,
-                        task_queue_clone,
-                        shutdown_clone,
-                        context_clone,
-                    );
-                })
-                .map_err(|_| CacheOperationError::InitializationFailed)?
+            tokio::runtime::Handle::current().spawn(async move {
+                Self::coordinator_loop(
+                    config_clone,
+                    scaling_request_receiver,
+                    task_queue,
+                    shutdown_signal,
+                    context_clone,
+                )
+                .await;
+            })
         };
 
         log::info!(
@@ -107,14 +98,11 @@ where
             last_maintenance: Instant::now(),
             maintenance_stats: MaintenanceStats::default(),
             scheduled_operations: Vec::new(),
-            task_queue,
             task_sender,
             coordinator_handle: Some(coordinator_handle),
             config,
             stats: MaintenanceStats::default(),
-            shutdown_signal,
             shutdown_sender,
-            scaling_request_receiver,
             scaling_request_sender,
             hot_tier_coordinator,
             warm_tier_coordinator,
@@ -135,7 +123,7 @@ where
 
         self.stats.total_submitted.fetch_add(1, Ordering::Relaxed);
 
-        match self.task_sender.try_send(task.clone()) {
+        match self.task_sender.send(task.clone()) {
             Ok(()) => {
                 // Record successful task submission and simulate successful execution with timing
                 let simulated_execution_time = match canonical_task {
@@ -149,15 +137,10 @@ where
                     .record_operation_success(&canonical_task, simulated_execution_time);
                 Ok(())
             }
-            Err(crossbeam_channel::TrySendError::Full(task)) => {
-                // Queue is full - record as failure and return task for caller to handle
+            Err(e) => {
+                // Unbounded channels never return Full, only Disconnected (scheduler shutting down)
                 self.stats.record_operation_failure(&canonical_task);
-                Err(task)
-            }
-            Err(crossbeam_channel::TrySendError::Disconnected(task)) => {
-                // Scheduler is shutting down - record as failure
-                self.stats.record_operation_failure(&canonical_task);
-                Err(task)
+                Err(e.0) // Return the task from SendError
             }
         }
     }
@@ -238,20 +221,20 @@ where
 
     /// Process pending scaling requests by triggering coordinator evaluation
     #[allow(dead_code)] // Background scheduler - scaling request processing for dynamic worker management
-    pub fn process_scaling_requests(&self) -> Result<(), CacheOperationError> {
+    pub async fn process_scaling_requests(&self) -> Result<(), CacheOperationError> {
         // Create a scaling request to trigger coordinator evaluation
         // Use 1.0 capacity factor to maintain current worker count while processing any pending requests
         let (response_sender, response_receiver) =
-            crossbeam_channel::bounded::<Result<(), String>>(1);
+            tokio::sync::oneshot::channel::<Result<(), String>>();
 
         let scaling_request = super::types::ScalingRequest {
             capacity_factor: 1.0, // Neutral scaling to trigger processing
             response_sender,
         };
 
-        // Send scaling request through crossbeam channel
+        // Send scaling request through tokio channel
         self.scaling_request_sender
-            .try_send(scaling_request)
+            .send(scaling_request)
             .map_err(|e| {
                 CacheOperationError::ResourceExhausted(format!(
                     "Failed to send scaling request: {:?}",
@@ -260,64 +243,57 @@ where
             })?;
 
         // Wait for coordinator response with timeout
-        match response_receiver.recv_timeout(std::time::Duration::from_secs(2)) {
-            Ok(result) => result.map_err(|e| CacheOperationError::resource_exhausted(&e)),
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => Err(
-                CacheOperationError::resource_exhausted("Scaling request timed out"),
-            ),
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                Err(CacheOperationError::InternalError)
-            }
+        match tokio::time::timeout(std::time::Duration::from_secs(2), response_receiver).await {
+            Ok(Ok(result)) => result.map_err(|e| CacheOperationError::resource_exhausted(&e)),
+            Ok(Err(_)) => Err(CacheOperationError::InternalError), // Channel disconnected
+            Err(_) => Err(CacheOperationError::resource_exhausted("Scaling request timed out")),
         }
     }
 
-    /// Handle scaling requests with worker thread ownership
-    fn handle_scaling_with_ownership(
-        worker_threads: &mut Vec<(std::thread::JoinHandle<()>, crossbeam_channel::Sender<()>)>,
+    /// Handle scaling requests with worker task ownership
+    async fn handle_scaling_with_ownership_async(
+        worker_handles: &mut Vec<tokio::task::JoinHandle<()>>,
         config: &mut MaintenanceConfig,
         scaling_request: &super::types::ScalingRequest,
-        task_queue: &crossbeam_channel::Receiver<MaintenanceTask>,
-        shutdown_signal: &crossbeam_channel::Receiver<()>,
+        task_queue: &std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<MaintenanceTask>>>,
+        shutdown_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
         context: &WorkerContext,
     ) -> Result<(), String> {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        
         let target_workers =
             (config.worker_count as f64 * scaling_request.capacity_factor).ceil() as u32;
-        let current_workers = worker_threads.len() as u32;
+        let current_workers = worker_handles.len() as u32;
 
         if target_workers > current_workers {
             // Scale up - spawn additional workers
             for worker_id in current_workers..target_workers {
-                let task_receiver = task_queue.clone();
-                let global_shutdown_receiver = shutdown_signal.clone();
+                let task_receiver = Arc::clone(task_queue);
+                let shutdown = Arc::clone(shutdown_flag);
                 let config_clone = config.clone();
                 let context_clone = context.clone();
 
-                let (worker_shutdown_sender, _worker_shutdown_receiver) =
-                    crossbeam_channel::bounded(1);
-
-                match std::thread::Builder::new()
-                    .name(format!("maintenance-worker-{}", worker_id))
-                    .spawn(move || {
-                        Self::worker_loop(
-                            worker_id,
-                            task_receiver,
-                            global_shutdown_receiver,
-                            &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
-                            config_clone,
-                            context_clone,
-                        );
-                    }) {
-                    Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
-                    Err(e) => return Err(format!("Failed to spawn worker {}: {:?}", worker_id, e)),
-                }
+                let handle = tokio::task::spawn(async move {
+                    Self::worker_loop(
+                        worker_id,
+                        task_receiver,
+                        shutdown,
+                        config_clone,
+                        context_clone,
+                    )
+                    .await;
+                });
+                
+                worker_handles.push(handle);
             }
         } else if target_workers < current_workers {
-            // Scale down - terminate excess workers
+            // Scale down - terminate excess workers by aborting their tasks
             let workers_to_remove = current_workers - target_workers;
             for _ in 0..workers_to_remove {
-                if let Some((handle, shutdown_sender)) = worker_threads.pop() {
-                    let _ = shutdown_sender.try_send(());
-                    let _ = handle.join();
+                if let Some(handle) = worker_handles.pop() {
+                    handle.abort();
+                    let _ = handle.await; // Await to clean up
                 }
             }
         }
@@ -326,88 +302,95 @@ where
         Ok(())
     }
 
-    /// Coordinator thread loop that owns worker threads and processes scaling requests
-    fn coordinator_loop(
+    /// Coordinator async loop that owns worker tasks and processes scaling requests
+    async fn coordinator_loop(
         mut config: MaintenanceConfig,
-        scaling_receiver: crossbeam_channel::Receiver<super::types::ScalingRequest>,
-        task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
-        shutdown_signal: crossbeam_channel::Receiver<()>,
+        mut scaling_receiver: tokio::sync::mpsc::UnboundedReceiver<super::types::ScalingRequest>,
+        task_queue: tokio::sync::mpsc::UnboundedReceiver<MaintenanceTask>,
+        mut shutdown_signal: tokio::sync::mpsc::UnboundedReceiver<()>,
         context: WorkerContext,
     ) {
-        use std::time::Duration;
-        let mut worker_threads: Vec<(std::thread::JoinHandle<()>, crossbeam_channel::Sender<()>)> =
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        
+        let mut worker_handles: Vec<tokio::task::JoinHandle<()>> =
             Vec::with_capacity(config.worker_count as usize);
 
-        // Spawn initial worker threads
+        // Wrap task queue in Arc<Mutex> for multi-consumer work-stealing pattern
+        let task_queue = Arc::new(tokio::sync::Mutex::new(task_queue));
+        
+        // Shared shutdown flag for all workers
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        // Spawn initial worker tasks
         for worker_id in 0..config.worker_count {
-            let task_receiver = task_queue.clone();
-            let global_shutdown_receiver = shutdown_signal.clone();
+            let task_receiver = Arc::clone(&task_queue);
+            let shutdown = Arc::clone(&shutdown_flag);
             let config_clone = config.clone();
             let context_clone = context.clone();
 
-            // Create individual shutdown channel for this worker
-            let (worker_shutdown_sender, _worker_shutdown_receiver) = crossbeam_channel::bounded(1);
-
-            match std::thread::Builder::new()
-                .name(format!("maintenance-worker-{}", worker_id))
-                .spawn(move || {
-                    Self::worker_loop(
-                        worker_id,
-                        task_receiver,
-                        global_shutdown_receiver,
-                        &crate::cache::manager::background::worker::GLOBAL_ACTIVE_TASKS,
-                        config_clone,
-                        context_clone,
-                    );
-                }) {
-                Ok(handle) => worker_threads.push((handle, worker_shutdown_sender)),
-                Err(e) => log::error!("Failed to spawn initial worker {}: {:?}", worker_id, e),
-            }
+            let handle = tokio::task::spawn(async move {
+                Self::worker_loop(
+                    worker_id,
+                    task_receiver,
+                    shutdown,
+                    config_clone,
+                    context_clone,
+                )
+                .await;
+            });
+            
+            worker_handles.push(handle);
         }
 
-        log::info!("Coordinator started with {} workers", worker_threads.len());
+        log::info!("Coordinator started with {} workers", worker_handles.len());
 
-        // Main coordinator loop
+        // Main coordinator loop with tokio::select! pattern
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
-            // Process scaling requests with owned data
-            while let Ok(scaling_request) = scaling_receiver.try_recv() {
-                let result = Self::handle_scaling_with_ownership(
-                    &mut worker_threads,
-                    &mut config,
-                    &scaling_request,
-                    &task_queue,
-                    &shutdown_signal,
-                    &context,
-                );
-                let _ = scaling_request.response_sender.try_send(result);
-            }
-
-            // Check for shutdown signal
-            if shutdown_signal.try_recv().is_ok() {
-                log::info!(
-                    "Coordinator shutting down, joining {} worker threads",
-                    worker_threads.len()
-                );
-
-                // Signal all workers to shutdown first
-                for (_, worker_shutdown_sender) in &worker_threads {
-                    let _ = worker_shutdown_sender.try_send(());
+            tokio::select! {
+                // Process scaling requests
+                Some(scaling_request) = scaling_receiver.recv() => {
+                    let result = Self::handle_scaling_with_ownership_async(
+                        &mut worker_handles,
+                        &mut config,
+                        &scaling_request,
+                        &task_queue,
+                        &shutdown_flag,
+                        &context,
+                    ).await;
+                    let _ = scaling_request.response_sender.send(result);
                 }
 
-                // Then join all worker threads
-                for (handle, _) in worker_threads.drain(..) {
-                    if let Err(e) = handle.join() {
-                        log::warn!("Worker thread panicked during shutdown: {:?}", e);
+                // Check for shutdown signal
+                Some(_) = shutdown_signal.recv() => {
+                    log::info!(
+                        "Coordinator shutting down, joining {} worker tasks",
+                        worker_handles.len()
+                    );
+
+                    // Signal all workers to shutdown
+                    shutdown_flag.store(true, Ordering::Relaxed);
+
+                    // Wait for all workers to complete
+                    for handle in worker_handles.drain(..) {
+                        if let Err(e) = handle.await {
+                            log::warn!("Worker task panicked during shutdown: {:?}", e);
+                        }
                     }
+                    break;
                 }
-                break;
-            }
 
-            // Brief sleep to avoid busy waiting
-            std::thread::sleep(Duration::from_millis(10));
+                // Periodic maintenance check (if needed)
+                _ = interval.tick() => {
+                    // Future: periodic health checks, metrics, etc.
+                }
+            }
         }
 
-        log::info!("Coordinator thread exiting");
+        log::info!("Coordinator task exiting");
     }
 
     /// Get task processing statistics from all workers
@@ -433,15 +416,15 @@ where
 
     /// Shutdown maintenance scheduler
     #[allow(dead_code)] // Public API method for graceful shutdown
-    pub fn shutdown(mut self) -> Result<(), CacheOperationError> {
+    pub async fn shutdown(mut self) -> Result<(), CacheOperationError> {
         // Signal shutdown to coordinator (which will shutdown all workers)
         let _ = self.shutdown_sender.send(());
 
-        // Wait for coordinator thread to complete
-        if let Some(coordinator_handle) = self.coordinator_handle.take()
-            && let Err(e) = coordinator_handle.join()
-        {
-            log::error!("Coordinator thread panicked: {:?}", e);
+        // Wait for coordinator task to complete
+        if let Some(coordinator_handle) = self.coordinator_handle.take() {
+            if let Err(e) = coordinator_handle.await {
+                log::error!("Coordinator task panicked: {:?}", e);
+            }
         }
 
         Ok(())

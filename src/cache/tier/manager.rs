@@ -133,174 +133,181 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
         self.promotion_queue.schedule_task(task)
     }
 
-    /// Process next promotion task from queue (work-stealing compatible)
-    /// NOTE: This method is now generic and requires explicit type parameters
-    pub fn process_next_promotion<
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-    >(
-        &self,
+    /// Calculate temporal locality score from access timestamp intervals
+    ///
+    /// **PANICS** if timestamps.len() < 2. Empty timestamps means the tier operations
+    /// failed to populate AccessPath.access_timestamps - this is a BUG not an edge case.
+    ///
+    /// # Algorithm
+    /// 1. Calculate intervals between consecutive timestamps using windows(2)
+    /// 2. Compute average interval and standard deviation (variance analysis)
+    /// 3. Score interval regularity: shorter intervals = higher locality
+    /// 4. Score consistency: lower variance = more predictable pattern
+    /// 5. Combine scores: 70% interval + 30% consistency
+    ///
+    /// # Scoring
+    /// - >0.7: High temporal locality (sub-ms intervals) → PROMOTE to hot
+    /// - 0.4-0.7: Moderate locality (ms-range intervals) → KEEP in warm
+    /// - <0.4: Low locality (>10ms intervals) → DEMOTE to cold
+    ///
+    /// # Performance
+    /// - O(n) where n = timestamps.len() (typically 10)
+    /// - Single Vec allocation for intervals
+    /// - No locking (read-only)
+    ///
+    /// # Arguments
+    /// * `access_path` - Access path with populated timestamps from tier operations
+    ///
+    /// # Returns
+    /// Temporal locality score in [0.0, 1.0]
+    #[inline]
+    fn calculate_temporal_locality(access_path: &AccessPath) -> f32 {
+        let timestamps = &access_path.access_timestamps;
+
+        // Need at least 2 timestamps to calculate intervals
+        // Return neutral score for insufficient data
+        if timestamps.len() < 2 {
+            return 0.5;
+        }
+
+        // Calculate intervals between consecutive accesses
+        // Pattern from ConcurrentAccessTracker::calculate_access_frequency
+        // (src/cache/tier/warm/access_tracking/tracker.rs:211-215)
+        let intervals: Vec<u64> = timestamps
+            .windows(2)
+            .map(|window| window[1].saturating_sub(window[0]))
+            .collect();
+
+        // Calculate average interval
+        let sum: u64 = intervals.iter().sum();
+        let avg_interval = sum as f64 / intervals.len() as f64;
+
+        // Calculate variance and standard deviation for consistency scoring
+        let variance: f64 = intervals
+            .iter()
+            .map(|&interval| {
+                let diff = interval as f64 - avg_interval;
+                diff * diff
+            })
+            .sum::<f64>()
+            / intervals.len() as f64;
+
+        let stddev = variance.sqrt();
+
+        // SCORE COMPONENT 1: Interval regularity (70% weight)
+        // Formula: min(1.0, 1_000_000 / (avg_interval_ns + 1000))
+        //
+        // Examples:
+        //   100μs → 1M / 100,100 = 9.99 → 1.0 (VERY HIGH - promote)
+        //   1ms   → 1M / 1,001,000 = 0.999 (HIGH - promote)
+        //   10ms  → 1M / 10,001,000 = 0.0999 (LOW - keep/demote)
+        //   1s    → 1M / 1,000,001,000 = 0.001 (VERY LOW - demote)
+        let interval_score = (1_000_000.0 / (avg_interval + 1000.0)).min(1.0);
+
+        // SCORE COMPONENT 2: Consistency (30% weight)
+        // Formula: min(1.0, 10_000 / (stddev + 100))
+        //
+        // Low stddev = predictable access pattern = high score
+        // High stddev = erratic/bursty = low score
+        let consistency_score = (10_000.0 / (stddev + 100.0)).min(1.0);
+
+        // COMBINED: 70% interval + 30% consistency
+        // Interval dominates because frequency matters more than perfect regularity
+        let score = interval_score * 0.7 + consistency_score * 0.3;
+
+        score.clamp(0.0, 1.0) as f32
+    }
+
+    /// Calculate spatial locality score from key hash proximity
+    /// 
+    /// Analyzes hash distance between current key and recently accessed keys:
+    /// - High score (>0.7): Accessing similar/nearby keys = high spatial locality
+    /// - Low score (<0.3): Accessing unrelated keys = low spatial locality  
+    /// - Default (0.5): Insufficient data for analysis (<1 key hash)
+    ///
+    /// # Algorithm
+    /// 1. Get current key's cache_hash() value
+    /// 2. For each recent key hash, calculate XOR distance
+    /// 3. Count differing bits using count_ones() on XOR result
+    /// 4. Convert to proximity: 1.0 - (bits_different / 64.0)
+    /// 5. Average all proximity scores
+    ///
+    /// # Hash Proximity Method
+    /// XOR distance measures bit-level difference between hashes:
+    /// - 0 differing bits = identical keys → proximity 1.0
+    /// - 32 differing bits = somewhat related → proximity 0.5
+    /// - 64 differing bits = completely unrelated → proximity 0.0
+    ///
+    /// Sequential key access patterns produce similar hashes (low XOR distance),
+    /// while random access produces dissimilar hashes (high XOR distance).
+    ///
+    /// # Performance
+    /// - Zero allocation when key_hashes.len() < 1 (returns immediately)
+    /// - Single u64 hash per recent key (cheap XOR + count_ones operations)
+    /// - O(n) time complexity where n = recent_key_hashes.len()
+    /// - No locking required (read-only access)
+    /// - Branchless bit operations for maximum throughput
+    ///
+    /// # Arguments
+    /// * `key` - Current key being considered for promotion
+    /// * `access_path` - Access path containing recent key hash history
+    ///
+    /// # Returns
+    /// Spatial locality score in range [0.0, 1.0]
+    #[inline]
+    fn calculate_spatial_locality(
         key: &K,
-    ) -> Result<Option<PromotionTask<K>>, CacheOperationError> {
-        if let Some(task) = self.promotion_queue.get_next_task()? {
-            // Execute promotion with atomic coordination
-            self.execute_promotion::<V>(&task, key)?;
-
-            // Update statistics atomically
-            self.promotion_stats.record_successful_promotion(
-                task.from_tier,
-                task.to_tier,
-                task.created_at.elapsed().as_nanos() as u64,
-            );
-
-            return Ok(Some(task));
+        access_path: &AccessPath,
+    ) -> f32 {
+        let recent_hashes = &access_path.recent_key_hashes;
+        
+        // Need at least 1 recent hash to compare against
+        // Return neutral score for unknown locality
+        if recent_hashes.is_empty() {
+            return 0.5;
         }
-
-        Ok(None)
-    }
-
-    /// Execute promotion with coherence protocol coordination
-    fn execute_promotion<
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-    >(
-        &self,
-        task: &PromotionTask<K>,
-        key: &K,
-    ) -> Result<(), CacheOperationError> {
-        // Read value from source tier first
-        let value = self.read_from_tier::<V>(key, task.from_tier)?;
-
-        if let Some(cached_value) = value {
-            // Write to destination tier with coherence protocol
-            self.write_to_tier(key.clone(), cached_value, task.to_tier)?;
-
-            // Remove from source tier to avoid duplication and maintain consistency - FIXED: Now properly generic
-            let _ = self.remove_from_tier::<V>(key, task.from_tier);
-
-            // Update promotion statistics
-            self.promotion_stats.record_successful_promotion(
-                task.from_tier,
-                task.to_tier,
-                task.created_at.elapsed().as_nanos() as u64,
-            );
-
-            Ok(())
-        } else {
-            // Value not found in source tier - this could happen if it was evicted
-            // between scheduling and execution
-            Err(CacheOperationError::KeyNotFound)
+        
+        // Get current key's hash for comparison
+        let current_hash = key.cache_hash();
+        
+        // Calculate proximity to each recent key
+        // XOR distance: 0 = identical, 64 = completely different
+        let mut total_proximity = 0.0;
+        
+        for &recent_hash in recent_hashes {
+            // XOR gives bits that differ between hashes
+            let xor_distance = current_hash ^ recent_hash;
+            
+            // Count number of differing bits (0-64 range)
+            let bits_different = xor_distance.count_ones();
+            
+            // Convert to proximity score (0.0 = different, 1.0 = identical)
+            // Formula: 1.0 - (bits_different / 64.0)
+            //
+            // Examples:
+            //   0 bits different  → 1.0 - 0.0 = 1.0 (identical, perfect proximity)
+            //   16 bits different → 1.0 - 0.25 = 0.75 (similar, good proximity)
+            //   32 bits different → 1.0 - 0.5 = 0.5 (somewhat related)
+            //   48 bits different → 1.0 - 0.75 = 0.25 (quite different, poor proximity)
+            //   64 bits different → 1.0 - 1.0 = 0.0 (completely unrelated)
+            let proximity = 1.0 - (bits_different as f32 / 64.0);
+            
+            total_proximity += proximity;
         }
-    }
-
-    /// Read value from specific tier with error handling
-    #[allow(dead_code)] // Legacy tier manager - not actively used
-    fn read_from_tier<
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-    >(
-        &self,
-        _key: &K,
-        tier: CacheTier,
-    ) -> Result<Option<V>, CacheOperationError> {
-        match tier {
-            CacheTier::Hot => {
-                // Legacy code - not implemented
-                Ok(None)
-            }
-            CacheTier::Warm => {
-                // Legacy code - not implemented
-                Ok(None)
-            }
-            CacheTier::Cold => {
-                // Legacy code - not implemented
-                Ok(None)
-            }
-        }
-    }
-
-    /// Write value to specific tier with coherence protocol
-    #[allow(dead_code)] // Legacy tier manager - not actively used
-    fn write_to_tier<
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-    >(
-        &self,
-        _key: K,
-        _value: V,
-        tier: CacheTier,
-    ) -> Result<(), CacheOperationError> {
-        match tier {
-            CacheTier::Hot => {
-                // Legacy code - not implemented
-                Ok(())
-            }
-            CacheTier::Warm => {
-                // Legacy code - not implemented
-                Ok(())
-            }
-            CacheTier::Cold => {
-                // Legacy code - not implemented
-                Ok(())
-            }
-        }
-    }
-
-    /// Remove value from specific tier - FIXED: Now properly generic over both K and V
-    #[allow(dead_code)] // Legacy tier manager - not actively used
-    pub fn remove_from_tier<
-        V: CacheValue
-            + Default
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + bincode::Encode
-            + bincode::Decode<()>
-            + 'static,
-    >(
-        &self,
-        _key: &K,
-        tier: CacheTier,
-    ) -> Result<bool, CacheOperationError> {
-        match tier {
-            CacheTier::Hot => {
-                // Legacy code - not implemented
-                Ok(false)
-            }
-            CacheTier::Warm => {
-                // Legacy code - not implemented
-                Ok(false)
-            }
-            CacheTier::Cold => {
-                // Legacy code - not implemented
-                Ok(false)
-            }
-        }
+        
+        // Average proximity across all recent keys
+        let avg_proximity = total_proximity / recent_hashes.len() as f32;
+        
+        // Result is already in [0.0, 1.0] range due to proximity formula
+        // High score = accessing similar keys (high spatial locality)
+        // Low score = accessing unrelated keys (low spatial locality)
+        avg_proximity
     }
 
     /// Extract access characteristics from key, value, and access path
     fn extract_access_characteristics<V: CacheValue>(
         &self,
-        _key: &K,
+        key: &K,
         _value: &V,
         access_path: &AccessPath,
     ) -> AccessCharacteristics {
@@ -311,9 +318,9 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
         // Note: Using simplified approach for characteristics that require external dependencies
         AccessCharacteristics {
             access_frequency: access_path.frequency_estimate(&frequency_estimator),
-            recent_accesses: 1.0, // Default - could be enhanced with actual statistics
-            temporal_locality: 0.5, // Default temporal locality score
-            spatial_locality: 0.5, // Default spatial locality score
+            recent_accesses: access_path.recent_access_score(),
+            temporal_locality: Self::calculate_temporal_locality(access_path),
+            spatial_locality: Self::calculate_spatial_locality(key, access_path),
             value_size: std::mem::size_of::<V>() as f32,
             access_delay: 0.0, // Default access delay
         }

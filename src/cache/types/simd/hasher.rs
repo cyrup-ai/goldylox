@@ -42,7 +42,7 @@ impl SimdHasher {
         }
     }
 
-    /// Hash cache key with SIMD operations (Fix 2: Remove double hashing)
+    /// Hash cache key with SIMD operations (avoids double hashing)
     #[inline(always)]
     pub fn hash_cache_key<K: CacheKey>(&mut self, key: &K) -> u64 {
         // Check for runtime SIMD support first
@@ -95,7 +95,7 @@ impl SimdHasher {
         collector.bytes
     }
 
-    /// Hash multiple keys with hardware batch SIMD processing (Fix 1: True parallel processing)
+    /// Hash multiple keys with true parallel hardware batch SIMD processing
     #[cfg(target_arch = "x86_64")]
     pub fn hash_batch_keys<K: CacheKey>(&mut self, keys: &[K]) -> Vec<u64> {
         // Check for AVX2 support for true parallel processing
@@ -319,7 +319,7 @@ impl SimdHasher {
             .collect()
     }
 
-    /// Hash bytes using SIMD operations (Fix 4: Runtime CPU detection)
+    /// Hash bytes using SIMD operations with runtime CPU detection
     #[inline(always)]
     pub fn hash_bytes(&mut self, bytes: &[u8]) -> u64 {
         #[cfg(target_arch = "x86_64")]

@@ -5,6 +5,7 @@
 
 mod ecommerce;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ecommerce::main()
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ecommerce::main().await
 }

@@ -33,7 +33,8 @@ pub mod timing;
 pub use atomic_ops::{compare_and_swap_atomic, put_if_absent_atomic, replace_atomic};
 pub use global_api::{
     cleanup_expired_entries, get_frequently_accessed_keys, get_idle_keys, init_warm_tier,
-    init_warm_tier_system, insert_demoted, insert_promoted, warm_get, warm_put, warm_remove,
+    init_warm_tier_system, insert_demoted, insert_promoted, warm_get, warm_get_key_hashes,
+    warm_get_timestamps, warm_put, warm_remove,
 };
 // Re-export monitoring types
 

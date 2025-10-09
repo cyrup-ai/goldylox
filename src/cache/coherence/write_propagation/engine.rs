@@ -83,7 +83,7 @@ impl<
     }
 
     /// Submit write-back request
-    pub fn submit_writeback(
+    pub async fn submit_writeback(
         &self,
         key: CoherenceKey<K>,
         data: V,
@@ -123,7 +123,7 @@ impl<
         match current_policy {
             PropagationPolicy::WriteThrough => {
                 // Immediate write-through
-                self.execute_immediate_write(&request);
+                self.execute_immediate_write(&request).await;
                 self.propagation_stats
                     .propagations
                     .fetch_add(1, Ordering::Relaxed);
@@ -136,7 +136,7 @@ impl<
             PropagationPolicy::Adaptive => {
                 // Decide based on current system state
                 if self.should_write_through(&request) {
-                    self.execute_immediate_write(&request);
+                    self.execute_immediate_write(&request).await;
                     self.propagation_stats
                         .propagations
                         .fetch_add(1, Ordering::Relaxed);
@@ -173,7 +173,7 @@ impl<
     }
 
     /// Execute immediate write-through to actual tier storage
-    fn execute_immediate_write(&self, request: &WriteBackRequest<K, V>)
+    async fn execute_immediate_write(&self, request: &WriteBackRequest<K, V>)
     where
         K: Default + bincode::Encode + bincode::Decode<()> + 'static,
         V: Default
@@ -193,15 +193,15 @@ impl<
         let write_result = match request.target_tier {
             CacheTier::Hot => {
                 // Write to hot tier using SIMD-optimized crossbeam messaging
-                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value)
+                crate::cache::tier::hot::thread_local::simd_hot_put(&self.hot_tier_coordinator, cache_key, cache_value).await
             }
             CacheTier::Warm => {
                 // Write to warm tier using balanced crossbeam messaging
-                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value)
+                crate::cache::tier::warm::global_api::warm_put(&self.warm_tier_coordinator, cache_key, cache_value).await
             }
             CacheTier::Cold => {
                 // Write to cold tier using insert_demoted function
-                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key, cache_value)
+                crate::cache::tier::cold::insert_demoted(&self.cold_tier_coordinator, cache_key, cache_value).await
             }
         };
 

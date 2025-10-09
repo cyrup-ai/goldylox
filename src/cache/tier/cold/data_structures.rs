@@ -68,14 +68,14 @@ pub struct PersistentColdTier<
         + bincode::Encode
         + bincode::Decode<()>,
 > {
-    /// Memory-mapped storage files
+    /// Memory-mapped storage files (worker-owned, no locks)
     pub storage_manager: StorageManager,
-    /// Compression engine for value serialization
-    pub compression_engine: CompressionEngine,
-    /// Atomic metadata index
+    /// Compression engine for value serialization (immutable, can be shared)
+    pub compression_engine: std::sync::Arc<CompressionEngine>,
+    /// Metadata index (worker-owned, no locks)
     pub metadata_index: MetadataIndex<K>,
     /// Background compaction system
-    pub compaction_system: CompactionSystem,
+    pub compaction_system: CompactionSystem<K>,
     /// Atomic statistics
     pub stats: AtomicTierStats,
     /// Error tracking statistics
@@ -90,6 +90,8 @@ pub struct PersistentColdTier<
     pub maintenance_sender: Option<
         crossbeam_channel::Sender<crate::cache::manager::background::types::MaintenanceTask>,
     >,
+    /// Pool coordinator for memory cleanup operations
+    pub pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
     /// Phantom data for unused type parameter
     pub _phantom: PhantomData<V>,
 }
@@ -193,7 +195,7 @@ pub struct MetadataIndex<K: CacheKey> {
 
 /// Background compaction system for file optimization
 #[derive(Debug)]
-pub struct CompactionSystem {
+pub struct CompactionSystem<K: CacheKey> {
     /// Compaction task queue
     #[allow(dead_code)] // Cold tier - compaction channels used in background file optimization
     pub compaction_tx: Sender<CompactionTask>,
@@ -211,6 +213,8 @@ pub struct CompactionSystem {
     /// Last checkpoint snapshot
     #[allow(dead_code)] // Cold tier - checkpoint used in compaction recovery
     pub last_checkpoint: Option<SyncStatsSnapshot>,
+    /// Phantom marker for K type parameter
+    pub _phantom: std::marker::PhantomData<K>,
 }
 
 /// File synchronization state for crash safety

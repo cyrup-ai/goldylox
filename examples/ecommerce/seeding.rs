@@ -10,7 +10,7 @@ use rand::{Rng, rng};
 use std::collections::BTreeMap;
 
 /// Seed the product catalog with realistic e-commerce data
-pub fn seed_product_catalog(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn seed_product_catalog(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
     let categories = [
         "Electronics",
         "Clothing",
@@ -53,13 +53,13 @@ pub fn seed_product_catalog(workload: &WorkloadState) -> Result<(), Box<dyn std:
 
         workload.nodes[node_index]
             .product_cache
-            .put(cache_key, product)?;
+            .put(cache_key, product).await?;
     }
 
     Ok(())
 }
 /// Seed user sessions with realistic patterns
-pub fn seed_user_sessions(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn seed_user_sessions(workload: &WorkloadState) -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = rng();
 
     // Create 1,000 user sessions with realistic shopping behavior
@@ -86,7 +86,7 @@ pub fn seed_user_sessions(workload: &WorkloadState) -> Result<(), Box<dyn std::e
 
         workload.nodes[node_index]
             .session_cache
-            .put(cache_key, session)?;
+            .put(cache_key, session).await?;
     }
 
     Ok(())

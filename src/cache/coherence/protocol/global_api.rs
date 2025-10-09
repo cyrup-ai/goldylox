@@ -67,25 +67,17 @@ impl<
 > CoherenceSystem<K, V>
 {
     /// Initialize coherence system with worker-owned architecture
-    pub fn new() -> Result<Self, CoherenceError> {
+    pub fn new(
+        hot_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
+        warm_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
+        cold_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
+    ) -> Result<Self, CoherenceError> {
         // Create per-instance channel map
         let worker_channels = std::sync::Arc::new(
             std::sync::RwLock::new(std::collections::HashMap::new())
         );
         
-        // Create placeholder coordinators for the worker manager
-        // NOTE: This coherence worker system is secondary to the main TierOperations coherence
-        let hot_coordinator = crate::cache::tier::hot::thread_local::HotTierCoordinator {
-            hot_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
-            instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let warm_coordinator = crate::cache::tier::warm::global_api::WarmTierCoordinator {
-            warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
-            instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let cold_coordinator = crate::cache::tier::cold::ColdTierCoordinator::new()
-                .map_err(|e| CoherenceError::InitializationFailed(format!("Cold tier init failed: {}", e)))?;
-        
+        // Use coordinators passed as parameters
         let mut manager = CoherenceWorkerManager::<K, V>::new(
             ProtocolConfiguration::default(),
             hot_coordinator,

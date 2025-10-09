@@ -60,6 +60,8 @@ pub struct MonitorConfig {
     pub history_size: usize,
     pub adaptive_thresholds_active: bool,
     pub sample_interval_ms: u64,
+    /// Maximum alerts per minute for rate limiting (default: 60)
+    pub alert_rate_limit_per_minute: u32,
 }
 
 impl Default for MonitorConfig {
@@ -69,6 +71,7 @@ impl Default for MonitorConfig {
             history_size: 1000,
             adaptive_thresholds_active: true,
             sample_interval_ms: 100,
+            alert_rate_limit_per_minute: 60,
         }
     }
 }

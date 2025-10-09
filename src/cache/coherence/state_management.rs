@@ -5,9 +5,11 @@
 // Internal coherence architecture - components may not be used in minimal API
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::cache::coherence::communication::CoherenceError;
 use crate::cache::coherence::data_structures::{CacheTier, MesiState};
+use crate::cache::coherence::statistics::core_statistics::CoherenceStatistics;
 
 /// State transition validator for protocol correctness
 #[allow(dead_code)] // MESI coherence - used in protocol state transition validation and enforcement
@@ -19,6 +21,8 @@ pub struct StateTransitionValidator {
     transition_stats: TransitionStatistics,
     /// Protocol violation detector
     violation_detector: ViolationDetector,
+    /// Per-instance coherence statistics
+    coherence_stats: Arc<CoherenceStatistics>,
 }
 
 /// Statistics for state transitions
@@ -114,14 +118,8 @@ pub enum TransitionResult {
     RequiresSteps { steps: Vec<MesiState> },
 }
 
-impl Default for StateTransitionValidator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl StateTransitionValidator {
-    pub fn new() -> Self {
+    pub fn new(coherence_stats: Arc<CoherenceStatistics>) -> Self {
         // Initialize valid transition matrix for MESI protocol
         let mut valid_transitions = [[false; 4]; 4];
 
@@ -148,6 +146,7 @@ impl StateTransitionValidator {
             valid_transitions,
             transition_stats: TransitionStatistics::new(),
             violation_detector: ViolationDetector::new(),
+            coherence_stats,
         }
     }
 
@@ -165,8 +164,7 @@ impl StateTransitionValidator {
 
         // Check if transition is valid in the matrix
         if !self.valid_transitions[from_idx][to_idx] {
-            // TODO: Record to per-instance coherence statistics when StateTransitionValidator gets stats parameter
-            // CoherenceStatistics::global().record_violation();
+            self.coherence_stats.record_violation();
 
             self.transition_stats
                 .invalid_transitions
@@ -284,8 +282,7 @@ impl StateTransitionValidator {
 
     /// Record transition statistics
     fn record_transition_stats(&self, from_state: MesiState, to_state: MesiState) {
-        // TODO: Record to per-instance coherence statistics when StateTransitionValidator gets stats parameter
-        // CoherenceStatistics::global().record_transition();
+        self.coherence_stats.record_transition();
 
         // Record local transition statistics
         // Record from-state statistics

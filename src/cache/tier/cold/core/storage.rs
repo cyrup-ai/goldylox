@@ -61,7 +61,10 @@ impl<
 
     /// Read compressed data from memory-mapped file
     pub(super) fn read_compressed_data(&self, index_entry: &IndexEntry) -> io::Result<Vec<u8>> {
-        if let Some(ref mmap) = self.storage_manager.data_file {
+        // Access storage manager directly (worker owns the data, no locks needed)
+        let storage = &self.storage_manager;
+
+        if let Some(ref mmap) = storage.data_file {
             let start = index_entry.file_offset as usize;
             let end = start + index_entry.compressed_size as usize;
 
@@ -110,8 +113,11 @@ impl<
 
     /// Write compressed data to memory-mapped file
     pub(super) fn write_compressed_data(&self, data: &[u8]) -> io::Result<u64> {
-        if let Some(offset) = self.storage_manager.reserve_space(data.len() as u64) {
-            if let Some(ref mmap) = self.storage_manager.data_file {
+        // Access storage manager directly (worker owns the data, no locks needed)
+        let storage = &self.storage_manager;
+
+        if let Some(offset) = storage.reserve_space(data.len() as u64) {
+            if let Some(ref mmap) = storage.data_file {
                 let start = offset as usize;
                 let end = start + data.len();
 

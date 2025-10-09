@@ -38,6 +38,8 @@ pub struct UnifiedCacheStatistics {
     ops_per_second_state: OpsPerSecondState,
     /// Hit rate calculation state per tier
     tier_hit_rates: TierHitRateState,
+    /// Warm tier coordinator for statistics collection
+    warm_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
 }
 
 /// Unified statistics result structure
@@ -60,13 +62,20 @@ pub struct UnifiedStats {
 
 impl Default for UnifiedCacheStatistics {
     fn default() -> Self {
-        Self::new()
+        // Create empty coordinator for default - callers should use new() with real coordinator
+        let empty_coordinator = std::sync::Arc::new(crate::cache::tier::warm::global_api::WarmTierCoordinator {
+            warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
+            instance_selector: std::sync::atomic::AtomicUsize::new(0),
+        });
+        Self::new(empty_coordinator)
     }
 }
 
 impl UnifiedCacheStatistics {
     /// Create new unified statistics with atomic initialization
-    pub fn new() -> Self {
+    pub fn new(
+        warm_coordinator: std::sync::Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
+    ) -> Self {
         Self {
             total_operations: CachePadded::new(AtomicU64::new(0)),
             overall_hit_rate: CachePadded::new(AtomicCell::new(0.0)),
@@ -81,6 +90,7 @@ impl UnifiedCacheStatistics {
             peak_memory_usage: CachePadded::new(AtomicU64::new(0)),
             ops_per_second_state: OpsPerSecondState::new(),
             tier_hit_rates: TierHitRateState::new(),
+            warm_coordinator,
         }
     }
 
@@ -394,7 +404,7 @@ impl UnifiedCacheStatistics {
     }
 
     /// Get performance metrics for monitoring and analysis
-    pub fn get_performance_metrics(&self) -> CachePerformanceMetrics {
+    pub async fn get_performance_metrics(&self) -> CachePerformanceMetrics {
         use crate::cache::types::statistics::tier_stats::TierStatistics;
 
         let hot_hits = self.hot_hits.load(Ordering::Relaxed);
@@ -408,7 +418,7 @@ impl UnifiedCacheStatistics {
 
         // Connect to existing tier infrastructure for real statistics
         let hot_tier_stats = self.get_hot_tier_stats();
-        let warm_tier_stats = self.get_warm_tier_stats();
+        let warm_tier_stats = self.get_warm_tier_stats().await;
         let cold_tier_stats = self.get_cold_tier_stats();
 
         CachePerformanceMetrics {
@@ -492,18 +502,12 @@ impl UnifiedCacheStatistics {
     }
 
     /// Get warm tier statistics from existing coordinator infrastructure
-    fn get_warm_tier_stats(&self) -> TierStatistics {
+    async fn get_warm_tier_stats(&self) -> TierStatistics {
         // Connect to existing warm tier coordinator API
         use crate::cache::tier::warm::global_api;
 
-        // Create placeholder coordinator for stats (legacy code)
-        let warm_coord = crate::cache::tier::warm::global_api::WarmTierCoordinator {
-            warm_tiers: std::sync::Arc::new(dashmap::DashMap::new()),
-            instance_selector: std::sync::atomic::AtomicUsize::new(0),
-        };
-        
-        // Use the sophisticated warm tier infrastructure with worker-based routing
-        match global_api::get_stats::<String, Vec<u8>>(&warm_coord) {
+        // Use the real warm tier coordinator passed during initialization
+        match global_api::get_stats::<String, Vec<u8>>(&self.warm_coordinator).await {
             Some(warm_snapshot) => {
                 // Convert TierStatsSnapshot to TierStatistics
                 TierStatistics {

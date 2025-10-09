@@ -343,18 +343,14 @@ pub struct MaintenanceScheduler<
     // Background workers - used in async task processing and worker coordination
     pub scheduled_operations: Vec<MaintenanceOperation>,
 
-    /// Task queue for distributing maintenance tasks
-    #[allow(dead_code)]
-    // Background workers - used in async task processing and worker coordination
-    pub task_queue: crossbeam_channel::Receiver<MaintenanceTask>,
     /// Task sender for submitting maintenance tasks
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
-    pub task_sender: crossbeam_channel::Sender<MaintenanceTask>,
+    pub task_sender: tokio::sync::mpsc::UnboundedSender<MaintenanceTask>,
     /// Coordinator thread handle (owns worker threads via crossbeam messaging)
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
-    pub coordinator_handle: Option<std::thread::JoinHandle<()>>,
+    pub coordinator_handle: Option<tokio::task::JoinHandle<()>>,
     /// Scheduler configuration
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
@@ -363,22 +359,14 @@ pub struct MaintenanceScheduler<
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
     pub stats: MaintenanceStats,
-    /// Shutdown signal channel
-    #[allow(dead_code)]
-    // Background workers - used in async task processing and worker coordination
-    pub shutdown_signal: crossbeam_channel::Receiver<()>,
     /// Shutdown sender for graceful shutdown
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
-    pub shutdown_sender: crossbeam_channel::Sender<()>,
-    /// Scaling request receiver for dynamic worker management
-    #[allow(dead_code)]
-    // Background workers - used in async task processing and worker coordination
-    pub scaling_request_receiver: crossbeam_channel::Receiver<ScalingRequest>,
+    pub shutdown_sender: tokio::sync::mpsc::UnboundedSender<()>,
     /// Scaling request sender for external coordination
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
-    pub scaling_request_sender: crossbeam_channel::Sender<ScalingRequest>,
+    pub scaling_request_sender: tokio::sync::mpsc::UnboundedSender<ScalingRequest>,
     /// Hot tier coordinator for tier operations
     #[allow(dead_code)]
     // Background workers - coordinator for hot tier operations
@@ -410,7 +398,7 @@ pub struct WorkerContext {
     pub cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
     pub worker_registry: std::sync::Arc<dashmap::DashMap<u32, super::worker_state::WorkerStatusChannel>>,
     /// Per-instance scaling request sender for dynamic worker management
-    pub scaling_sender: crossbeam_channel::Sender<ScalingRequest>,
+    pub scaling_sender: tokio::sync::mpsc::UnboundedSender<ScalingRequest>,
     /// Per-instance pool coordinator for cleanup operations
     pub pool_coordinator: std::sync::Arc<crate::cache::memory::pool_manager::cleanup_manager::PoolCoordinator>,
 }
@@ -510,12 +498,12 @@ pub enum WorkerStatus {
 }
 
 /// Scaling request for dynamic worker thread management
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ScalingRequest {
     /// Capacity factor (0.0 to 2.0) - 1.0 = current capacity, 0.5 = half, 2.0 = double
     pub capacity_factor: f64,
     /// Response channel for scaling operation result
-    pub response_sender: crossbeam_channel::Sender<Result<(), String>>,
+    pub response_sender: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
 impl WorkerStatus {
@@ -532,10 +520,10 @@ impl WorkerStatus {
     /// # Example
     /// ```rust
     /// // Inside a worker with access to WorkerContext:
-    /// WorkerStatus::request_worker_scaling(&context.scaling_sender, 1.5)?;
+    /// WorkerStatus::request_worker_scaling(&context.scaling_sender, 1.5).await?;
     /// ```
-    pub fn request_worker_scaling(
-        scaling_sender: &crossbeam_channel::Sender<ScalingRequest>,
+    pub async fn request_worker_scaling(
+        scaling_sender: &tokio::sync::mpsc::UnboundedSender<ScalingRequest>,
         capacity_factor: f64,
     ) -> Result<(), String> {
         // Validate capacity factor
@@ -545,7 +533,7 @@ impl WorkerStatus {
 
         // Create response channel for this scaling request
         let (response_sender, response_receiver) =
-            crossbeam_channel::bounded::<Result<(), String>>(1);
+            tokio::sync::oneshot::channel::<Result<(), String>>();
 
         let scaling_request = ScalingRequest {
             capacity_factor,
@@ -554,17 +542,17 @@ impl WorkerStatus {
 
         // Send scaling request to instance-specific channel
         scaling_sender
-            .try_send(scaling_request)
+            .send(scaling_request)
             .map_err(|e| format!("Failed to send scaling request: {:?}", e))?;
 
         // Wait for response with timeout
-        match response_receiver.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(result) => result,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                Err("Scaling request timed out after 5 seconds".to_string())
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), response_receiver).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
                 Err("Scaling coordination channel disconnected".to_string())
+            }
+            Err(_) => {
+                Err("Scaling request timed out after 5 seconds".to_string())
             }
         }
     }

@@ -82,6 +82,17 @@ pub struct AccessPath {
     pub tried_warm: bool,
     /// Whether cold tier was tried
     pub tried_cold: bool,
+    /// Historical access timestamps for temporal locality analysis (nanoseconds)
+    /// Contains up to last 10 access timestamps, oldest to newest
+    #[allow(dead_code)]
+    // Utility system - used in temporal locality scoring and promotion decisions
+    pub access_timestamps: Vec<u64>,
+    /// Historical key hashes for spatial locality analysis
+    /// Contains up to last 10 accessed key hashes (from CacheKey::cache_hash())
+    /// Used to calculate hash-based proximity between current and recent keys
+    #[allow(dead_code)]
+    // Utility system - used in spatial locality scoring and promotion decisions
+    pub recent_key_hashes: Vec<u64>,
     /// Start time for latency tracking
     #[allow(dead_code)]
     // Utility system - used in access pattern analysis and tier coordination
@@ -104,8 +115,54 @@ impl AccessPath {
             tried_hot: false,
             tried_warm: false,
             tried_cold: false,
+            access_timestamps: Vec::new(),
+            recent_key_hashes: Vec::new(),
             start_time: Instant::now(),
         }
+    }
+
+    /// Create access path with historical timestamps for temporal locality analysis
+    /// 
+    /// # Arguments
+    /// * `timestamps` - Historical access timestamps in nanoseconds (oldest to newest)
+    /// 
+    /// # Returns
+    /// AccessPath initialized with timestamp history for locality scoring
+    #[inline]
+    pub fn with_timestamps(timestamps: Vec<u64>) -> Self {
+        let mut path = Self::new();
+        path.access_timestamps = timestamps;
+        path
+    }
+
+    /// Create access path with historical key hashes for spatial locality analysis
+    /// 
+    /// # Arguments
+    /// * `key_hashes` - Historical key hashes from CacheKey::cache_hash() (oldest to newest)
+    /// 
+    /// # Returns
+    /// AccessPath initialized with key hash history for spatial locality scoring
+    #[inline]
+    pub fn with_key_hashes(key_hashes: Vec<u64>) -> Self {
+        let mut path = Self::new();
+        path.recent_key_hashes = key_hashes;
+        path
+    }
+
+    /// Create access path with both timestamps and key hashes
+    /// 
+    /// # Arguments
+    /// * `timestamps` - Historical access timestamps in nanoseconds
+    /// * `key_hashes` - Historical key hashes from CacheKey::cache_hash()
+    /// 
+    /// # Returns
+    /// AccessPath initialized with complete history for both temporal and spatial locality scoring
+    #[inline]
+    pub fn with_history(timestamps: Vec<u64>, key_hashes: Vec<u64>) -> Self {
+        let mut path = Self::new();
+        path.access_timestamps = timestamps;
+        path.recent_key_hashes = key_hashes;
+        path
     }
 
     /// Record tier access
@@ -180,6 +237,41 @@ impl AccessPath {
         } else {
             0.0
         }
+    }
+
+    /// Calculate recent access score based on access count
+    ///
+    /// Returns normalized value in [0.0, 1.0] where:
+    /// - 0 accesses = 0.0 (brand new item, never accessed)
+    /// - 1 access = 0.1 (single hit)
+    /// - 5 accesses = 0.5 (moderate activity)
+    /// - 10+ accesses = 1.0 (very hot item)
+    ///
+    /// Uses linear interpolation: score = min(count / 10.0, 1.0)
+    ///
+    /// # Normalization Rationale
+    ///
+    /// The 10-access ceiling is based on the AccessPath design:
+    /// - access_timestamps stores up to 10 recent timestamps (see tier_operations.rs:109)
+    /// - Items with 10 entries in the vector are definitively "hot"
+    /// - Linear scale 0-10 provides good granularity for ML discrimination
+    ///
+    /// # Usage
+    ///
+    /// Called from manager.rs:321 in extract_access_characteristics() to populate
+    /// the AccessCharacteristics.recent_accesses field for ML-based tier promotion scoring.
+    ///
+    /// # Returns
+    ///
+    /// Normalized score in [0.0, 1.0] representing access intensity
+    pub fn recent_access_score(&self) -> f32 {
+        if self.access_timestamps.is_empty() {
+            return 0.0;
+        }
+
+        // Normalize: 0 accesses = 0.0, 10+ accesses = 1.0
+        let count = self.access_timestamps.len() as f32;
+        (count / 10.0).min(1.0)
     }
 }
 

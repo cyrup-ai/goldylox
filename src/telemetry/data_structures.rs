@@ -5,6 +5,7 @@
 
 #![allow(dead_code)] // Telemetry system - comprehensive monitoring infrastructure
 
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
@@ -118,24 +119,59 @@ impl CollectionState {
     }
 }
 
-/// Trend history buffer with efficient storage
+/// Trend history buffer with thread-safe storage
 #[derive(Debug)]
 pub struct TrendHistoryBuffer {
-    /// Trend samples with timestamp
-    pub samples: ArrayVec<TrendSample, 256>,
-    /// Buffer write position
-    pub write_pos: AtomicUsize,
-    /// Sample count for analysis
-    pub sample_count: AtomicUsize,
+    /// Trend samples protected by RwLock for concurrent readers, exclusive writers
+    samples: RwLock<ArrayVec<TrendSample, 256>>,
+    /// Buffer write position for circular overwrite
+    write_pos: AtomicUsize,
 }
 
 impl TrendHistoryBuffer {
     pub fn new() -> Self {
         Self {
-            samples: ArrayVec::new(),
+            samples: RwLock::new(ArrayVec::new()),
             write_pos: AtomicUsize::new(0),
-            sample_count: AtomicUsize::new(0),
         }
+    }
+    
+    /// Add sample to circular buffer (thread-safe via RwLock)
+    #[inline]
+    pub fn add_sample(&self, sample: TrendSample) {
+        let mut samples = self.samples.write();
+        
+        if samples.len() < 256 {
+            // Buffer not full - append
+            let _ = samples.try_push(sample);
+        } else {
+            // Circular buffer - overwrite oldest
+            let pos = self.write_pos.fetch_add(1, Ordering::Relaxed) % 256;
+            samples[pos] = sample;
+        }
+    }
+    
+    /// Get sample at index (thread-safe read via RwLock)
+    #[inline]
+    pub fn get_sample(&self, index: usize) -> Option<TrendSample> {
+        let samples = self.samples.read();
+        if index >= samples.len() {
+            return None;
+        }
+        Some(samples[index])
+    }
+    
+    /// Get current sample count
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.samples.read().len()
+    }
+    
+    /// Reset the buffer
+    pub fn reset(&self) {
+        let mut samples = self.samples.write();
+        samples.clear();
+        self.write_pos.store(0, Ordering::Relaxed);
     }
 }
 
@@ -378,24 +414,6 @@ pub struct TrendSample {
     direction: f32,
     /// Trend strength (0.0 to 1.0)
     strength: f32,
-}
-
-impl TrendHistoryBuffer {
-    /// Get the current sample count
-    pub fn sample_count(&self) -> usize {
-        self.sample_count.load(Ordering::Relaxed)
-    }
-
-    /// Get the current write position
-    pub fn write_pos(&self) -> usize {
-        self.write_pos.load(Ordering::Relaxed)
-    }
-
-    /// Reset the buffer
-    pub fn reset(&self) {
-        self.write_pos.store(0, Ordering::Relaxed);
-        self.sample_count.store(0, Ordering::Relaxed);
-    }
 }
 
 impl TrendSample {

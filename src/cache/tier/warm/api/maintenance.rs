@@ -107,10 +107,11 @@ impl LockFreeWarmTier {
                     self.stats.update_memory_usage(-(evicted_size as i64));
                     self.stats.update_entry_count(-1);
 
-                    // Record successful eviction
+                    // Record successful eviction with actual policy type
+                    let actual_policy = self.eviction_policy.current_policy();
                     self.eviction_policy.record_eviction_outcome(
                         &victim,
-                        EvictionPolicyType::Adaptive,
+                        actual_policy,
                         true,
                         None,
                     );

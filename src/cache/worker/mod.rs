@@ -12,7 +12,6 @@
 // async_infrastructure module deleted - using MaintenanceScheduler directly
 pub mod global_api;
 pub mod task_coordination;
-pub mod tier_transitions;
 pub mod types;
 
 // Re-export key types for convenience

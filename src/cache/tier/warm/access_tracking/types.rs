@@ -87,6 +87,8 @@ pub struct AccessRecord {
     pub thread_id: u64,
     /// Hit/miss status
     pub hit_status: HitStatus,
+    /// Key hash for spatial locality analysis
+    pub key_hash: u64,
 }
 
 /// Confidence data for specific patterns

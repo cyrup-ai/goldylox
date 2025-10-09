@@ -10,6 +10,7 @@ use crossbeam_skiplist::{SkipMap, SkipSet};
 use super::types::*;
 use crate::cache::tier::warm::core::WarmCacheKey;
 use crate::cache::traits::CacheKey;
+use crate::telemetry::cache::types::timestamp_nanos;
 
 /// Concurrent LRU tracker using lock-free structures
 #[derive(Debug)]
@@ -22,6 +23,11 @@ pub struct ConcurrentLruTracker<K: CacheKey> {
     key_timestamps: SkipMap<WarmCacheKey<K>, u64>,
     /// LRU statistics
     stats: LruStats,
+    /// Adaptive age threshold in nanoseconds
+    /// Entries older than this threshold become eviction candidates
+    age_threshold_ns: AtomicU64,
+    /// Last adaptation timestamp for controlling adaptation frequency
+    last_adaptation_time: AtomicU64,
 }
 
 /// LRU entry for ordering
@@ -41,6 +47,8 @@ impl<K: CacheKey> ConcurrentLruTracker<K> {
             logical_time: AtomicU64::new(0),
             key_timestamps: SkipMap::new(),
             stats: LruStats::default(),
+            age_threshold_ns: AtomicU64::new(60_000_000_000), // 60 seconds
+            last_adaptation_time: AtomicU64::new(timestamp_nanos()),
         }
     }
 
@@ -113,6 +121,34 @@ impl<K: CacheKey> ConcurrentLruTracker<K> {
 
         for entry in self.access_order.iter().take(count) {
             candidates.push(entry.value().cache_key.clone());
+        }
+
+        candidates
+    }
+
+    /// Select candidates by age threshold
+    /// Only returns entries older than age_threshold_ns
+    pub fn select_candidates_by_age(&self, count: usize) -> Vec<WarmCacheKey<K>> {
+        let threshold_ns = self.age_threshold_ns.load(Ordering::Relaxed);
+        let current_time_ns = timestamp_nanos();
+        let mut candidates = Vec::new();
+
+        // Iterate through entries in LRU order (oldest first)
+        for entry in self.access_order.iter() {
+            if candidates.len() >= count {
+                break;
+            }
+
+            let key = &entry.value().cache_key;
+            if let Some(access_time_entry) = self.key_timestamps.get(key) {
+                let access_time = *access_time_entry.value();
+                let age_ns = current_time_ns.saturating_sub(access_time);
+
+                // Only include if older than threshold
+                if age_ns > threshold_ns {
+                    candidates.push(key.clone());
+                }
+            }
         }
 
         candidates
@@ -254,7 +290,7 @@ impl<K: CacheKey> EvictionPolicy<WarmCacheKey<K>> for ConcurrentLruTracker<K> {
     }
 
     fn select_candidates(&self, count: usize) -> Vec<WarmCacheKey<K>> {
-        self.select_oldest(count)
+        self.select_candidates_by_age(count)
     }
 
     fn performance_metrics(&self) -> PolicyPerformanceMetrics {
@@ -270,6 +306,60 @@ impl<K: CacheKey> EvictionPolicy<WarmCacheKey<K>> for ConcurrentLruTracker<K> {
     }
 
     fn adapt(&self) {
-        // LRU doesn't need adaptation - it's a fixed policy
+        let now_ns = timestamp_nanos();
+        let last_adapt = self.last_adaptation_time.load(Ordering::Relaxed);
+
+        // Adaptation interval: 60 seconds
+        const ADAPTATION_INTERVAL_NS: u64 = 60_000_000_000;
+        let time_elapsed = now_ns.saturating_sub(last_adapt);
+
+        // Check if enough time has passed
+        if time_elapsed < ADAPTATION_INTERVAL_NS {
+            return; // Not yet time to adapt
+        }
+
+        // Get current hit rate from existing method
+        let hit_rate = self.hit_rate();
+
+        // Target hit rate: 85%
+        const TARGET_HIT_RATE: f64 = 0.85;
+        const HIGH_HIT_RATE_MARGIN: f64 = 0.05; // 5% above target
+
+        // Load current threshold
+        let current_threshold = self.age_threshold_ns.load(Ordering::Relaxed);
+
+        // Calculate new threshold based on hit rate
+        let new_threshold = if hit_rate < TARGET_HIT_RATE {
+            // Hit rate too low - keep entries longer
+            // Increase threshold by 10%
+            let increased = (current_threshold as f64 * 1.1) as u64;
+            // Max: 1 hour (3600 seconds)
+            increased.min(3_600_000_000_000)
+        } else if hit_rate > TARGET_HIT_RATE + HIGH_HIT_RATE_MARGIN {
+            // Hit rate very high - might be wasting memory
+            // Decrease threshold by 10%
+            let decreased = (current_threshold as f64 * 0.9) as u64;
+            // Min: 1 second
+            decreased.max(1_000_000_000)
+        } else {
+            // Hit rate in acceptable range - no change
+            current_threshold
+        };
+
+        // Update threshold if changed
+        if new_threshold != current_threshold {
+            self.age_threshold_ns.store(new_threshold, Ordering::Relaxed);
+
+            // Log adaptation for observability
+            log::debug!(
+                "LRU adapted: hit_rate={:.2}%, threshold_ns={} ({:.1}s)",
+                hit_rate * 100.0,
+                new_threshold,
+                new_threshold as f64 / 1_000_000_000.0
+            );
+        }
+
+        // Update last adaptation time
+        self.last_adaptation_time.store(now_ns, Ordering::Relaxed);
     }
 }

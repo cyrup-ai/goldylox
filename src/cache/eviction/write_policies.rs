@@ -6,11 +6,13 @@
 // VecDeque removed - unused in current implementation
 // PathBuf removed - unused in current implementation
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 use crossbeam_utils::{CachePadded, atomic::AtomicCell};
 use dashmap::DashMap;
+use futures::future;
 use serde_json;
 // bincode imports removed - using direct cold tier API instead
 
@@ -19,12 +21,12 @@ use super::types::{ConsistencyLevel, WriteStrategy};
 use crate::cache::coherence::CacheTier;
 use crate::cache::config::CacheConfig;
 
-use crate::cache::traits::CacheKey;
+use crate::cache::traits::core::{CacheKey, CacheValue};
 use crate::cache::traits::types_and_enums::CacheOperationError;
 
 /// Backing store operations message enum for worker communication
 #[derive(Debug)]
-pub enum BackingStoreOperation<K: CacheKey> {
+pub enum BackingStoreOperation<K: CacheKey, V: Clone> {
     /// Write data to backing store
     #[allow(dead_code)] // Write policies - write to store used in backing store operations
     WriteToStore {
@@ -36,7 +38,7 @@ pub enum BackingStoreOperation<K: CacheKey> {
     /// Flush dirty entry to persistent storage
     #[allow(dead_code)] // Write policies - flush dirty entry used in backing store operations
     FlushDirtyEntry {
-        dirty_entry: DirtyEntry<K>,
+        dirty_entry: DirtyEntry<K, V>,
         response: Sender<Result<(), CacheOperationError>>,
     },
     /// Execute pending write-behind operation
@@ -97,7 +99,7 @@ impl Default for BackingStoreStats {
 
 /// Write policy manager with consistency control
 #[derive(Debug)]
-pub struct WritePolicyManager<K: CacheKey + Default + 'static> {
+pub struct WritePolicyManager<K: CacheKey + Default + 'static, V: Clone + 'static> {
     /// Write-through vs write-back configuration
     write_strategy: AtomicCell<WriteStrategy>,
     /// Write batching configuration for performance
@@ -107,7 +109,7 @@ pub struct WritePolicyManager<K: CacheKey + Default + 'static> {
     /// Write operation statistics
     write_stats: WriteStatistics,
     /// Dirty entry tracking for write-back
-    dirty_entries: DashMap<K, DirtyEntry<K>>,
+    dirty_entries: DashMap<K, DirtyEntry<K, V>>,
     /// Write-behind queue
     // Queue removed - using channels directly
     /// Write-behind sender for async processing
@@ -117,9 +119,13 @@ pub struct WritePolicyManager<K: CacheKey + Default + 'static> {
     /// Flush coordinator
     flush_coordinator: FlushCoordinator,
     /// Backing store worker communication
-    backing_store_sender: Sender<BackingStoreOperation<K>>,
+    backing_store_sender: Sender<BackingStoreOperation<K, V>>,
     /// Handle to backing store worker thread
     backing_store_worker: Option<std::thread::JoinHandle<()>>,
+    /// Cold tier coordinator for async operations
+    cold_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    /// Warm tier coordinator for async operations
+    warm_coordinator: Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
 }
 
 /// Write batching configuration
@@ -160,9 +166,11 @@ pub struct WriteStatistics {
 
 /// Dirty entry tracking for write-back policy
 #[derive(Debug, Clone)]
-pub struct DirtyEntry<K: CacheKey> {
+pub struct DirtyEntry<K: CacheKey, V: Clone> {
     /// Entry key
     key: K,
+    /// Entry value - stored to enable actual flushing to backing store
+    value: V,
     /// Cache tier containing the dirty entry
     tier: CacheTier,
     /// Timestamp when entry became dirty
@@ -236,14 +244,22 @@ pub struct FlushStatistics {
 }
 
 #[allow(dead_code)] // Library API - methods may be used by external consumers
-impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
+impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + 'static + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Send> WritePolicyManager<K, V> {
     pub fn new(
         config: &CacheConfig,
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
+        warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
     ) -> Result<Self, CacheOperationError> {
+        let cold_coord_arc = Arc::new(cold_tier_coordinator);
+        let warm_coord_arc = Arc::new(warm_tier_coordinator);
+        
         let (sender, receiver) = bounded(8192);
         let (backing_store_sender, backing_store_worker) =
-            Self::spawn_backing_store_worker(config, cold_tier_coordinator)?;
+            Self::spawn_backing_store_worker(
+                config, 
+                Arc::clone(&cold_coord_arc),
+                Arc::clone(&warm_coord_arc),
+            )?;
 
         Ok(Self {
             write_strategy: AtomicCell::new(WriteStrategy::default()),
@@ -256,21 +272,24 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
             flush_coordinator: FlushCoordinator::new(),
             backing_store_sender,
             backing_store_worker: Some(backing_store_worker),
+            cold_coordinator: cold_coord_arc,
+            warm_coordinator: warm_coord_arc,
         })
     }
 
     /// Spawn dedicated backing store worker that OWNS storage resources
     fn spawn_backing_store_worker(
         config: &CacheConfig,
-        cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
+        cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+        _warm_tier_coordinator: Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
     ) -> Result<
         (
-            Sender<BackingStoreOperation<K>>,
+            Sender<BackingStoreOperation<K, V>>,
             std::thread::JoinHandle<()>,
         ),
         CacheOperationError,
     > {
-        let (tx, rx) = bounded::<BackingStoreOperation<K>>(1000);
+        let (tx, rx) = bounded::<BackingStoreOperation<K, V>>(1000);
 
         // Config cloned but not used in simplified implementation
         let _config = config.clone();
@@ -283,6 +302,15 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
             let mut stats = BackingStoreStats::default();
 
             log::info!("Backing store worker started successfully");
+            
+            // Create tokio runtime for async operations
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    log::error!("Failed to create tokio runtime: {:?}", e);
+                    return;
+                }
+            };
 
             // Message processing loop
             while let Ok(operation) = rx.recv() {
@@ -296,9 +324,9 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                         response,
                     } => {
                         // Write operations trigger cold tier defragmentation to ensure data consistency
-                        let result = cold_tier_coordinator.execute_maintenance(
+                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
                             crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        );
+                        ));
                         stats.writes_processed += 1;
                         let _ = response.send(result);
                     }
@@ -307,9 +335,9 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                         response,
                     } => {
                         // Flush operations use cold tier maintenance system to sync data
-                        let result = cold_tier_coordinator.execute_maintenance(
+                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
                             crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        );
+                        ));
                         stats.flushes_processed += 1;
                         let _ = response.send(result);
                     }
@@ -318,17 +346,17 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                         response,
                     } => {
                         // Execute pending writes through cold tier reset and restart cycle
-                        let result = {
+                        let result = rt.block_on(async {
                             // First ensure the system is in a clean state, then restart
                             match cold_tier_coordinator.execute_maintenance(
                                 crate::cache::tier::cold::MaintenanceOperation::Reset,
-                            ) {
+                            ).await {
                                 Ok(()) => cold_tier_coordinator.execute_maintenance(
                                     crate::cache::tier::cold::MaintenanceOperation::Restart,
-                                ),
+                                ).await,
                                 Err(e) => Err(e),
                             }
-                        };
+                        });
                         stats.pending_writes_processed += 1;
                         let _ = response.send(result);
                     }
@@ -337,23 +365,23 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                         response,
                     } => {
                         // Sync operations use cold tier defragmentation for data consistency
-                        let result = cold_tier_coordinator.execute_maintenance(
+                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
                             crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        );
+                        ));
                         stats.syncs_processed += 1;
                         let _ = response.send(result);
                     }
                     BackingStoreOperation::Compact { response } => {
                         // Compaction is handled by cold tier compaction system
-                        let result = {
+                        let result = rt.block_on(async {
                             // Execute compaction and return success indicator as usize
                             match cold_tier_coordinator.execute_maintenance(
                                 crate::cache::tier::cold::MaintenanceOperation::Compact,
-                            ) {
+                            ).await {
                                 Ok(()) => Ok(1usize), // Return 1 to indicate successful compaction
                                 Err(e) => Err(e), // CacheOperationError already matches expected type
                             }
-                        };
+                        });
                         stats.compactions_processed += 1;
                         let _ = response.send(result);
                     }
@@ -390,7 +418,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
 
     /// Handle write to store operation (worker thread)
     #[allow(dead_code)] // Dead code - not actually used, kept for future implementation
-    fn handle_write_to_store(
+    async fn handle_write_to_store(
         cold_storage: &mut crate::cache::tier::cold::storage::ColdTierCache<K, String>,
         storage_manager: &crate::cache::tier::cold::data_structures::StorageManager,
         warm_tier_coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
@@ -406,6 +434,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                 cold_storage.put(key.clone(), value)?;
                 storage_manager
                     .sync_data()
+                    .await
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Warm => {
@@ -413,7 +442,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                 let key_str = format!("{:?}", key);
                 let value_str =
                     String::from_utf8(data).unwrap_or_else(|_| format!("binary_data_{:?}", key));
-                crate::cache::tier::warm::global_api::warm_put(warm_tier_coordinator, key_str, value_str)?;
+                crate::cache::tier::warm::global_api::warm_put(warm_tier_coordinator, key_str, value_str).await?;
             }
             CacheTier::Hot => {
                 // Hot tier backing store is typically no-op but log for audit
@@ -425,10 +454,10 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
 
     /// Handle flush dirty entry operation (worker thread)
     #[allow(dead_code)] // Dead code - not actually used, kept for future implementation
-    fn handle_flush_dirty_entry(
+    async fn handle_flush_dirty_entry(
         cold_storage: &mut crate::cache::tier::cold::storage::ColdTierCache<K, String>,
         storage_manager: &crate::cache::tier::cold::data_structures::StorageManager,
-        dirty_entry: &DirtyEntry<K>,
+        dirty_entry: &DirtyEntry<K, V>,
     ) -> Result<(), CacheOperationError> {
         match dirty_entry.tier {
             CacheTier::Cold => {
@@ -439,6 +468,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                 // Sync warm tier storage
                 storage_manager
                     .sync_data()
+                    .await
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Hot => {
@@ -450,7 +480,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
 
     /// Handle pending write operation (worker thread)
     #[allow(dead_code)] // Dead code - not actually used, kept for future implementation
-    fn handle_pending_write(
+    async fn handle_pending_write(
         cold_storage: &mut crate::cache::tier::cold::storage::ColdTierCache<K, String>,
         _storage_manager: &crate::cache::tier::cold::data_structures::StorageManager,
         warm_tier_coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
@@ -472,7 +502,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                     "write_behind_value_{:?}_retry_{}",
                     pending_write.key, pending_write.retry_count
                 );
-                crate::cache::tier::warm::global_api::warm_put(warm_tier_coordinator, key_str, value_str)?;
+                crate::cache::tier::warm::global_api::warm_put(warm_tier_coordinator, key_str, value_str).await?;
             }
             CacheTier::Hot => {
                 log::debug!("Hot tier write-behind completed: {:?}", pending_write.key);
@@ -482,7 +512,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Handle sync operation (worker thread)
-    fn handle_sync(
+    async fn handle_sync(
         cold_storage: &mut crate::cache::tier::cold::storage::ColdTierCache<K, String>,
         storage_manager: &crate::cache::tier::cold::data_structures::StorageManager,
         tier: CacheTier,
@@ -492,14 +522,17 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
                 cold_storage.sync_to_disk()?;
                 storage_manager
                     .sync_data()
+                    .await
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
                 storage_manager
                     .sync_index()
+                    .await
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Warm => {
                 storage_manager
                     .sync_data()
+                    .await
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Hot => {
@@ -518,9 +551,10 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Process write operation with configured policy
-    pub fn process_write(
+    pub async fn process_write(
         &self,
         key: &K,
+        value: &V,
         tier: CacheTier,
     ) -> Result<WriteResult, CacheOperationError> {
         let start_time = Instant::now();
@@ -528,7 +562,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         let strategy = self.write_strategy.load();
         let result = match strategy {
             WriteStrategy::Through => self.process_write_through(key, tier),
-            WriteStrategy::Back => self.process_write_back(key, tier),
+            WriteStrategy::Back => self.process_write_back(key, value, tier).await,
             WriteStrategy::Behind => self.process_write_behind(key, tier),
         };
 
@@ -549,7 +583,6 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         let start_time = Instant::now();
 
         // Write to cache tier first
-        self.write_to_cache_tier(key, tier)?;
 
         // Write to backing store synchronously
         self.write_to_backing_store(key, tier)?;
@@ -561,20 +594,23 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Process write-back operation  
-    fn process_write_back(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
+    async fn process_write_back(&self, key: &K, value: &V, tier: CacheTier) -> Result<(), CacheOperationError>
+    where
+        K: bincode::Encode + bincode::Decode<()>,
+        V: serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Default,
+    {
         let start_time = Instant::now();
 
         // Write to cache tier immediately
-        self.write_to_cache_tier(key, tier)?;
 
-        // Mark entry as dirty for later flush
-        self.mark_dirty(key, tier)?;
+        // Mark entry as dirty for later flush (now with value)
+        self.mark_dirty(key, value, tier)?;
 
         let latency = start_time.elapsed().as_nanos() as u64;
         self.write_stats.record_write(latency, true);
 
         // Check if flush is needed
-        self.check_flush_trigger()?;
+        self.check_flush_trigger().await?;
 
         Ok(())
     }
@@ -584,7 +620,6 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         let start_time = Instant::now();
 
         // Write to cache tier immediately
-        self.write_to_cache_tier(key, tier)?;
 
         // Determine priority based on tier and system state
         let priority = self.determine_write_priority(key, tier);
@@ -611,29 +646,6 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
 
         Ok(())
     }
-
-    /// Write to cache tier
-    #[allow(dead_code)] // Dead code - not actually used, kept for future implementation
-    fn write_to_cache_tier(&self, _key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
-        // This method is not currently used - actual writes go through coordinators directly
-        match tier {
-            CacheTier::Hot => {
-                // Would write to hot tier using SIMD operations if this were active
-                log::debug!("write_to_cache_tier not implemented for hot tier");
-            }
-            CacheTier::Warm => {
-                // Would write to warm tier if this were active
-                log::debug!("write_to_cache_tier not implemented for warm tier");
-            }
-            CacheTier::Cold => {
-                // Would write to cold tier if this were active
-                log::debug!("write_to_cache_tier not implemented for cold tier");
-            }
-        }
-
-        Ok(())
-    }
-
     /// Write to backing store
     fn write_to_backing_store(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
         let key_bytes =
@@ -657,13 +669,14 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Mark entry as dirty for write-back
-    fn mark_dirty(&self, key: &K, tier: CacheTier) -> Result<(), CacheOperationError> {
+    fn mark_dirty(&self, key: &K, value: &V, tier: CacheTier) -> Result<(), CacheOperationError> {
         let dirty_entry = DirtyEntry {
             key: key.clone(),
+            value: value.clone(),
             tier,
             dirty_since: Instant::now(),
             modification_count: 1,
-            size_estimate: std::mem::size_of::<K>(),
+            size_estimate: std::mem::size_of::<K>() + std::mem::size_of::<V>(),
         };
 
         // Update or insert dirty entry
@@ -671,6 +684,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
             dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                 let existing = entry.get_mut();
                 existing.modification_count += 1;
+                existing.value = value.clone();
             }
             dashmap::mapref::entry::Entry::Vacant(entry) => {
                 entry.insert(dirty_entry);
@@ -682,7 +696,11 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
     }
 
     /// Check if flush should be triggered
-    fn check_flush_trigger(&self) -> Result<(), CacheOperationError> {
+    async fn check_flush_trigger(&self) -> Result<(), CacheOperationError>
+    where
+        K: bincode::Encode + bincode::Decode<()>,
+        V: serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Default,
+    {
         let dirty_count = self.write_stats.dirty_count.load(Ordering::Relaxed);
         let flush_batch_size = self
             .flush_coordinator
@@ -690,14 +708,18 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
             .load(Ordering::Relaxed);
 
         if dirty_count >= flush_batch_size {
-            self.trigger_flush()?;
+            self.trigger_flush().await?;
         }
 
         Ok(())
     }
 
-    /// Trigger flush of dirty entries
-    fn trigger_flush(&self) -> Result<(), CacheOperationError> {
+    /// Trigger flush of dirty entries (NOW ASYNC WITH CONCURRENT EXECUTION)
+    async fn trigger_flush(&self) -> Result<(), CacheOperationError>
+    where
+        K: bincode::Encode + bincode::Decode<()>,
+        V: serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Default,
+    {
         // Check if flush is already in progress
         if self.flush_coordinator.flush_in_progress.load() {
             return Ok(()); // Skip if already flushing
@@ -706,7 +728,6 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         self.flush_coordinator.flush_in_progress.store(true);
 
         let flush_start = Instant::now();
-        let mut flushed_count = 0;
         let batch_size = self
             .flush_coordinator
             .flush_batch_size
@@ -718,19 +739,31 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
             entries_to_flush.push(entry.value().clone());
         }
 
-        // Flush entries to backing store
-        for dirty_entry in &entries_to_flush {
-            if let Err(e) = self.flush_dirty_entry(dirty_entry) {
-                log::error!("Failed to flush dirty entry {:?}: {:?}", dirty_entry.key, e);
-                self.flush_coordinator
-                    .flush_stats
-                    .flush_failures
-                    .fetch_add(1, Ordering::Relaxed);
-            } else {
-                // Remove from dirty entries
-                self.dirty_entries.remove(&dirty_entry.key);
-                self.write_stats.dirty_count.fetch_sub(1, Ordering::Relaxed);
-                flushed_count += 1;
+        // CREATE FUTURES FOR CONCURRENT EXECUTION
+        let flush_futures: Vec<_> = entries_to_flush
+            .iter()
+            .map(|entry| self.flush_dirty_entry(entry))
+            .collect();
+
+        // EXECUTE ALL FLUSHES CONCURRENTLY (NOT SEQUENTIALLY!)
+        let results = future::join_all(flush_futures).await;
+
+        // Process results and update statistics
+        let mut flushed_count = 0;
+        for (entry, result) in entries_to_flush.iter().zip(results) {
+            match result {
+                Ok(_) => {
+                    self.dirty_entries.remove(&entry.key);
+                    self.write_stats.dirty_count.fetch_sub(1, Ordering::Relaxed);
+                    flushed_count += 1;
+                }
+                Err(e) => {
+                    log::error!("Failed to flush dirty entry {:?}: {:?}", entry.key, e);
+                    self.flush_coordinator
+                        .flush_stats
+                        .flush_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -756,21 +789,35 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         Ok(())
     }
 
-    /// Flush individual dirty entry
-    fn flush_dirty_entry(&self, dirty_entry: &DirtyEntry<K>) -> Result<(), CacheOperationError> {
-        let (response_tx, response_rx) = bounded(1);
-        self.backing_store_sender
-            .send(BackingStoreOperation::FlushDirtyEntry {
-                dirty_entry: dirty_entry.clone(),
-                response: response_tx,
-            })
-            .map_err(|_| {
-                CacheOperationError::resource_exhausted("Backing store worker terminated")
-            })?;
-
-        response_rx.recv().map_err(|_| {
-            CacheOperationError::resource_exhausted("Backing store response channel closed")
-        })?
+    /// Flush individual dirty entry (NOW ASYNC with actual tier operations)
+    async fn flush_dirty_entry(&self, dirty_entry: &DirtyEntry<K, V>) -> Result<(), CacheOperationError>
+    where
+        K: bincode::Encode + bincode::Decode<()>,
+        V: serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Default,
+    {
+        match dirty_entry.tier {
+            CacheTier::Cold => {
+                crate::cache::tier::cold::insert_demoted(
+                    &self.cold_coordinator,
+                    dirty_entry.key.clone(),
+                    dirty_entry.value.clone(),
+                )
+                .await?;
+            }
+            CacheTier::Warm => {
+                crate::cache::tier::warm::global_api::insert_demoted(
+                    &self.warm_coordinator,
+                    dirty_entry.key.clone(),
+                    dirty_entry.value.clone(),
+                )
+                .await?;
+            }
+            CacheTier::Hot => {
+                // Hot tier may need special handling or no-op
+                log::debug!("Hot tier flush completed: {:?}", dirty_entry.key);
+            }
+        }
+        Ok(())
     }
 
     /// Process pending write-behind operations
@@ -824,13 +871,17 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         })?
     }
 
-    /// Flush all pending writes (for shutdown or explicit flush)
-    pub fn flush_pending_writes(&self) -> Result<usize, CacheOperationError> {
+    /// Flush all pending writes (for shutdown or explicit flush) - NOW ASYNC
+    pub async fn flush_pending_writes(&self) -> Result<usize, CacheOperationError>
+    where
+        K: bincode::Encode + bincode::Decode<()>,
+        V: serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Default,
+    {
         let mut total_flushed = 0;
 
         // Flush all dirty entries
         if !self.dirty_entries.is_empty() {
-            self.trigger_flush()?;
+            self.trigger_flush().await?;
             total_flushed += self.dirty_entries.len();
         }
 
@@ -1164,13 +1215,13 @@ impl<K: CacheKey + Default + 'static + bincode::Encode> WritePolicyManager<K> {
         }
     }
 
-    /// Shutdown write policy manager gracefully
-    pub fn shutdown(&self) -> Result<(), CacheOperationError> {
+    /// Shutdown write policy manager gracefully - NOW ASYNC
+    pub async fn shutdown(&self) -> Result<(), CacheOperationError> {
         // Process remaining writes with priority ordering
         let _ = self.process_priority_ordered_writes();
 
         // Flush all pending writes
-        self.flush_pending_writes()?;
+        self.flush_pending_writes().await?;
 
         // Clear write-behind queue
         while self.write_behind_receiver.try_recv().is_ok() {
@@ -1311,7 +1362,7 @@ impl FlushStatistics {
     }
 }
 
-impl<K: CacheKey + Default + 'static> Drop for WritePolicyManager<K> {
+impl<K: CacheKey + Default + 'static, V: Clone + 'static> Drop for WritePolicyManager<K, V> {
     fn drop(&mut self) {
         // Signal worker shutdown
         let _ = self

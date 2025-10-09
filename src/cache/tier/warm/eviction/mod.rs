@@ -29,7 +29,7 @@ pub struct ConcurrentEvictionPolicy<K: CacheKey> {
     policy_type: AtomicCell<EvictionPolicyType>,
     /// LRU tracking with concurrent access
     lru_tracker: ConcurrentLruTracker<K>,
-    /// LFU tracking with concurrent access  
+    /// LFU tracking with concurrent access
     lfu_tracker: ConcurrentLfuTracker<K>,
     /// ARC (Adaptive Replacement Cache) state
     arc_state: ArcEvictionState<K>,
@@ -37,6 +37,14 @@ pub struct ConcurrentEvictionPolicy<K: CacheKey> {
     ml_policy: MachineLearningEvictionPolicy<K>,
     /// Policy performance metrics
     performance_metrics: PolicyPerformanceMetrics,
+    /// Maximum entries limit for pressure calculation
+    max_entries: AtomicCell<Option<usize>>,
+    /// Maximum memory bytes limit for pressure calculation
+    max_memory_bytes: AtomicCell<Option<u64>>,
+    /// Current entry count for pressure calculation
+    current_entries: AtomicCell<usize>,
+    /// Current memory usage for pressure calculation
+    current_memory_bytes: AtomicCell<u64>,
 }
 
 impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
@@ -49,6 +57,10 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
             arc_state: ArcEvictionState::new(1024), // Default size
             ml_policy: MachineLearningEvictionPolicy::new(),
             performance_metrics: PolicyPerformanceMetrics::default(),
+            max_entries: AtomicCell::new(None),
+            max_memory_bytes: AtomicCell::new(None),
+            current_entries: AtomicCell::new(0),
+            current_memory_bytes: AtomicCell::new(0),
         }
     }
 
@@ -61,6 +73,18 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
             .store(EvictionPolicyType::MachineLearning);
 
         policy
+    }
+
+    /// Update cache capacity configuration for pressure calculation
+    pub fn update_cache_capacity(&self, max_entries: Option<usize>, max_memory_bytes: Option<u64>) {
+        self.max_entries.store(max_entries);
+        self.max_memory_bytes.store(max_memory_bytes);
+    }
+
+    /// Update current cache statistics for pressure calculation
+    pub fn update_cache_stats(&self, current_entries: usize, current_memory_bytes: u64) {
+        self.current_entries.store(current_entries);
+        self.current_memory_bytes.store(current_memory_bytes);
     }
 
     /// Get current eviction policy
@@ -219,10 +243,40 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
         &self.ml_policy
     }
 
+    /// Calculate cache pressure based on memory and entry usage
+    ///
+    /// Returns f64 in range [0.0, 1.0] where:
+    /// - 0.0 = empty cache (no pressure)
+    /// - 0.5 = half full (medium pressure)
+    /// - 1.0 = completely full (maximum pressure)
+    ///
+    /// Uses the MAXIMUM of entry-based and memory-based pressure,
+    /// as the most constrained resource drives eviction urgency.
+    fn calculate_cache_pressure(&self) -> f64 {
+        let mut entry_pressure = 0.5; // Default to medium pressure
+        let mut memory_pressure = 0.5; // Default to medium pressure
+
+        // Calculate entry-based pressure if max_entries is configured
+        if let Some(max_entries) = self.max_entries.load() && max_entries > 0 {
+            let current = self.current_entries.load();
+            entry_pressure = (current as f64) / (max_entries as f64);
+        }
+
+        // Calculate memory-based pressure if max_memory_bytes is configured
+        if let Some(max_memory) = self.max_memory_bytes.load() && max_memory > 0 {
+            let current = self.current_memory_bytes.load();
+            memory_pressure = (current as f64) / (max_memory as f64);
+        }
+
+        // Return maximum of both pressures (most constrained resource)
+        // Clamp to [0.0, 1.0] range for safety
+        entry_pressure.max(memory_pressure).min(1.0)
+    }
+
     /// Train ML policy with feedback
     #[allow(dead_code)] // ML system - used in machine learning policy training and adaptation
     pub fn train_ml_policy(&self, key: &WarmCacheKey<K>, was_correct: bool) {
-        let cache_pressure = 0.5; // Default pressure - could be calculated
+        let cache_pressure = self.calculate_cache_pressure();
         self.ml_policy.train(key, cache_pressure, was_correct);
     }
 
@@ -230,7 +284,7 @@ impl<K: CacheKey> ConcurrentEvictionPolicy<K> {
     fn select_random_candidates(&self, count: usize) -> Vec<WarmCacheKey<K>> {
         // Connect to sophisticated intelligent selection using ML confidence
         // Use ml_policy for ML confidence calculations - delegate to actual model prediction
-        let cache_pressure = 0.5; // Could be calculated from cache load
+        let cache_pressure = self.calculate_cache_pressure();
         let ml_confidence = if let Some(_recent_key) = self.get_most_frequent_keys(1).first() {
             // Connect to existing ML policy prediction system
             let features = crate::cache::tier::warm::eviction::ml::features::FeatureVector::new(0);
