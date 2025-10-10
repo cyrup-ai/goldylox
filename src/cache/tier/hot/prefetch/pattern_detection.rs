@@ -121,8 +121,10 @@ impl PatternDetector {
 
         for (key, timestamps) in key_accesses {
             if timestamps.len() >= 3 {
-                // Calculate intervals between accesses
-                let intervals: Vec<u64> = timestamps.windows(2).map(|w| w[1] - w[0]).collect();
+                // Calculate intervals between accesses (use checked_sub to handle potential underflow)
+                let intervals: Vec<u64> = timestamps.windows(2)
+                    .filter_map(|w| w[1].checked_sub(w[0]))
+                    .collect();
 
                 // Check for regular intervals (periodic access)
                 if self.has_regular_intervals(&intervals) {

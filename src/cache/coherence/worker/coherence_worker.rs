@@ -1,11 +1,13 @@
 //! Background worker thread for coherence protocol operations
 //!
 //! This module implements the core worker that exclusively owns all coherence data
-//! and processes requests via crossbeam channels.
+//! and processes requests via tokio channels.
 
-use crossbeam_channel::{Receiver, RecvError, Sender};
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
 
-use super::message_types::{CoherenceRequest, CoherenceResponse};
+use super::message_types::CoherenceRequest;
 use crate::cache::coherence::communication::CoherenceError;
 use crate::cache::coherence::data_structures::{
     CacheTier, CoherenceController, ProtocolConfiguration,
@@ -31,11 +33,9 @@ pub struct CoherenceWorker<
     /// Exclusively owned coherence controller - no shared access
     controller: CoherenceController<K, V>,
     /// Request channel receiver
-    request_rx: Receiver<CoherenceRequest<K, V>>,
-    /// Response channel sender
-    response_tx: Sender<CoherenceResponse<K, V>>,
+    request_rx: mpsc::UnboundedReceiver<CoherenceRequest<K, V>>,
     /// Worker shutdown signal
-    shutdown_rx: Receiver<()>,
+    shutdown_rx: mpsc::UnboundedReceiver<()>,
 }
 
 impl<
@@ -61,133 +61,98 @@ impl<
         hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
         warm_tier_coordinator: crate::cache::tier::warm::global_api::WarmTierCoordinator,
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
-        request_rx: Receiver<CoherenceRequest<K, V>>,
-        response_tx: Sender<CoherenceResponse<K, V>>,
-        shutdown_rx: Receiver<()>,
+        request_rx: mpsc::UnboundedReceiver<CoherenceRequest<K, V>>,
+        shutdown_rx: mpsc::UnboundedReceiver<()>,
     ) -> Self {
         Self {
             controller: CoherenceController::new(config, hot_tier_coordinator, warm_tier_coordinator, cold_tier_coordinator),
             request_rx,
-            response_tx,
             shutdown_rx,
         }
     }
 
     /// Main worker processing loop - exclusively owns all coherence data
-    pub fn run(self) {
-        use std::time::Duration;
+    pub async fn run(mut self) {
+        let mut maintenance_interval = tokio::time::interval(Duration::from_millis(100));
+        maintenance_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
-            crossbeam_channel::select! {
-                recv(self.shutdown_rx) -> _ => {
+            tokio::select! {
+                _ = self.shutdown_rx.recv() => {
                     // Graceful shutdown
                     break;
                 }
-                recv(self.request_rx) -> request => {
-                    match request {
-                        Ok(req) => {
-                            let response = self.process_request(req);
-                            if self.response_tx.send(response).is_err() {
-                                // Response channel closed - shutdown
-                                break;
-                            }
-                        }
-                        Err(RecvError) => {
-                            // Request channel closed - shutdown
-                            break;                        }
-                    }
+                Some(request) = self.request_rx.recv() => {
+                    self.process_request(request);
                 }
-                default(Duration::from_millis(100)) => {
+                _ = maintenance_interval.tick() => {
                     // Periodic maintenance - process worker completions
-                    self.controller.perform_maintenance();
+                    self.controller.perform_maintenance().await;
                 }
             }
         }
     }
 
     /// Process coherence request using exclusively owned controller
-    fn process_request(&self, request: CoherenceRequest<K, V>) -> CoherenceResponse<K, V> {
+    fn process_request(&self, request: CoherenceRequest<K, V>) {
         match request {
             CoherenceRequest::Read {
                 key,
                 requesting_tier,
-                request_id,
-            } => match self.controller.handle_read_request(&key, requesting_tier) {
-                Ok(read_response) => CoherenceResponse::ReadSuccess {
-                    request_id,
-                    response: read_response,
-                },
-                Err(error) => CoherenceResponse::Error { request_id, error },
-            },
+                response,
+            } => {
+                let result = self.controller.handle_read_request(&key, requesting_tier);
+                let _ = response.send(result);
+            }
             CoherenceRequest::Write {
                 key,
                 data,
                 requesting_tier,
-                request_id,
+                response,
             } => {
-                match self
-                    .controller
-                    .handle_write_request(&key, requesting_tier, data)
-                {
-                    Ok(write_response) => CoherenceResponse::WriteSuccess {
-                        request_id,
-                        response: write_response,
-                    },
-                    Err(error) => CoherenceResponse::Error { request_id, error },
-                }
+                let result = self.controller.handle_write_request(&key, requesting_tier, data);
+                let _ = response.send(result);
             }
-            CoherenceRequest::GetStatistics { request_id } => {
+            CoherenceRequest::GetStatistics { response } => {
                 let stats = self.controller.get_statistics();
-                CoherenceResponse::Statistics {
-                    request_id,
-                    statistics: stats,
-                }
+                let _ = response.send(stats);
             }
             CoherenceRequest::Serialize {
                 key,
                 value,
                 target_tier,
-                request_id,
-            } => match self.create_serialization_envelope_internal(key, value, target_tier) {
-                Ok(envelope) => CoherenceResponse::SerializeSuccess {
-                    request_id,
-                    envelope: Box::new(envelope),
-                },
-                Err(error) => CoherenceResponse::Error { request_id, error },
-            },
+                response,
+            } => {
+                let result = self.create_serialization_envelope_internal(key, value, target_tier);
+                let _ = response.send(result.map(Box::new));
+            }
             CoherenceRequest::RecordRead {
                 key,
                 tier,
-                request_id,
+                response,
             } => {
                 // Record read access using existing coherence infrastructure
-                match self.controller.handle_read_request(&key, tier) {
-                    Ok(_) => CoherenceResponse::AccessRecorded { request_id },
-                    Err(error) => CoherenceResponse::Error { request_id, error },
-                }
+                let result = self.controller.handle_read_request(&key, tier).map(|_| ());
+                let _ = response.send(result);
             }
             CoherenceRequest::RecordWrite {
                 key,
                 data,
                 tier,
-                request_id,
+                response,
             } => {
                 // Record write access using proper write request handler
-                match self.controller.handle_write_request(&key, tier, data) {
-                    Ok(_write_response) => CoherenceResponse::AccessRecorded { request_id },
-                    Err(error) => CoherenceResponse::Error { request_id, error },
-                }
+                let result = self.controller.handle_write_request(&key, tier, data).map(|_| ());
+                let _ = response.send(result);
             }
             CoherenceRequest::RecordPrefetch {
                 key,
                 tier,
-                request_id,
+                response,
             } => {
                 // Record prefetch access - treated as read request for coherence purposes
-                match self.controller.handle_read_request(&key, tier) {
-                    Ok(_) => CoherenceResponse::AccessRecorded { request_id },
-                    Err(error) => CoherenceResponse::Error { request_id, error },
-                }
+                let result = self.controller.handle_read_request(&key, tier).map(|_| ());
+                let _ = response.send(result);
             }
         }
     }
@@ -260,14 +225,21 @@ impl<
             include_access_history: initial_tier != TierLocation::Hot,
         };
 
-        self.controller.write_propagation.submit_writeback(
-            coherence_key.clone(),
-            value.clone(),
-            target_tier,
-            self.controller.determine_target_tier(target_tier),
-            0,
-            WritePriority::Normal,
-        );
+        // Submit write-back request (spawn async operation in background)
+        let write_propagation = Arc::clone(&self.controller.write_propagation);
+        let key_clone = coherence_key.clone();
+        let value_clone = value.clone();
+        let dest_tier = self.controller.determine_target_tier(target_tier);
+        tokio::runtime::Handle::current().spawn(async move {
+            let _ = write_propagation.submit_writeback(
+                key_clone,
+                value_clone,
+                target_tier,
+                dest_tier,
+                0,
+                WritePriority::Normal,
+            ).await;
+        });
 
         Ok(SerializationEnvelope {
             entry: cache_entry,

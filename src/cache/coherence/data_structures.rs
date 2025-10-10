@@ -35,8 +35,8 @@ pub struct CoherenceController<K: CacheKey, V: CacheValue> {
     pub transition_validator: super::state_management::StateTransitionValidator,
     /// Invalidation manager
     pub invalidation_manager: InvalidationManager<K>,
-    /// Write propagation system
-    pub write_propagation: super::write_propagation::WritePropagationSystem<K, V>,
+    /// Write propagation system (Arc-wrapped for async spawn)
+    pub write_propagation: Arc<super::write_propagation::WritePropagationSystem<K, V>>,
     /// Hot tier coordinator for tier operations
     pub hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
     /// Warm tier coordinator for tier operations
@@ -407,12 +407,12 @@ impl<
                 coherence_stats.clone()
             ),
             invalidation_manager: InvalidationManager::new(1000),
-            write_propagation: super::write_propagation::WritePropagationSystem::new(
+            write_propagation: Arc::new(super::write_propagation::WritePropagationSystem::new(
                 1_000_000_000,
                 hot_tier_coordinator.clone(),
                 warm_tier_coordinator.clone(),
                 cold_tier_coordinator.clone(),
-            ),
+            )),
             hot_tier_coordinator,
             warm_tier_coordinator,
             cold_tier_coordinator,
@@ -613,15 +613,20 @@ impl<
             }
         };
 
-        // Submit write-back request
-        self.write_propagation.submit_writeback(
-            key.clone(),
-            data,
-            requesting_tier,
-            self.determine_target_tier(requesting_tier),
-            0,
-            priority,
-        );
+        // Submit write-back request (spawn async operation in background)
+        let write_propagation = Arc::clone(&self.write_propagation);
+        let key_clone = key.clone();
+        let target_tier = self.determine_target_tier(requesting_tier);
+        tokio::runtime::Handle::current().spawn(async move {
+            let _ = write_propagation.submit_writeback(
+                key_clone,
+                data,
+                requesting_tier,
+                target_tier,
+                0,
+                priority,
+            ).await;
+        });
 
         Ok(super::communication::WriteResponse::Success)
     }
@@ -659,15 +664,20 @@ impl<
             cache_line.increment_version();
         }
 
-        // Submit write-back request
-        self.write_propagation.submit_writeback(
-            key.clone(),
-            data,
-            requesting_tier,
-            self.determine_target_tier(requesting_tier),
-            0,
-            WritePriority::High,
-        );
+        // Submit write-back request (spawn async operation in background)
+        let write_propagation = Arc::clone(&self.write_propagation);
+        let key_clone = key.clone();
+        let target_tier = self.determine_target_tier(requesting_tier);
+        tokio::runtime::Handle::current().spawn(async move {
+            let _ = write_propagation.submit_writeback(
+                key_clone,
+                data,
+                requesting_tier,
+                target_tier,
+                0,
+                WritePriority::High,
+            ).await;
+        });
 
         Ok(super::communication::WriteResponse::Success)
     }
@@ -698,15 +708,20 @@ impl<
             cache_line.increment_version();
         }
 
-        // Submit write-back request with lower priority (already exclusive)
-        self.write_propagation.submit_writeback(
-            key.clone(),
-            data,
-            requesting_tier,
-            self.determine_target_tier(requesting_tier),
-            0,
-            WritePriority::Normal,
-        );
+        // Submit write-back request with lower priority (already exclusive) - spawn async operation
+        let write_propagation = Arc::clone(&self.write_propagation);
+        let key_clone = key.clone();
+        let target_tier = self.determine_target_tier(requesting_tier);
+        tokio::runtime::Handle::current().spawn(async move {
+            let _ = write_propagation.submit_writeback(
+                key_clone,
+                data,
+                requesting_tier,
+                target_tier,
+                0,
+                WritePriority::Normal,
+            ).await;
+        });
 
         Ok(super::communication::WriteResponse::Success)
     }

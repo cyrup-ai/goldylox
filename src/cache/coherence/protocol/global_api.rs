@@ -8,7 +8,7 @@
 use crate::cache::coherence::CacheTier;
 use crate::cache::coherence::communication::{CoherenceError, ReadResponse, WriteResponse};
 use crate::cache::coherence::data_structures::ProtocolConfiguration;
-use crate::cache::coherence::worker::message_types::{CoherenceRequest, CoherenceResponse};
+use crate::cache::coherence::worker::message_types::CoherenceRequest;
 use crate::cache::coherence::worker::worker_manager::{CoherenceSender, CoherenceWorkerManager};
 use crate::cache::traits::cache_entry::SerializationEnvelope;
 use crate::cache::traits::{CacheKey, CacheValue};
@@ -130,7 +130,7 @@ impl<
 /// This function sends read requests to the background worker that exclusively owns
 /// all coherence data. No shared controller access - pure message passing.
 #[allow(dead_code)] // MESI coherence - used in protocol coherent read operations  
-pub fn coherent_read<K, V>(
+pub async fn coherent_read<K, V>(
     system: &CoherenceSystem<K, V>,
     key: K,
     requesting_tier: CacheTier,
@@ -151,23 +151,24 @@ where
         + serde::de::DeserializeOwned
         + 'static,
 {
+    use tokio::sync::oneshot;
+    
     let sender = system.sender();
-    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CoherenceRequest::Read {
         key,
         requesting_tier,
-        request_id,
+        response: response_tx,
     };
 
     // Send request to worker via channel
     sender.send_request(request)?;
 
     // Wait for response with timeout
-    match sender.receive_response(request_id, Duration::from_secs(5))? {
-        CoherenceResponse::ReadSuccess { response, .. } => Ok(response),
-        CoherenceResponse::Error { error, .. } => Err(error),
-        _ => Err(CoherenceError::ProtocolViolation),
-    }
+    tokio::time::timeout(Duration::from_secs(5), response_rx)
+        .await
+        .map_err(|_| CoherenceError::TimeoutExpired)?
+        .map_err(|_| CoherenceError::ChannelClosed)?
 }
 
 /// Perform coherent write operation using channel-based worker communication
@@ -175,7 +176,7 @@ where
 /// This function sends write requests to the background worker that exclusively owns
 /// all coherence data. Write propagation handled by worker thread.
 #[allow(dead_code)] // MESI coherence - used in protocol coherent write operations  
-pub fn coherent_write<K, V>(
+pub async fn coherent_write<K, V>(
     system: &CoherenceSystem<K, V>,
     key: K,
     data: V,
@@ -197,24 +198,25 @@ where
         + serde::de::DeserializeOwned
         + 'static,
 {
+    use tokio::sync::oneshot;
+    
     let sender = system.sender();
-    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CoherenceRequest::Write {
         key,
         data,
         requesting_tier,
-        request_id,
+        response: response_tx,
     };
 
     // Send request to worker via channel
     sender.send_request(request)?;
 
     // Wait for response with timeout
-    match sender.receive_response(request_id, Duration::from_secs(5))? {
-        CoherenceResponse::WriteSuccess { response, .. } => Ok(response),
-        CoherenceResponse::Error { error, .. } => Err(error),
-        _ => Err(CoherenceError::ProtocolViolation),
-    }
+    tokio::time::timeout(Duration::from_secs(5), response_rx)
+        .await
+        .map_err(|_| CoherenceError::TimeoutExpired)?
+        .map_err(|_| CoherenceError::ChannelClosed)?
 }
 
 /// Serialize cache value with comprehensive envelope metadata using coherence integration
@@ -222,7 +224,7 @@ where
 /// Creates a SerializationEnvelope with complete metadata for tier-aware serialization following
 /// the production pattern. Uses channel-based worker communication for exclusive coherence access.
 #[allow(dead_code)] // MESI coherence - used in protocol tier-aware serialization operations  
-pub fn serialize_tier_value_with_envelope<K, V>(
+pub async fn serialize_tier_value_with_envelope<K, V>(
     system: &CoherenceSystem<K, V>,
     key: K,
     value: V,
@@ -246,22 +248,24 @@ where
         + serde::de::DeserializeOwned
         + 'static,
 {
+    use tokio::sync::oneshot;
+    
     let sender = system.sender();
-    let request_id = system.request_id_counter().fetch_add(1, Ordering::Relaxed);
+    let (response_tx, response_rx) = oneshot::channel();
     let request = CoherenceRequest::Serialize {
         key,
         value,
         target_tier,
-        request_id,
+        response: response_tx,
     };
 
     // Send request to worker via channel
     sender.send_request(request)?;
 
     // Wait for response with timeout
-    match sender.receive_response(request_id, Duration::from_secs(5))? {
-        CoherenceResponse::SerializeSuccess { envelope, .. } => Ok(*envelope),
-        CoherenceResponse::Error { error, .. } => Err(error),
-        _ => Err(CoherenceError::ProtocolViolation),
-    }
+    let envelope = tokio::time::timeout(Duration::from_secs(5), response_rx)
+        .await
+        .map_err(|_| CoherenceError::TimeoutExpired)?
+        .map_err(|_| CoherenceError::ChannelClosed)??;
+    Ok(*envelope)
 }

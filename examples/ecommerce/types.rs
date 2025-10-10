@@ -140,6 +140,7 @@ impl CacheWorker {
         let mut panic_count = 0;
         const MAX_CONSECUTIVE_PANICS: u32 = 5;
         let mut should_shutdown = false;
+        let rt = tokio::runtime::Handle::current();
 
         loop {
             if should_shutdown {
@@ -152,7 +153,7 @@ impl CacheWorker {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         match command {
                             CacheCommand::ProductGet { key, response } => {
-                                let result = self.product_cache.get(&key);
+                                let result = rt.block_on(self.product_cache.get(&key));
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send ProductGet response: {:?}", e);
                                 }
@@ -162,16 +163,14 @@ impl CacheWorker {
                                 value,
                                 response,
                             } => {
-                                let result = self
-                                    .product_cache
-                                    .put(key, value)
+                                let result = rt.block_on(self.product_cache.put(key, value))
                                     .map_err(|e| e.to_string());
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send ProductPut response: {:?}", e);
                                 }
                             }
                             CacheCommand::SessionGet { key, response } => {
-                                let result = self.session_cache.get(&key);
+                                let result = rt.block_on(self.session_cache.get(&key));
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send SessionGet response: {:?}", e);
                                 }
@@ -181,16 +180,14 @@ impl CacheWorker {
                                 value,
                                 response,
                             } => {
-                                let result = self
-                                    .session_cache
-                                    .put(key, value)
+                                let result = rt.block_on(self.session_cache.put(key, value))
                                     .map_err(|e| e.to_string());
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send SessionPut response: {:?}", e);
                                 }
                             }
                             CacheCommand::AnalyticsGet { key, response } => {
-                                let result = self.analytics_cache.get(&key);
+                                let result = rt.block_on(self.analytics_cache.get(&key));
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send AnalyticsGet response: {:?}", e);
                                 }
@@ -200,9 +197,7 @@ impl CacheWorker {
                                 value,
                                 response,
                             } => {
-                                let result = self
-                                    .analytics_cache
-                                    .put(key, value)
+                                let result = rt.block_on(self.analytics_cache.put(key, value))
                                     .map_err(|e| e.to_string());
                                 if let Err(e) = response.send(result) {
                                     log::warn!("Failed to send AnalyticsPut response: {:?}", e);

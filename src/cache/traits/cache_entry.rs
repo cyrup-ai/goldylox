@@ -989,11 +989,11 @@ impl<
     ) -> Self {
         let entry = Self::new(key, value, initial_tier);
 
-        // Record access via crossbeam messaging to coherence worker
-        if let Some((sender, _receiver)) =
+        // Record access via tokio messaging to coherence worker
+        if let Some(sender) =
             crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>(channel_map)
         {
-            let request_id = request_id_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            use tokio::sync::oneshot;
 
             let access_type = match initial_tier {
                 TierLocation::Hot => crate::cache::traits::types_and_enums::AccessType::Write,
@@ -1001,12 +1001,13 @@ impl<
                 TierLocation::Cold => crate::cache::traits::types_and_enums::AccessType::Write,
             };
 
+            let (response_tx, _response_rx) = oneshot::channel();
             let coherence_request =
                 crate::cache::coherence::worker::message_types::CoherenceRequest::RecordWrite {
                     key: entry.key.clone(),
                     data: entry.value.clone(),
                     tier: crate::cache::coherence::data_structures::CacheTier::from(initial_tier),
-                    request_id,
+                    response: response_tx,
                 };
 
             // Send request - ignore errors for non-blocking operation
@@ -1026,13 +1027,12 @@ impl<
     }
 
     /// Record access to this cache entry with coherence integration
-    pub fn record_access_with_coherence(
+    pub async fn record_access_with_coherence(
         &mut self,
         access_type: AccessType,
         latency_ns: u64,
         hit: bool,
         event_counter: &std::sync::atomic::AtomicU64,
-        request_id_counter: &std::sync::atomic::AtomicU64,
         channel_map: &std::sync::Arc<std::sync::RwLock<
             std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
         >>,
@@ -1046,19 +1046,20 @@ impl<
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // Coherence coordination via crossbeam messaging to dedicated coherence workers
-        use crate::cache::coherence::worker::message_types::{CoherenceRequest, CoherenceResponse};
-        use crossbeam_channel::TrySendError;
-        use std::sync::atomic::Ordering as AtomicOrdering;
+        // Coherence coordination via tokio messaging to dedicated coherence workers
+        use crate::cache::coherence::worker::message_types::CoherenceRequest;
         use std::time::Duration;
+        use tokio::sync::oneshot;
 
         // Get per-instance coherence worker channel from worker manager
-        if let Some((request_sender, response_receiver)) =
+        if let Some(request_sender) =
             crate::cache::coherence::worker::worker_manager::get_worker_channels::<K, V>(channel_map)
         {
             // Convert tier for coherence protocol
             let requesting_tier = self.tier_info.current_tier.into();
-            let request_id = request_id_counter.fetch_add(1, AtomicOrdering::Relaxed);
+
+            // Create oneshot channel for response
+            let (response_tx, response_rx) = oneshot::channel();
 
             // Create appropriate coherence request based on access type
             let request = match access_type {
@@ -1072,14 +1073,14 @@ impl<
                 | AccessType::RandomRead => CoherenceRequest::RecordRead {
                     key: self.key.clone(),
                     tier: requesting_tier,
-                    request_id,
+                    response: response_tx,
                 },
                 AccessType::Write | AccessType::SequentialWrite | AccessType::ReadModifyWrite => {
                     CoherenceRequest::RecordWrite {
                         key: self.key.clone(),
                         data: self.value.clone(),
                         tier: requesting_tier,
-                        request_id,
+                        response: response_tx,
                     }
                 }
                 AccessType::Prefetch
@@ -1089,58 +1090,46 @@ impl<
                 | AccessType::Demotion => CoherenceRequest::RecordPrefetch {
                     key: self.key.clone(),
                     tier: requesting_tier,
-                    request_id,
+                    response: response_tx,
                 },
             };
 
-            // Send request to coherence worker via crossbeam channel
-            match request_sender.try_send(request) {
-                Ok(()) => {
-                    // Wait for response with short timeout for error handling
-                    match response_receiver.recv_timeout(Duration::from_millis(50)) {
-                        Ok(CoherenceResponse::AccessRecorded {
-                            request_id: resp_id,
-                        }) if resp_id == request_id => {
-                            log::trace!(
-                                "Coherence access recorded successfully for key {:?}",
-                                self.key
-                            );
-                        }
-                        Ok(CoherenceResponse::Error {
-                            request_id: resp_id,
-                            error,
-                        }) if resp_id == request_id => {
-                            log::warn!(
-                                "Coherence access recording failed for key {:?}: {:?}",
-                                self.key,
-                                error
-                            );
-                        }
-                        Ok(_) => {
-                            // Response for different request - log and continue
-                            log::trace!("Received coherence response for different request");
-                        }
-                        Err(_timeout) => {
-                            // Non-blocking - coherence worker will handle asynchronously
-                            log::trace!(
-                                "Coherence access message sent asynchronously for key {:?}",
-                                self.key
-                            );
-                        }
+            // Send request to coherence worker via tokio channel
+            if request_sender.send(request).is_ok() {
+                // Non-blocking async await with timeout
+                match tokio::time::timeout(Duration::from_millis(50), response_rx).await {
+                    Ok(Ok(Ok(()))) => {
+                        log::trace!(
+                            "Coherence access recorded successfully for key {:?}",
+                            self.key
+                        );
+                    }
+                    Ok(Ok(Err(error))) => {
+                        log::warn!(
+                            "Coherence access recording failed for key {:?}: {:?}",
+                            self.key,
+                            error
+                        );
+                    }
+                    Ok(Err(_recv_error)) => {
+                        log::warn!(
+                            "Coherence response channel closed for key {:?}",
+                            self.key
+                        );
+                    }
+                    Err(_timeout) => {
+                        // Non-blocking - coherence worker will handle asynchronously
+                        log::trace!(
+                            "Coherence access message sent asynchronously for key {:?}",
+                            self.key
+                        );
                     }
                 }
-                Err(TrySendError::Full(_)) => {
-                    log::warn!(
-                        "Coherence worker queue full, dropping access record for key {:?}",
-                        self.key
-                    );
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    log::error!(
-                        "Coherence worker disconnected, cannot record access for key {:?}",
-                        self.key
-                    );
-                }
+            } else {
+                log::warn!(
+                    "Coherence worker channel closed, cannot record access for key {:?}",
+                    self.key
+                );
             }
         } else {
             // Coherence coordination not available - log for debugging
@@ -1242,15 +1231,22 @@ where
     ) -> Result<Self, CoherenceError> {
         let coherence_key = CoherenceKey::from_cache_key(&entry.key);
 
-        // DELEGATE to existing write propagation system for coordination
-        coherence_controller.write_propagation.submit_writeback(
-            coherence_key.clone(),
-            entry.value.clone(),
-            entry.tier_info.current_tier.into(),
-            coherence_controller.determine_target_tier(entry.tier_info.current_tier.into()),
-            0,
-            WritePriority::Normal,
-        );
+        // DELEGATE to existing write propagation system for coordination (spawn async)
+        let write_propagation = std::sync::Arc::clone(&coherence_controller.write_propagation);
+        let key_clone = coherence_key.clone();
+        let value_clone = entry.value.clone();
+        let source_tier = entry.tier_info.current_tier.into();
+        let dest_tier = coherence_controller.determine_target_tier(source_tier);
+        tokio::runtime::Handle::current().spawn(async move {
+            let _ = write_propagation.submit_writeback(
+                key_clone,
+                value_clone,
+                source_tier,
+                dest_tier,
+                0,
+                WritePriority::Normal,
+            ).await;
+        });
 
         let tier_context = TierSerializationContext {
             target_tier: entry.tier_info.current_tier,
