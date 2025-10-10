@@ -407,6 +407,16 @@ impl<K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static>
     pub fn cleanup_expired_tasks(&self) -> usize {
         self.promotion_queue.cleanup_expired_tasks()
     }
+    
+    /// Get next promotion task from queue for processing
+    pub fn get_next_promotion_task(&self) -> Result<Option<PromotionTask<K>>, CacheOperationError> {
+        self.promotion_queue.get_next_task()
+    }
+    
+    /// Record successful promotion for statistics
+    pub fn record_promotion_success(&self, from_tier: CacheTier, to_tier: CacheTier, latency_ns: u64) {
+        self.promotion_stats.record_successful_promotion(from_tier, to_tier, latency_ns);
+    }
 }
 
 /// Convert cache tier to array index for statistics

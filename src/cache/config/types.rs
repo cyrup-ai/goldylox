@@ -311,7 +311,7 @@ impl Default for AnalyzerConfig {
     fn default() -> Self {
         Self {
             max_tracked_keys: 10_000,
-            frequency_decay_constant: 1_000_000_000.0, // 1 second
+            frequency_decay_constant: 60_000_000_000.0, // 60 seconds
             recency_half_life: 300_000_000_000.0,      // 5 minutes
             cleanup_age_threshold_ns: 3_600_000_000_000, // 1 hour
             cleanup_interval: 1000,

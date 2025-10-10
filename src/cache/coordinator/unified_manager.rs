@@ -580,12 +580,7 @@ impl<
                     crate::cache::coherence::CacheTier::Hot,
                     &access_path,
                 );
-
-                // Record access pattern for prefetch prediction (using cached timestamp)
-                let context_hash = key.cache_hash();
-                self.prefetch_channel
-                    .record_access(key.clone(), current_time_ns, context_hash);
-
+                
                 return Some(value);
             }
         } else {
@@ -745,6 +740,9 @@ impl<
         let canonical_task = crate::cache::worker::types::WorkerMaintenanceOps::update_statistics_task();
         let _ = self.maintenance_scheduler.submit_task(canonical_task, 1000);
         
+        // Process pending promotions inline (no recursion since put doesn't call get)
+        let _ = self.process_pending_promotions(10).await;
+        
         Ok(())
     }
 
@@ -897,7 +895,56 @@ impl<
         // Task coordinator is already initialized and ready for command processing
 
         // Error recovery system is initialized and ready
+        
+        // Promotion processing is now handled inline during cache operations
+        // to avoid lifetime and Arc wrapping complexity
+        
         Ok(())
+    }
+    
+    /// Process pending tier promotions (called during cache operations)
+    pub async fn process_pending_promotions(&self, max_batch_size: usize) -> usize {
+        let mut processed = 0;
+        
+        // Process up to max_batch_size promotions
+        while processed < max_batch_size {
+            match self.tier_manager.get_next_promotion_task() {
+                Ok(Some(task)) => {
+                    // Track promotion latency
+                    let promotion_start = std::time::Instant::now();
+                    
+                    // Execute promotion by moving data between tiers
+                    let mut access_path = AccessPath::new();
+                    
+                    // Get value from source tier
+                    use crate::cache::coherence::CacheTier;
+                    let value_opt = match task.from_tier {
+                        CacheTier::Hot => self.tier_operations.try_hot_tier_get(&task.key, &mut access_path).await,
+                        CacheTier::Warm => self.tier_operations.try_warm_tier_get(&task.key, &mut access_path).await,
+                        CacheTier::Cold => self.tier_operations.try_cold_tier_get(&task.key, &mut access_path).await,
+                    };
+                    
+                    // If value exists, put it in target tier
+                    if let Some(value) = value_opt {
+                        let _ = self.tier_operations.put_with_replication(
+                            task.key.clone(),
+                            value,
+                            task.to_tier,
+                            vec![], // No replication for promotions
+                        ).await;
+                        
+                        // Record successful promotion with latency
+                        let latency_ns = promotion_start.elapsed().as_nanos() as u64;
+                        self.tier_manager.record_promotion_success(task.from_tier, task.to_tier, latency_ns);
+                        
+                        processed += 1;
+                    }
+                }
+                _ => break, // No more tasks or error
+            }
+        }
+        
+        processed
     }
 
     /// Start performance monitoring with background collection
@@ -980,7 +1027,7 @@ impl<
             );
 
             // Consider further promotion to hot tier for very frequent access
-            if access_pattern.frequency > 10.0 && value.estimated_size() < 1024 {
+            if access_pattern.frequency > 2.0 && value.estimated_size() < 8192 {
                 let _ = self.tier_manager.schedule_promotion(
                     key.clone(),
                     crate::cache::coherence::CacheTier::Warm,

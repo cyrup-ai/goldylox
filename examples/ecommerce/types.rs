@@ -3,7 +3,7 @@
 //! This module contains all data structures used in the e-commerce example,
 //! including products, sessions, analytics, and node representations.
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use goldylox::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64};

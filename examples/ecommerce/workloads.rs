@@ -4,7 +4,7 @@
 //! Black Friday rush, regular browsing, and clearance sale patterns.
 
 use crate::ecommerce::types::*;
-use rand::{Rng, rng};
+use rand::Rng;
 use std::collections::BTreeMap;
 use std::time::Instant;
 use tokio::task;
