@@ -169,87 +169,76 @@ impl<
         // Policy engine-driven tier selection with cold start optimization
         let primary_tier = match current_policy {
             crate::cache::eviction::PolicyType::AdaptiveLRU => {
-                // LRU policy: prioritize recency and size
-
-                // COLD START OPTIMIZATION: Detect default pattern from analyzer_core.rs:480-486
-                // New keys have frequency: 1.0, recency: 0.5, temporal_locality: 0.5
-                if access_pattern.frequency == 1.0
-                    && access_pattern.recency == 0.5
-                    && access_pattern.temporal_locality == 0.5 {
-                    // New key with no access history - use size-based placement
+                // LRU policy: use frequency-based logic for placement
+                if access_pattern.frequency < 2.0 {
+                    // Low/no history - size-based placement for new or infrequently accessed items
                     if value_characteristics.size < 8192 {
-                        CacheTier::Hot
+                        CacheTier::Hot  // Small items start hot
                     } else if value_characteristics.size < 102400 {
                         CacheTier::Warm
                     } else {
                         CacheTier::Cold
                     }
                 } else {
-                    // Existing key with access history - use LRU logic
-                    if value_characteristics.size < 8192 && access_pattern.recency > 0.5 {
+                    // High frequency - proven hot items
+                    if value_characteristics.size < 10240 && access_pattern.frequency > 5.0 {
+                        CacheTier::Hot  // Very hot items stay hot even if larger
+                    } else if value_characteristics.size < 8192 {
                         CacheTier::Hot
-                    } else if value_characteristics.size < 10240 && access_pattern.recency > 0.3 {
-                        CacheTier::Warm
                     } else {
-                        CacheTier::Cold
+                        CacheTier::Warm
                     }
                 }
             }
             crate::cache::eviction::PolicyType::AdaptiveLFU => {
-                // LFU policy: prioritize frequency and access cost
-
-                // COLD START OPTIMIZATION: Detect default pattern from analyzer_core.rs:480-486
-                // New keys have frequency: 1.0, recency: 0.5, temporal_locality: 0.5
-                if access_pattern.frequency == 1.0
-                    && access_pattern.recency == 0.5
-                    && access_pattern.temporal_locality == 0.5 {
-                    // New key with no access history - use size-based placement
+                // LFU policy: use frequency-based logic for placement
+                if access_pattern.frequency < 2.0 {
+                    // Low/no history - size-based placement for new or infrequently accessed items
                     if value_characteristics.size < 8192 {
-                        CacheTier::Hot
+                        CacheTier::Hot  // Small items start hot
                     } else if value_characteristics.size < 102400 {
                         CacheTier::Warm
                     } else {
                         CacheTier::Cold
                     }
                 } else {
-                    // Existing key with access history - use LFU logic
-                    if access_pattern.frequency > 2.0 && value_characteristics.access_cost < 0.5 {
+                    // High frequency - proven hot items
+                    if value_characteristics.size < 10240 && access_pattern.frequency > 5.0 {
+                        CacheTier::Hot  // Very hot items stay hot even if larger
+                    } else if value_characteristics.size < 8192 {
                         CacheTier::Hot
-                    } else if access_pattern.frequency > 0.5 && value_characteristics.access_cost < 0.8
-                    {
-                        CacheTier::Warm
                     } else {
-                        CacheTier::Cold
+                        CacheTier::Warm
                     }
                 }
             }
             crate::cache::eviction::PolicyType::TwoQueue
             | crate::cache::eviction::PolicyType::Arc => {
-                // Two-queue/ARC: balance frequency and recency with complexity
-                if value_characteristics.size < 8192
-                    && access_pattern.temporal_locality > 0.6
-                    && value_characteristics.complexity < 0.5
-                {
-                    CacheTier::Hot
-                } else if value_characteristics.size < 10240
-                    && access_pattern.temporal_locality > 0.3
-                    && value_characteristics.complexity < 2.0
-                {
-                    CacheTier::Warm
+                // Two-queue/ARC: use frequency-based logic for placement
+                if access_pattern.frequency < 2.0 {
+                    // Low/no history - size-based placement for new or infrequently accessed items
+                    if value_characteristics.size < 8192 {
+                        CacheTier::Hot  // Small items start hot
+                    } else if value_characteristics.size < 102400 {
+                        CacheTier::Warm
+                    } else {
+                        CacheTier::Cold
+                    }
                 } else {
-                    CacheTier::Cold
+                    // High frequency - proven hot items
+                    if value_characteristics.size < 10240 && access_pattern.frequency > 5.0 {
+                        CacheTier::Hot  // Very hot items stay hot even if larger
+                    } else if value_characteristics.size < 8192 {
+                        CacheTier::Hot
+                    } else {
+                        CacheTier::Warm
+                    }
                 }
             }
             crate::cache::eviction::PolicyType::MLPredictive => {
-                // ML policy: sophisticated analysis with cold start optimization
-
-                // COLD START OPTIMIZATION: Detect default pattern from analyzer_core.rs:480-486
-                // New keys have frequency: 1.0, recency: 0.5, temporal_locality: 0.5
-                // This allows the ML system to learn access patterns before demotion
-                if access_pattern.frequency == 1.0
-                    && access_pattern.recency == 0.5
-                    && access_pattern.temporal_locality == 0.5 {
-                    // New key with no access history - use size-based placement
+                // ML policy: use frequency-based logic for placement
+                if access_pattern.frequency < 2.0 {
+                    // Low/no history - size-based placement for ML learning
                     if value_characteristics.size < 8192 {
                         // Small entries start in Hot tier for rapid access and ML learning
                         CacheTier::Hot
@@ -261,18 +250,13 @@ impl<
                         CacheTier::Cold
                     }
                 } else {
-                    // Existing key with access history - use ML-driven analysis
-                    if value_characteristics.size < 8192 && value_characteristics.complexity < 0.5 {
-                        // Small, low complexity - always keep in hot tier for ML learning
+                    // High frequency - proven hot items
+                    if value_characteristics.size < 10240 && access_pattern.frequency > 5.0 {
+                        CacheTier::Hot  // Very hot items stay hot even if larger
+                    } else if value_characteristics.size < 8192 {
                         CacheTier::Hot
-                    } else if value_characteristics.size < 10240
-                        && access_pattern.frequency > 1.0
-                        && value_characteristics.complexity < 2.0
-                        && value_characteristics.access_cost < 0.7
-                    {
-                        CacheTier::Warm
                     } else {
-                        CacheTier::Cold
+                        CacheTier::Warm
                     }
                 }
             }

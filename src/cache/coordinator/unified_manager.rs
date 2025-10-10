@@ -581,6 +581,9 @@ impl<
                     &access_path,
                 );
                 
+                // Process a few pending promotions (don't block read path)
+                let _ = self.process_pending_promotions(3).await;
+
                 return Some(value);
             }
         } else {
@@ -605,6 +608,9 @@ impl<
 
             // Consider multi-tier promotion based on access patterns
             self.consider_multi_tier_promotion(key, &value, &access_path);
+            
+            // Process a few pending promotions (don't block read path)
+            let _ = self.process_pending_promotions(3).await;
 
             // Record access pattern for prefetch prediction (using cached timestamp)
             let context_hash = key.cache_hash();
@@ -936,6 +942,7 @@ impl<
                         // Record successful promotion with latency
                         let latency_ns = promotion_start.elapsed().as_nanos() as u64;
                         self.tier_manager.record_promotion_success(task.from_tier, task.to_tier, latency_ns);
+                        self.unified_stats.record_promotion();
                         
                         processed += 1;
                     }

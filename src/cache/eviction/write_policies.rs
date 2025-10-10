@@ -1232,38 +1232,24 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
 
     /// Record write operation outcome for statistics collection
     /// 
-    /// Accepts write operation metrics from the PolicyEngine and records them
-    /// in the internal statistics tracking system. This data enables:
-    /// - Operational monitoring and alerting
-    /// - Performance dashboards and metrics
-    /// - Future ML model training for strategy optimization
+    /// Tracks write performance metrics including latency and success rates.
+    /// This data enables operational monitoring and performance dashboards.
     /// 
     /// # Arguments
     /// 
-    /// * `_key` - The cache key (for future pattern correlation)
-    /// * `_strategy` - Which write strategy was used
-    /// * `_latency_ns` - Measured operation latency
-    /// * `_success` - Whether the operation succeeded
-    /// 
-    /// # Implementation Status
-    /// 
-    /// Currently a minimal stub. Full statistics recording will be implemented
-    /// in a future task when the comprehensive metrics collection system is built.
+    /// * `_key` - The cache key (reserved for future pattern correlation)
+    /// * `_strategy` - Which write strategy was used (reserved for per-strategy tracking)
+    /// * `latency_ns` - Measured operation latency in nanoseconds
+    /// * `success` - Whether the operation succeeded
     pub fn record_write_outcome(
         &self,
         _key: &K,
         _strategy: WriteStrategy,
-        _latency_ns: u64,
-        _success: bool,
+        latency_ns: u64,
+        success: bool,
     ) {
-        // Statistics recording will be implemented in future task
-        // For now, this establishes the API contract and data flow
-        // 
-        // Future implementation will:
-        // - Update per-strategy performance counters
-        // - Track success/failure rates by strategy
-        // - Maintain latency histograms
-        // - Feed data to ML prediction models (when available)
+        // Delegate to existing statistics recording infrastructure
+        self.write_stats.record_write(latency_ns, success);
     }
 
     /// Shutdown write policy manager gracefully - NOW ASYNC
