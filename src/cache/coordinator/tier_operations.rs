@@ -170,7 +170,7 @@ impl<
         let primary_tier = match current_policy {
             crate::cache::eviction::PolicyType::AdaptiveLRU => {
                 // LRU policy: prioritize recency and size
-                if value_characteristics.size < 1024 && access_pattern.recency > 0.5 {
+                if value_characteristics.size < 8192 && access_pattern.recency > 0.5 {
                     CacheTier::Hot
                 } else if value_characteristics.size < 10240 && access_pattern.recency > 0.3 {
                     CacheTier::Warm
@@ -192,7 +192,7 @@ impl<
             crate::cache::eviction::PolicyType::TwoQueue
             | crate::cache::eviction::PolicyType::Arc => {
                 // Two-queue/ARC: balance frequency and recency with complexity
-                if value_characteristics.size < 1024
+                if value_characteristics.size < 8192
                     && access_pattern.temporal_locality > 0.6
                     && value_characteristics.complexity < 0.5
                 {
@@ -208,17 +208,35 @@ impl<
             }
             crate::cache::eviction::PolicyType::MLPredictive => {
                 // ML policy: sophisticated analysis with cold start optimization
-                if value_characteristics.size < 1024 && value_characteristics.complexity < 0.5 {
-                    // Small, low complexity - always start in hot tier for ML learning
-                    CacheTier::Hot
-                } else if value_characteristics.size < 10240
-                    && access_pattern.frequency > 1.0
-                    && value_characteristics.complexity < 2.0
-                    && value_characteristics.access_cost < 0.7
-                {
-                    CacheTier::Warm
+
+                // COLD START OPTIMIZATION: New keys (frequency == 0.0) should default to Hot tier
+                // This allows the ML system to learn access patterns before demotion
+                if access_pattern.frequency == 0.0 {
+                    // New key with no access history - use size-based placement
+                    if value_characteristics.size < 8192 {
+                        // Small entries start in Hot tier for rapid access and ML learning
+                        CacheTier::Hot
+                    } else if value_characteristics.size < 102400 {
+                        // Medium entries start in Warm tier
+                        CacheTier::Warm
+                    } else {
+                        // Large entries (>100KB) go directly to Cold tier
+                        CacheTier::Cold
+                    }
                 } else {
-                    CacheTier::Cold
+                    // Existing key with access history - use ML-driven analysis
+                    if value_characteristics.size < 8192 && value_characteristics.complexity < 0.5 {
+                        // Small, low complexity - always keep in hot tier for ML learning
+                        CacheTier::Hot
+                    } else if value_characteristics.size < 10240
+                        && access_pattern.frequency > 1.0
+                        && value_characteristics.complexity < 2.0
+                        && value_characteristics.access_cost < 0.7
+                    {
+                        CacheTier::Warm
+                    } else {
+                        CacheTier::Cold
+                    }
                 }
             }
         };

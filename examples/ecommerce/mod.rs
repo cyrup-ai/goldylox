@@ -146,22 +146,21 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Gracefully shutdown background processors after workload completes
-    let handle = tokio::runtime::Handle::current();
     for node in &workload.nodes {
         // Shutdown policy engines first
-        if let Err(e) = handle.block_on(node.product_cache.shutdown_policy_engine()) {
+        if let Err(e) = node.product_cache.shutdown_policy_engine().await {
             println!(
                 "⚠️  Failed to shutdown product cache policy engine: {:?}",
                 e
             );
         }
-        if let Err(e) = handle.block_on(node.session_cache.shutdown_policy_engine()) {
+        if let Err(e) = node.session_cache.shutdown_policy_engine().await {
             println!(
                 "⚠️  Failed to shutdown session cache policy engine: {:?}",
                 e
             );
         }
-        if let Err(e) = handle.block_on(node.analytics_cache.shutdown_policy_engine()) {
+        if let Err(e) = node.analytics_cache.shutdown_policy_engine().await {
             println!(
                 "⚠️  Failed to shutdown analytics cache policy engine: {:?}",
                 e
@@ -169,13 +168,13 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Then shutdown the main cache systems
-        if let Err(e) = handle.block_on(node.product_cache.shutdown_gracefully()) {
+        if let Err(e) = node.product_cache.shutdown_gracefully().await {
             println!("⚠️  Failed to shutdown product cache gracefully: {:?}", e);
         }
-        if let Err(e) = handle.block_on(node.session_cache.shutdown_gracefully()) {
+        if let Err(e) = node.session_cache.shutdown_gracefully().await {
             println!("⚠️  Failed to shutdown session cache gracefully: {:?}", e);
         }
-        if let Err(e) = handle.block_on(node.analytics_cache.shutdown_gracefully()) {
+        if let Err(e) = node.analytics_cache.shutdown_gracefully().await {
             println!("⚠️  Failed to shutdown analytics cache gracefully: {:?}", e);
         }
     }
