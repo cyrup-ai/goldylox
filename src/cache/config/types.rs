@@ -255,7 +255,7 @@ impl std::error::Error for ConfigError {}
 impl Default for HotTierConfig {
     fn default() -> Self {
         Self {
-            max_entries: 128,
+            max_entries: 2048,
             hash_function: HashFunction::A,
             eviction_policy: EvictionPolicyType::Lru,
             cache_line_size: 64,
