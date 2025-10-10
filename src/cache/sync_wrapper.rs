@@ -43,14 +43,14 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 /// - New code should use the async API directly via UnifiedCacheManager
 pub struct SyncCacheWrapper<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + 'static,
+    V: CacheValue + Default + PartialEq + bincode::Encode + bincode::Decode<()> + 'static,
 > {
     inner: Arc<UnifiedCacheManager<K, V>>,
 }
 
 impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + 'static,
+    V: CacheValue + Default + PartialEq + bincode::Encode + bincode::Decode<()> + 'static,
 > SyncCacheWrapper<K, V> {
     /// Create a new synchronous wrapper
     /// 
@@ -128,7 +128,7 @@ impl<
 
 impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
-    V: CacheValue + Default + bincode::Encode + bincode::Decode<()> + 'static,
+    V: CacheValue + Default + PartialEq + bincode::Encode + bincode::Decode<()> + 'static,
 > Clone for SyncCacheWrapper<K, V> {
     fn clone(&self) -> Self {
         Self {

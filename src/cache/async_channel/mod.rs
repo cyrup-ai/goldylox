@@ -2,13 +2,14 @@
 
 use tokio::sync::{mpsc, oneshot};
 use std::future::Future;
-use std::pin::Pin;
 
 /// Async request-response channel
+#[allow(dead_code)]
 pub struct AsyncRequestChannel<Req, Resp> {
     sender: mpsc::UnboundedSender<(Req, oneshot::Sender<Resp>)>,
 }
 
+#[allow(dead_code)]
 impl<Req, Resp> AsyncRequestChannel<Req, Resp> {
     pub fn new() -> (Self, mpsc::UnboundedReceiver<(Req, oneshot::Sender<Resp>)>) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -36,6 +37,7 @@ impl<Req, Resp> AsyncRequestChannel<Req, Resp> {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ChannelError {
     Closed,
     ResponseLost,

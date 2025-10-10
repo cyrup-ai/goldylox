@@ -119,6 +119,7 @@ impl BackgroundWorkerState {
         K: crate::cache::traits::CacheKey + Default + bincode::Encode + bincode::Decode<()>,
         V: crate::cache::traits::CacheValue
             + Default
+            + PartialEq
             + serde::Serialize
             + serde::de::DeserializeOwned
             + bincode::Encode

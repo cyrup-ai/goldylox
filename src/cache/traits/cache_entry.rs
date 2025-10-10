@@ -175,6 +175,7 @@ impl CacheEntryMetadata {
             + serde::de::DeserializeOwned,
         V: CacheValue
             + Default
+            + PartialEq
             + bincode::Encode
             + bincode::Decode<()>
             + serde::Serialize
@@ -416,7 +417,7 @@ impl<K: CacheKey> AccessTracker<K> {
     }
 
     /// Analyze temporal access pattern using coherence statistics infrastructure
-    pub fn analyze_temporal_pattern_with_coherence<V: CacheValue>(
+    pub fn analyze_temporal_pattern_with_coherence<V: CacheValue + PartialEq>(
         &mut self,
         cache_key: &K,
         coherence_controller: &CoherenceController<K, V>,
@@ -584,7 +585,7 @@ impl TierInfo {
     }
 
     /// Record tier transition using coherence communication hub delegation
-    pub fn transition_to<K: CacheKey, V: CacheValue>(
+    pub fn transition_to<K: CacheKey, V: CacheValue + PartialEq>(
         &mut self,
         new_tier: TierLocation,
         reason: String,
@@ -982,7 +983,7 @@ impl<
         key: K,
         value: V,
         initial_tier: TierLocation,
-        request_id_counter: &std::sync::atomic::AtomicU64,
+        _request_id_counter: &std::sync::atomic::AtomicU64,
         channel_map: &std::sync::Arc<std::sync::RwLock<
             std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any + Send + Sync>>
         >>,
@@ -1219,6 +1220,7 @@ where
     V: CacheValue
         + Clone
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize

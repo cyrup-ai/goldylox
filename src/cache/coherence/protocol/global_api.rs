@@ -13,7 +13,7 @@ use crate::cache::coherence::worker::worker_manager::{CoherenceSender, Coherence
 use crate::cache::traits::cache_entry::SerializationEnvelope;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 /// Coherence system handle that manages worker lifecycle
@@ -28,6 +28,7 @@ pub struct CoherenceSystem<
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -59,6 +60,7 @@ impl<
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -145,6 +147,7 @@ where
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -192,6 +195,7 @@ where
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -242,6 +246,7 @@ where
     V: CacheValue
         + Clone
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize

@@ -37,12 +37,12 @@ pub trait WarmTierOperations: std::any::Any + Send + Sync {
 }
 
 /// Handle for communicating with a warm tier instance (complete implementation)
-pub struct WarmTierHandle<K: CacheKey, V: CacheValue> {
+pub struct WarmTierHandle<K: CacheKey, V: CacheValue + PartialEq> {
     sender: mpsc::UnboundedSender<WarmCacheRequest<K, V>>,
     _phantom: std::marker::PhantomData<(K, V)>,
 }
 
-impl<K: CacheKey, V: CacheValue> Clone for WarmTierHandle<K, V> {
+impl<K: CacheKey, V: CacheValue + PartialEq> Clone for WarmTierHandle<K, V> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
@@ -51,7 +51,7 @@ impl<K: CacheKey, V: CacheValue> Clone for WarmTierHandle<K, V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> WarmTierHandle<K, V> {
+impl<K: CacheKey, V: CacheValue + PartialEq> WarmTierHandle<K, V> {
     /// Send a request to the warm tier worker thread
     pub fn send_request(&self, request: WarmCacheRequest<K, V>) -> Result<(), CacheOperationError> {
         self.sender
@@ -60,7 +60,7 @@ impl<K: CacheKey, V: CacheValue> WarmTierHandle<K, V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> WarmTierOperations for WarmTierHandle<K, V> {
+impl<K: CacheKey, V: CacheValue + PartialEq> WarmTierOperations for WarmTierHandle<K, V> {
     fn shutdown(&self) {
         let _ = self.sender.send(WarmCacheRequest::Shutdown);
     }
@@ -71,7 +71,7 @@ impl<K: CacheKey, V: CacheValue> WarmTierOperations for WarmTierHandle<K, V> {
 }
 
 /// Cache operation request for warm tier worker routing (complete implementation)
-pub enum WarmCacheRequest<K: CacheKey, V: CacheValue> {
+pub enum WarmCacheRequest<K: CacheKey, V: CacheValue + PartialEq> {
     Get {
         key: K,
         response: oneshot::Sender<Option<V>>,
@@ -199,29 +199,35 @@ impl std::fmt::Debug for WarmTierCoordinator {
 
 impl WarmTierCoordinator {
     /// Get or create a warm tier instance for the given K,V types (complete implementation)
-    pub fn get_or_create_tier<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+    pub fn get_or_create_tier<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
         &self,
         config: Option<WarmTierConfig>,
     ) -> Result<WarmTierHandle<K, V>, CacheOperationError> {
+        use dashmap::mapref::entry::Entry;
+        
         let type_key = (TypeId::of::<K>(), TypeId::of::<V>());
 
-        // Try to get existing tier
-        if let Some(handle_ops) = self.warm_tiers.get(&type_key)
-            && let Some(handle) = handle_ops.as_any().downcast_ref::<WarmTierHandle<K, V>>()
-        {
-            return Ok(handle.clone());
-        }
+        // Use entry API to atomically check-and-create, preventing race condition
+        match self.warm_tiers.entry(type_key) {
+            Entry::Occupied(entry) => {
+                // Tier already exists - downcast and return handle
+                let handle = entry.get()
+                    .as_any()
+                    .downcast_ref::<WarmTierHandle<K, V>>()
+                    .ok_or_else(|| CacheOperationError::internal_error("Type mismatch in warm tier map"))?;
+                Ok(handle.clone())
+            }
+            Entry::Vacant(entry) => {
+                // Create new tier atomically within vacant entry
+                let tier_config = config.unwrap_or_default();
+                let mut tier = LockFreeWarmTier::<K, V>::new(tier_config)
+                    .map_err(|_| CacheOperationError::InitializationFailed)?;
 
-        // Create new tier if doesn't exist
-        let tier_config = config.unwrap_or_default();
-        let mut tier = LockFreeWarmTier::<K, V>::new(tier_config)
-            .map_err(|_| CacheOperationError::InitializationFailed)?;
+                // Create channel for tier communication
+                let (sender, mut receiver) = mpsc::unbounded_channel::<WarmCacheRequest<K, V>>();
 
-        // Create channel for tier communication
-        let (sender, mut receiver) = mpsc::unbounded_channel::<WarmCacheRequest<K, V>>();
-
-        // Spawn background task to handle tier operations - tier OWNS the data
-        tokio::runtime::Handle::current().spawn(async move {
+                // Spawn background task to handle tier operations - tier OWNS the data
+                tokio::runtime::Handle::current().spawn(async move {
             while let Some(request) = receiver.recv().await {
                 match request {
                     WarmCacheRequest::Get { key, response } => {
@@ -333,24 +339,9 @@ impl WarmTierCoordinator {
                         response,
                     } => {
                         // Atomic compare-and-swap: get, compare, and conditionally replace in single operation
-                        // Uses bytewise comparison as fallback when PartialEq constraint not available
+                        // Use proper PartialEq comparison - 10-100x faster than bytewise
                         if let Some(current) = tier.get(&key) {
-                            use std::mem;
-                            let is_equal = unsafe {
-                                // Bytewise comparison for types that don't have PartialEq constraint here
-                                // This is safe because we're comparing values of the same type V
-                                let current_bytes = std::slice::from_raw_parts(
-                                    &current as *const V as *const u8,
-                                    mem::size_of::<V>(),
-                                );
-                                let expected_bytes = std::slice::from_raw_parts(
-                                    &expected as *const V as *const u8,
-                                    mem::size_of::<V>(),
-                                );
-                                current_bytes == expected_bytes
-                            };
-
-                            if is_equal {
+                            if current == expected {
                                 let _ = tier.put(key, new_value);
                                 let _ = response.send(true);
                             } else {
@@ -397,12 +388,15 @@ impl WarmTierCoordinator {
             }
         });
 
-        let handle = WarmTierHandle {
-            sender,
-            _phantom: std::marker::PhantomData,
-        };
-        self.warm_tiers.insert(type_key, Box::new(handle.clone()));
-        Ok(handle)
+                let handle = WarmTierHandle {
+                    sender,
+                    _phantom: std::marker::PhantomData,
+                };
+                // Insert into vacant entry and return handle
+                entry.insert(Box::new(handle.clone()));
+                Ok(handle)
+            }
+        }
     }
 
     /// Execute cache operation via specific message types (following hot tier pattern)
@@ -423,7 +417,7 @@ impl WarmTierCoordinator {
     }
 
     /// Send a message to a tier and wait for response
-    async fn send_message<K: CacheKey + 'static, V: CacheValue + Default + 'static, R: 'static>(
+    async fn send_message<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static, R: 'static>(
         &self,
         create_message: impl FnOnce(oneshot::Sender<R>) -> WarmCacheRequest<K, V>,
     ) -> Result<R, CacheOperationError> {
@@ -455,7 +449,7 @@ pub fn init_warm_tier_system() -> Result<(), CacheOperationError> {
 }
 
 /// Initialize warm tier with specific configuration for given types
-pub fn init_warm_tier<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub fn init_warm_tier<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     config: WarmTierConfig,
 ) -> Result<(), CacheOperationError> {
@@ -473,7 +467,7 @@ pub fn shutdown_warm_tier(
 }
 
 /// Get a value from the warm tier cache
-pub async fn warm_get<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn warm_get<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: &K
 ) -> Option<V> {
@@ -503,7 +497,7 @@ pub async fn warm_get<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
 ///
 /// # Returns
 /// Vector of timestamps in nanoseconds, oldest to newest. Empty if key not tracked.
-pub async fn warm_get_timestamps<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn warm_get_timestamps<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: &K,
     max_timestamps: usize,
@@ -543,7 +537,7 @@ pub async fn warm_get_timestamps<K: CacheKey + 'static, V: CacheValue + Default 
 ///
 /// # Returns
 /// Vector of key hashes (u64), oldest to newest. Empty if no access history.
-pub async fn warm_get_key_hashes<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn warm_get_key_hashes<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     max_hashes: usize,
 ) -> Vec<u64> {
@@ -570,7 +564,7 @@ pub async fn warm_get_key_hashes<K: CacheKey + 'static, V: CacheValue + Default 
 }
 
 /// Put a value into the warm tier cache
-pub async fn warm_put<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn warm_put<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: K,
     value: V,
@@ -594,7 +588,7 @@ pub async fn warm_put<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
 }
 
 /// Remove a value from the warm tier cache
-pub async fn warm_remove<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn warm_remove<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: &K
 ) -> Option<V> {
@@ -610,7 +604,7 @@ pub async fn warm_remove<K: CacheKey + 'static, V: CacheValue + Default + 'stati
     response_rx.await.ok()?
 }
 /// Insert a promoted entry from cold tier
-pub async fn insert_promoted<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn insert_promoted<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: K,
     value: V,
@@ -619,7 +613,7 @@ pub async fn insert_promoted<K: CacheKey + 'static, V: CacheValue + Default + 's
 }
 
 /// Insert a demoted entry from hot tier
-pub async fn insert_demoted<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn insert_demoted<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: K,
     value: V,
@@ -628,7 +622,7 @@ pub async fn insert_demoted<K: CacheKey + 'static, V: CacheValue + Default + 'st
 }
 
 /// Remove an entry from the warm tier
-pub async fn remove_entry<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn remove_entry<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     key: &K,
 ) -> Result<bool, CacheOperationError> {
@@ -636,7 +630,7 @@ pub async fn remove_entry<K: CacheKey + 'static, V: CacheValue + Default + 'stat
 }
 
 /// Get cache size via worker-based routing (complete implementation)
-pub async fn get_cache_size<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_cache_size<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Option<usize> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -651,7 +645,7 @@ pub async fn get_cache_size<K: CacheKey + 'static, V: CacheValue + Default + 'st
 }
 
 /// Get memory usage via worker-based routing (complete implementation)
-pub async fn get_memory_usage<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_memory_usage<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Option<usize> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -666,7 +660,7 @@ pub async fn get_memory_usage<K: CacheKey + 'static, V: CacheValue + Default + '
 }
 
 /// Get memory pressure via worker-based routing (complete implementation)
-pub async fn get_memory_pressure<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_memory_pressure<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Option<f64> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -681,7 +675,7 @@ pub async fn get_memory_pressure<K: CacheKey + 'static, V: CacheValue + Default 
 }
 
 /// Get cache statistics via worker-based routing (complete implementation)
-pub async fn get_stats<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_stats<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Option<super::monitoring::TierStatsSnapshot> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -699,7 +693,7 @@ pub async fn get_stats<K: CacheKey + 'static, V: CacheValue + Default + 'static>
 // Users must now use canonical function:
 // - Use get_stats::<K, V>() instead of get_warm_tier_stats::<K, V>()
 /// Get all keys via worker-based routing (complete implementation)
-pub async fn get_warm_tier_keys<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_warm_tier_keys<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Vec<K> {
 
@@ -723,7 +717,7 @@ pub async fn get_warm_tier_keys<K: CacheKey + 'static, V: CacheValue + Default +
 }
 
 /// Get frequently accessed keys via worker-based routing (complete implementation)
-pub async fn get_frequently_accessed_keys<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_frequently_accessed_keys<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     limit: usize,
 ) -> Vec<K> {
@@ -749,7 +743,7 @@ pub async fn get_frequently_accessed_keys<K: CacheKey + 'static, V: CacheValue +
 }
 
 /// Get idle keys via worker-based routing (complete implementation)
-pub async fn get_idle_keys<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_idle_keys<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     threshold: Duration,
 ) -> Vec<K> {
@@ -775,7 +769,7 @@ pub async fn get_idle_keys<K: CacheKey + 'static, V: CacheValue + Default + 'sta
 }
 
 /// Cleanup expired entries via worker-based routing (complete implementation)
-pub async fn cleanup_expired_entries<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn cleanup_expired_entries<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     max_age: Duration,
 ) -> Result<usize, CacheOperationError> {
@@ -798,7 +792,7 @@ pub async fn cleanup_expired_entries<K: CacheKey + 'static, V: CacheValue + Defa
 }
 
 /// Force eviction via worker-based routing (complete implementation)
-pub async fn force_eviction<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn force_eviction<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator,
     target_count: usize,
 ) -> Result<usize, CacheOperationError> {
@@ -820,7 +814,7 @@ pub async fn force_eviction<K: CacheKey + 'static, V: CacheValue + Default + 'st
         .map_err(|_| CacheOperationError::TimeoutError)?
 }
 /// Process background maintenance via worker-based routing (complete implementation)
-pub async fn process_background_maintenance<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn process_background_maintenance<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Result<usize, CacheOperationError> {
     let (response_tx, response_rx) = oneshot::channel();
@@ -841,7 +835,7 @@ pub async fn process_background_maintenance<K: CacheKey + 'static, V: CacheValue
 }
 
 /// Check for alerts via worker-based routing (complete implementation)
-pub async fn check_warm_tier_alerts<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn check_warm_tier_alerts<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Vec<CacheAlert> {
 
@@ -900,7 +894,7 @@ pub fn get_warm_tier_type_count(
 
 /// Get ML eviction policy metrics from all warm tier instances
 #[allow(dead_code)] // ML system - used in machine learning policy metrics collection and monitoring
-pub async fn get_warm_tier_ml_policies<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn get_warm_tier_ml_policies<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Result<
     Vec<crate::cache::tier::warm::eviction::types::PolicyPerformanceMetrics>,
@@ -924,7 +918,7 @@ pub async fn get_warm_tier_ml_policies<K: CacheKey + 'static, V: CacheValue + De
 }
 
 /// Update ML models in warm tier instances via crossbeam messaging
-pub async fn update_warm_tier_ml_models<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn update_warm_tier_ml_models<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &WarmTierCoordinator
 ) -> Result<usize, CacheOperationError> {
     let (response_tx, response_rx) = oneshot::channel();

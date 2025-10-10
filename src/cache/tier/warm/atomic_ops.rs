@@ -7,7 +7,7 @@ use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Atomically put value only if key is not present using service messages
-pub async fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
     key: K,
     value: V,
@@ -32,7 +32,7 @@ pub async fn put_if_absent_atomic<K: CacheKey + 'static, V: CacheValue + Default
 }
 
 /// Atomically replace existing value with new value using service messages
-pub async fn replace_atomic<K: CacheKey + 'static, V: CacheValue + Default + 'static>(
+pub async fn replace_atomic<K: CacheKey + 'static, V: CacheValue + Default + PartialEq + 'static>(
     coordinator: &crate::cache::tier::warm::global_api::WarmTierCoordinator,
     key: K,
     value: V,

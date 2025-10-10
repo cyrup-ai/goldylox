@@ -8,7 +8,7 @@ use crate::cache::traits::{CacheKey, CacheValue};
 use crate::cache::tier::hot::thread_local::{CacheRequest, HotTierCoordinator};
 
 /// Atomically put value only if key is not present using service messages
-pub async fn put_if_absent_atomic<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn put_if_absent_atomic<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>(
     coordinator: &HotTierCoordinator,
     key: K,
     value: V,
@@ -32,7 +32,7 @@ pub async fn put_if_absent_atomic<K: CacheKey + Default + 'static, V: CacheValue
 }
 
 /// Atomically replace existing value with new value using service messages
-pub async fn replace_atomic<K: CacheKey + Default + 'static, V: CacheValue + 'static>(
+pub async fn replace_atomic<K: CacheKey + Default + 'static, V: CacheValue + PartialEq + 'static>(
     coordinator: &HotTierCoordinator,
     key: K,
     value: V,

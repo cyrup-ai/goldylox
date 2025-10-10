@@ -23,9 +23,7 @@ use crate::cache::types::performance::timer::PrecisionTimer;
 use crate::cache::worker::task_coordination::{CacheCommand, TaskCoordinator};
 use crate::telemetry::unified_stats::UnifiedCacheStatistics;
 use crate::telemetry::unified_stats::UnifiedStats;
-use crossbeam_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
-use tokio::sync::{mpsc, oneshot};
 use crate::cache::tier::hot::thread_local::HotTierCoordinator;
 use crate::cache::tier::warm::global_api::WarmTierCoordinator;
 use crate::cache::tier::cold::ColdTierCoordinator;
@@ -269,6 +267,7 @@ pub struct UnifiedCacheManager<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -315,6 +314,7 @@ impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -1080,22 +1080,28 @@ impl<
     /// Execute pending cache commands through task coordinator
     #[allow(dead_code)] // Unified manager - command queue flushing API with batch execution
     pub async fn flush_pending_commands(&mut self) -> Result<usize, CacheOperationError> {
-        // Create a closure that captures the necessary components to avoid borrowing issues
+        // Get references we'll need for command execution
         let tier_operations = &self.tier_operations;
         let policy_engine = &self.policy_engine;
-
         let pool_coordinator = &self.pool_coordinator;
         
-        // Get mutable access to TaskCoordinator through Arc
+        // Get mutable access to TaskCoordinator through Arc to drain commands
         let task_coordinator_mut = std::sync::Arc::get_mut(&mut self.task_coordinator)
             .ok_or_else(|| CacheOperationError::InvalidState("Cannot get mutable access to task_coordinator (shared references exist)".to_string()))?;
         
-        task_coordinator_mut.flush_command_queue(move |command| {
-            // Note: This closure is sync but calls async function - needs tokio runtime
-            tokio::runtime::Handle::current().block_on(
-                Self::execute_cache_command_static(command, tier_operations, policy_engine, pool_coordinator)
-            )
-        })
+        // Drain all pending commands into a Vec
+        let commands = task_coordinator_mut.drain_pending_commands()?;
+        let command_count = commands.len();
+        
+        // Process all commands sequentially with async/await
+        // Note: Sequential processing is used because tier_operations and policy_engine
+        // are not Arc-wrapped. For concurrent processing, these would need to be
+        // wrapped in Arc within UnifiedCacheManager's struct definition.
+        for command in commands {
+            Self::execute_cache_command_static(command, tier_operations, policy_engine, pool_coordinator).await?;
+        }
+        
+        Ok(command_count)
     }
 
     /// Execute a cache command from the task coordination system (static version for borrowing)

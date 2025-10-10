@@ -20,6 +20,7 @@ impl<K: CacheKey + Default, V: CacheValue + Default> super::types::MaintenanceSc
 where
     K: Clone + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: Clone
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -31,7 +32,7 @@ where
         worker_id: u32,
         task_receiver: Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<MaintenanceTask>>>,
         shutdown: Arc<AtomicBool>,
-        config: MaintenanceConfig,
+        _config: MaintenanceConfig,
         context: super::types::WorkerContext,
     ) {
         let worker_state = BackgroundWorkerState::new(worker_id);

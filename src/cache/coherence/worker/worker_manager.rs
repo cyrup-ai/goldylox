@@ -11,9 +11,6 @@ use crate::cache::coherence::communication::CoherenceError;
 use crate::cache::coherence::data_structures::ProtocolConfiguration;
 use crate::cache::traits::{CacheKey, CacheValue};
 
-/// Type alias for coherence worker channel sender to simplify complex type signatures
-type CoherenceSenderChannel<K, V> = mpsc::UnboundedSender<CoherenceRequest<K, V>>;
-
 /// External handle for sending requests to coherence worker
 #[derive(Debug)]
 pub struct CoherenceSender<
@@ -45,6 +42,7 @@ pub struct CoherenceWorkerManager<
         + serde::de::DeserializeOwned,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -68,6 +66,7 @@ impl<
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize

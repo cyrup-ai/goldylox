@@ -22,6 +22,7 @@ impl<
         + serde::de::DeserializeOwned,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize

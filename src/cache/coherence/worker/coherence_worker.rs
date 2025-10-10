@@ -25,6 +25,7 @@ pub struct CoherenceWorker<
         + serde::de::DeserializeOwned,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -48,6 +49,7 @@ impl<
         + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -74,7 +76,7 @@ impl<
     /// Main worker processing loop - exclusively owns all coherence data
     pub async fn run(mut self) {
         let mut maintenance_interval = tokio::time::interval(Duration::from_millis(100));
-        maintenance_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        maintenance_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
         loop {
             tokio::select! {

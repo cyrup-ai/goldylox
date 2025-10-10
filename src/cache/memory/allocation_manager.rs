@@ -179,6 +179,7 @@ pub struct MaintenanceWorker<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()>,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -193,6 +194,7 @@ impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()>,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -323,6 +325,7 @@ impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()>,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode

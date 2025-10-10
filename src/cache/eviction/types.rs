@@ -20,14 +20,28 @@ pub enum PolicyType {
     MLPredictive,
 }
 
-/// Write strategy enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Write operation execution strategy
+/// 
+/// Determines when and how write operations are persisted to storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WriteStrategy {
-    Through,
-    #[allow(dead_code)] // Write policies - back used in write strategy configuration
-    Back,
-    #[allow(dead_code)] // Write policies - behind used in write strategy configuration
-    Behind,
+    /// Write-through: immediate persistence
+    /// 
+    /// Highest latency, strongest consistency. Used for critical hot data
+    /// that must be durable immediately.
+    Immediate,
+    
+    /// Buffered: batch writes for throughput
+    /// 
+    /// Balanced latency/consistency. Writes are batched and flushed
+    /// periodically. Default strategy for most workloads.
+    Buffered,
+    
+    /// Deferred: schedule during maintenance windows
+    /// 
+    /// Lowest latency, eventual consistency. Writes are queued and
+    /// executed during background maintenance. Used for cold tier data.
+    Deferred,
 }
 
 /// Consistency level requirements
@@ -80,7 +94,7 @@ impl Default for PolicyType {
 
 impl Default for WriteStrategy {
     fn default() -> Self {
-        Self::Through
+        Self::Buffered  // Balanced default for most workloads
     }
 }
 

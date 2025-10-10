@@ -24,6 +24,7 @@ pub struct TierOperations<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -49,6 +50,7 @@ impl<
     K: CacheKey + Default + bincode::Encode + bincode::Decode<()> + 'static,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode

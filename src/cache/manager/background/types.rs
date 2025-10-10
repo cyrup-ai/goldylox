@@ -320,6 +320,7 @@ pub struct MaintenanceScheduler<
     K: CacheKey + Default,
     V: CacheValue
         + Default
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode

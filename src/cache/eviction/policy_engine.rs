@@ -11,18 +11,17 @@ use crate::cache::analyzer::analyzer_core::AccessPatternAnalyzer;
 use crate::cache::analyzer::types::AccessPattern;
 use crate::cache::coherence::CacheTier;
 use crate::cache::config::CacheConfig;
-use crate::cache::manager::policy::types::WritePolicy;
 // PrefetchStats import removed - unused after method delegation cleanup
 use super::prefetch::PrefetchPredictor;
 use super::traditional_policies::ReplacementPolicies;
-use super::types::{AccessEvent, PolicyType};
+use super::types::{AccessEvent, PolicyType, WriteStrategy};
 use super::write_policies::WritePolicyManager;
 use crate::cache::traits::types_and_enums::CacheOperationError;
 use crate::cache::traits::{CacheKey, CacheValue};
 
 /// Cache policy engine with machine learning-based decisions
 #[derive(Debug)]
-pub struct CachePolicyEngine<K: CacheKey + Default + 'static, V: CacheValue> {
+pub struct CachePolicyEngine<K: CacheKey + Default + 'static, V: CacheValue + PartialEq> {
     /// Access pattern analyzer with ML prediction
     pub pattern_analyzer: AccessPatternAnalyzer<K>,
     /// Advanced replacement policies with adaptive algorithms
@@ -45,7 +44,7 @@ pub struct CachePolicyEngine<K: CacheKey + Default + 'static, V: CacheValue> {
     pub _phantom: PhantomData<V>,
 }
 
-impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Clone + Default + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>> CachePolicyEngine<K, V> {
+impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Clone + Default + PartialEq + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()>> CachePolicyEngine<K, V> {
     /// Create new cache policy engine with configuration and policy type
     pub fn new(
         config: &CacheConfig,
@@ -251,24 +250,116 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
     pub fn process_write_operation(
         &self,
         key: &K,
-        _tier: CacheTier,
+        tier: CacheTier,
     ) -> Result<WriteResult, CacheOperationError> {
         // Analyze access pattern to determine optimal write strategy
         let pattern = self.pattern_analyzer.analyze_access_pattern(key);
-
-        // This is a stub method - actual write operations happen elsewhere
-        // Just return success with estimated metrics
-        let estimated_latency = if pattern.frequency > 5.0 {
-            1000 // 1 microsecond for hot path
-        } else {
-            10000 // 10 microseconds for slower path
+        
+        // Start timing for accurate latency measurement
+        let start = Instant::now();
+        
+        // Determine optimal write strategy
+        let write_strategy = self.determine_write_strategy(&pattern, tier);
+        
+        // Execute write through write policy manager
+        let success = match write_strategy {
+            WriteStrategy::Immediate => {
+                self.write_policy_manager
+                    .execute_immediate_write(key, tier)
+                    .is_ok()
+            }
+            WriteStrategy::Buffered => {
+                self.write_policy_manager
+                    .execute_buffered_write(key, tier)
+                    .is_ok()
+            }
+            WriteStrategy::Deferred => {
+                self.write_policy_manager
+                    .execute_deferred_write(key, tier)
+                    .is_ok()
+            }
         };
-
+        
+        // Measure actual latency
+        let latency_ns = start.elapsed().as_nanos() as u64;
+        
+        // Record metrics for operational monitoring and future ML training
+        self.record_write_metrics(key, write_strategy, latency_ns, success);
+        
+        // Return result with real metrics
         Ok(WriteResult {
-            success: true,
-            latency_ns: estimated_latency,
-            tier: CacheTier::Hot,
+            success,
+            latency_ns,
+            tier,
         })
+    }
+
+    /// Record write operation metrics for operational monitoring
+    /// 
+    /// Feeds write operation results to the WritePolicyManager's statistics
+    /// system for performance monitoring and future ML-based optimization.
+    /// 
+    /// This establishes the data flow pipeline:
+    /// 1. Write operation executes and measures latency
+    /// 2. Metrics are recorded in WritePolicyManager statistics
+    /// 3. Statistics enable operational dashboards and alerts
+    /// 4. Future ML models can train on this data for strategy optimization
+    /// 
+    /// # Arguments
+    /// 
+    /// * `key` - The cache key that was written (for pattern correlation)
+    /// * `strategy` - The write strategy used (Immediate/Buffered/Deferred)
+    /// * `latency_ns` - Measured latency in nanoseconds
+    /// * `success` - Whether the write operation succeeded
+    fn record_write_metrics(
+        &self,
+        key: &K,
+        strategy: WriteStrategy,
+        latency_ns: u64,
+        success: bool,
+    ) {
+        // Delegate to write policy manager for statistics recording
+        self.write_policy_manager
+            .record_write_outcome(key, strategy, latency_ns, success);
+    }
+
+    /// Determine optimal write strategy based on access pattern and tier
+    /// 
+    /// Decision matrix:
+    /// - Hot tier + high frequency (>10 accesses/sec): Immediate write-through
+    /// - Hot tier + medium frequency (>5 accesses/sec): Buffered writes  
+    /// - Warm tier: Always buffered for optimal throughput
+    /// - Cold tier: Always deferred for minimal latency impact
+    /// 
+    /// # Arguments
+    /// 
+    /// * `pattern` - Analyzed access pattern for the key
+    /// * `tier` - Target cache tier for the write
+    /// 
+    /// # Returns
+    /// 
+    /// The selected `WriteStrategy` for this write operation
+    fn determine_write_strategy(
+        &self,
+        pattern: &AccessPattern,
+        tier: CacheTier,
+    ) -> WriteStrategy {
+        match (pattern.frequency, tier) {
+            // High-frequency hot data: immediate write-through for consistency
+            (freq, CacheTier::Hot) if freq > 10.0 => WriteStrategy::Immediate,
+            
+            // Medium-frequency hot data: buffered for batching
+            (freq, CacheTier::Hot) if freq > 5.0 => WriteStrategy::Buffered,
+            
+            // Low-frequency hot data: buffered by default
+            (_, CacheTier::Hot) => WriteStrategy::Buffered,
+            
+            // Warm tier: always buffered for optimal throughput
+            (_, CacheTier::Warm) => WriteStrategy::Buffered,
+            
+            // Cold tier: deferred writes during maintenance
+            (_, CacheTier::Cold) => WriteStrategy::Deferred,
+        }
     }
 
     /// Get write policy statistics

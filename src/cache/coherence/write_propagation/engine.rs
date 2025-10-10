@@ -25,6 +25,7 @@ impl<
         + serde::de::DeserializeOwned,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize
@@ -76,6 +77,7 @@ impl<
             propagation_stats: PropagationStatistics::new(),
             config,
             worker_health: std::sync::atomic::AtomicU32::new(WorkerHealth::Healthy as u32),
+            write_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(256)),
             hot_tier_coordinator,
             warm_tier_coordinator,
             cold_tier_coordinator,

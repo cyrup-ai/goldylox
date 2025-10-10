@@ -20,7 +20,7 @@ pub use crate::cache::types::CacheTier;
 /// MESI-like cache coherence controller
 /// Internal coherence architecture - controller used in sophisticated coherence coordination
 #[derive(Debug)]
-pub struct CoherenceController<K: CacheKey, V: CacheValue> {
+pub struct CoherenceController<K: CacheKey, V: CacheValue + PartialEq> {
     /// Cache line state tracking
     pub cache_line_states: SkipMap<CoherenceKey<K>, CacheLineState>,
     /// Inter-tier communication channels
@@ -381,6 +381,7 @@ impl<
         + serde::de::DeserializeOwned,
     V: CacheValue
         + Default
+        + PartialEq
         + bincode::Encode
         + bincode::Decode<()>
         + serde::Serialize

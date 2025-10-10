@@ -29,6 +29,8 @@ pub struct WritePropagationSystem<K: CacheKey, V: CacheValue> {
     #[allow(dead_code)]
     // Background workers - used in async task processing and worker coordination
     pub worker_health: AtomicU32, // Encoded WorkerHealth
+    /// Semaphore to limit concurrent write propagation tasks (prevents runtime overwhelming)
+    pub write_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// Hot tier coordinator for tier operations
     pub hot_tier_coordinator: crate::cache::tier::hot::thread_local::HotTierCoordinator,
     /// Warm tier coordinator for tier operations

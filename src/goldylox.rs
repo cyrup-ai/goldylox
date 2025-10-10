@@ -139,7 +139,7 @@ where
         + Debug
         + Default
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + PartialEq + 'static,
 {
     // Arc-wrapped manager for cheap cloning without spawning new threads
     manager: std::sync::Arc<UnifiedCacheManager<SerdeCacheKey<K>, SerdeCacheValue<V>>>,
@@ -158,7 +158,7 @@ where
         + Debug
         + Default
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + PartialEq + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -181,7 +181,7 @@ where
         + Default
         + CacheKey
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + PartialEq + 'static,
 {
     /// Create new cache builder with fluent configuration
     pub fn builder() -> GoldyloxBuilder<K, V> {
@@ -763,7 +763,7 @@ where
         + Debug
         + Default
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + PartialEq + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Goldylox")
@@ -787,7 +787,7 @@ where
         + Default
         + CacheKey
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + PartialEq + 'static,
 {
     config: CacheConfig,
     _phantom: std::marker::PhantomData<(K, V)>,
@@ -807,7 +807,7 @@ where
         + Default
         + CacheKey
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + PartialEq + 'static,
 {
     /// Create new builder with default configuration
     pub fn new() -> Self {
@@ -910,7 +910,7 @@ where
         + Default
         + CacheKey
         + 'static,
-    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + 'static,
+    V: Serialize + DeserializeOwned + Clone + Send + Sync + Debug + Default + CacheValue + PartialEq + 'static,
 {
     fn default() -> Self {
         Self::new()

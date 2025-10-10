@@ -729,6 +729,34 @@ impl<K: CacheKey, V: CacheValue> CacheCommandQueue<K, V> {
         Ok(command_count)
     }
 
+    /// Drain all pending commands without executing them
+    /// 
+    /// Extracts all commands from the internal queue, leaving it empty.
+    /// This enables async processing without blocking callbacks.
+    /// 
+    /// Returns a Vec containing all pending commands.
+    pub fn drain_pending_commands(&mut self) -> Result<Vec<CacheCommand<K, V>>, CacheOperationError> {
+        // Take the receiver out (same pattern as execute_pending_commands)
+        let receiver = self.receiver.take().ok_or_else(|| {
+            CacheOperationError::InvalidState("Receiver already taken".to_string())
+        })?;
+
+        // Drain all pending commands into a Vec using try_iter() and collect()
+        let commands: Vec<CacheCommand<K, V>> = receiver.try_iter().collect();
+        let command_count = commands.len();
+
+        // Put the receiver back (critical - must always restore)
+        self.receiver = Some(receiver);
+
+        // Update queue statistics (same as execute_pending_commands)
+        self.stats.queued_commands.store(0, Ordering::Relaxed);
+        self.stats
+            .total_commands
+            .fetch_add(command_count as u64, Ordering::Relaxed);
+
+        Ok(commands)
+    }
+
     /// Update execution statistics
     fn update_execution_stats(&self, execution_time: Duration) {
         let execution_ns = execution_time.as_nanos() as u64;
@@ -1140,6 +1168,29 @@ impl<
         F: FnMut(CacheCommand<K, V>) -> Result<(), CacheOperationError>,
     {
         self.command_queue.execute_pending_commands(executor)
+    }
+
+    /// Drain all pending commands for async processing
+    /// 
+    /// Extracts all commands from the internal queue, leaving it empty.
+    /// This method enables async processing without blocking callbacks.
+    /// 
+    /// # Returns
+    /// 
+    /// A Vec containing all pending commands. The internal queue will be empty
+    /// after this call.
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// let commands = task_coordinator.drain_pending_commands()?;
+    /// for command in commands {
+    ///     // Process asynchronously
+    ///     process_command(command).await;
+    /// }
+    /// ```
+    pub fn drain_pending_commands(&mut self) -> Result<Vec<CacheCommand<K, V>>, CacheOperationError> {
+        self.command_queue.drain_pending_commands()
     }
 
     /// Enqueue command for background processing

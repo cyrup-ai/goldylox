@@ -9,11 +9,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender}; // Still needed for write-behind and response channels
 use crossbeam_utils::{CachePadded, atomic::AtomicCell};
 use dashmap::DashMap;
 use futures::future;
 use serde_json;
+use tokio::sync::mpsc;
 // bincode imports removed - using direct cold tier API instead
 
 use super::policy_engine::{WriteResult, WriteStats};
@@ -97,9 +98,108 @@ impl Default for BackingStoreStats {
     }
 }
 
+/// Async backing store worker that owns storage operations
+struct BackingStoreWorker<K: CacheKey, V: Clone> {
+    receiver: mpsc::UnboundedReceiver<BackingStoreOperation<K, V>>,
+    cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
+    stats: BackingStoreStats,
+}
+
+impl<K: CacheKey, V: Clone> BackingStoreWorker<K, V> {
+    async fn run(mut self) {
+        log::info!("Backing store worker starting");
+        
+        // Message processing loop - non-blocking!
+        while let Some(operation) = self.receiver.recv().await {
+            let operation_start = std::time::Instant::now();
+            
+            match operation {
+                BackingStoreOperation::WriteToStore { key: _key, data: _data, tier: _tier, response } => {
+                    // Direct async call - NO block_on!
+                    let result = self.cold_tier_coordinator
+                        .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Defragment)
+                        .await;
+                    
+                    self.stats.writes_processed += 1;
+                    let _ = response.send(result);
+                }
+                
+                BackingStoreOperation::FlushDirtyEntry { dirty_entry: _dirty_entry, response } => {
+                    let result = self.cold_tier_coordinator
+                        .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Defragment)
+                        .await;
+                    
+                    self.stats.flushes_processed += 1;
+                    let _ = response.send(result);
+                }
+                
+                BackingStoreOperation::ExecutePendingWrite { pending_write: _pending_write, response } => {
+                    // Chained async operations - NO rt.block_on wrapper!
+                    let result = match self.cold_tier_coordinator
+                        .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Reset)
+                        .await
+                    {
+                        Ok(()) => self.cold_tier_coordinator
+                            .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Restart)
+                            .await,
+                        Err(e) => Err(e),
+                    };
+                    
+                    self.stats.pending_writes_processed += 1;
+                    let _ = response.send(result);
+                }
+                
+                BackingStoreOperation::Sync { tier: _tier, response } => {
+                    let result = self.cold_tier_coordinator
+                        .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Defragment)
+                        .await;
+                    
+                    self.stats.syncs_processed += 1;
+                    let _ = response.send(result);
+                }
+                
+                BackingStoreOperation::Compact { response } => {
+                    let result = self.cold_tier_coordinator
+                        .execute_maintenance(crate::cache::tier::cold::MaintenanceOperation::Compact)
+                        .await
+                        .map(|_| 1usize);
+                    
+                    self.stats.compactions_processed += 1;
+                    let _ = response.send(result);
+                }
+                
+                BackingStoreOperation::GetStats { response } => {
+                    let _ = response.send(Ok(self.stats.clone()));
+                }
+                
+                BackingStoreOperation::Shutdown => {
+                    log::info!("Backing store worker shutting down gracefully");
+                    break;
+                }
+            }
+            
+            // Update average operation latency
+            let operation_latency = operation_start.elapsed().as_nanos() as u64;
+            let total_ops = self.stats.writes_processed
+                + self.stats.flushes_processed
+                + self.stats.pending_writes_processed
+                + self.stats.syncs_processed
+                + self.stats.compactions_processed;
+            
+            if total_ops > 0 {
+                self.stats.avg_operation_latency_ns =
+                    (self.stats.avg_operation_latency_ns * (total_ops - 1) + operation_latency)
+                        / total_ops;
+            }
+        }
+        
+        log::info!("Backing store worker shutdown complete");
+    }
+}
+
 /// Write policy manager with consistency control
 #[derive(Debug)]
-pub struct WritePolicyManager<K: CacheKey + Default + 'static, V: Clone + 'static> {
+pub struct WritePolicyManager<K: CacheKey + Default + 'static, V: Clone + PartialEq + 'static> {
     /// Write-through vs write-back configuration
     write_strategy: AtomicCell<WriteStrategy>,
     /// Write batching configuration for performance
@@ -118,10 +218,10 @@ pub struct WritePolicyManager<K: CacheKey + Default + 'static, V: Clone + 'stati
     write_behind_receiver: Receiver<PendingWrite<K>>,
     /// Flush coordinator
     flush_coordinator: FlushCoordinator,
-    /// Backing store worker communication
-    backing_store_sender: Sender<BackingStoreOperation<K, V>>,
-    /// Handle to backing store worker thread
-    backing_store_worker: Option<std::thread::JoinHandle<()>>,
+    /// Backing store worker communication (async channel)
+    backing_store_sender: mpsc::UnboundedSender<BackingStoreOperation<K, V>>,
+    /// Handle to backing store worker task (async)
+    backing_store_worker: Option<tokio::task::JoinHandle<()>>,
     /// Cold tier coordinator for async operations
     cold_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
     /// Warm tier coordinator for async operations
@@ -244,7 +344,7 @@ pub struct FlushStatistics {
 }
 
 #[allow(dead_code)] // Library API - methods may be used by external consumers
-impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + 'static + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Send> WritePolicyManager<K, V> {
+impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V: CacheValue + Default + PartialEq + 'static + serde::Serialize + serde::de::DeserializeOwned + bincode::Encode + bincode::Decode<()> + Send> WritePolicyManager<K, V> {
     pub fn new(
         config: &CacheConfig,
         cold_tier_coordinator: crate::cache::tier::cold::ColdTierCoordinator,
@@ -277,144 +377,34 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
         })
     }
 
-    /// Spawn dedicated backing store worker that OWNS storage resources
+    /// Spawn dedicated backing store worker as async task
     fn spawn_backing_store_worker(
-        config: &CacheConfig,
+        _config: &CacheConfig,
         cold_tier_coordinator: Arc<crate::cache::tier::cold::ColdTierCoordinator>,
         _warm_tier_coordinator: Arc<crate::cache::tier::warm::global_api::WarmTierCoordinator>,
     ) -> Result<
         (
-            Sender<BackingStoreOperation<K, V>>,
-            std::thread::JoinHandle<()>,
+            mpsc::UnboundedSender<BackingStoreOperation<K, V>>,
+            tokio::task::JoinHandle<()>,
         ),
         CacheOperationError,
     > {
-        let (tx, rx) = bounded::<BackingStoreOperation<K, V>>(1000);
+        let (tx, rx) = mpsc::unbounded_channel::<BackingStoreOperation<K, V>>();
 
-        // Config cloned but not used in simplified implementation
-        let _config = config.clone();
+        let worker = BackingStoreWorker {
+            receiver: rx,
+            cold_tier_coordinator,
+            stats: BackingStoreStats::default(),
+        };
 
-        let handle = std::thread::spawn(move || {
-            // Use the existing cold tier system instead of creating a separate one
-            log::info!("Backing store worker starting - using existing cold tier system");
-
-            // Worker statistics
-            let mut stats = BackingStoreStats::default();
-
-            log::info!("Backing store worker started successfully");
-            
-            // Create tokio runtime for async operations
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(runtime) => runtime,
-                Err(e) => {
-                    log::error!("Failed to create tokio runtime: {:?}", e);
-                    return;
-                }
-            };
-
-            // Message processing loop
-            while let Ok(operation) = rx.recv() {
-                let operation_start = std::time::Instant::now();
-
-                match operation {
-                    BackingStoreOperation::WriteToStore {
-                        key: _key,
-                        data: _data,
-                        tier: _tier,
-                        response,
-                    } => {
-                        // Write operations trigger cold tier defragmentation to ensure data consistency
-                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
-                            crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        ));
-                        stats.writes_processed += 1;
-                        let _ = response.send(result);
-                    }
-                    BackingStoreOperation::FlushDirtyEntry {
-                        dirty_entry: _dirty_entry,
-                        response,
-                    } => {
-                        // Flush operations use cold tier maintenance system to sync data
-                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
-                            crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        ));
-                        stats.flushes_processed += 1;
-                        let _ = response.send(result);
-                    }
-                    BackingStoreOperation::ExecutePendingWrite {
-                        pending_write: _pending_write,
-                        response,
-                    } => {
-                        // Execute pending writes through cold tier reset and restart cycle
-                        let result = rt.block_on(async {
-                            // First ensure the system is in a clean state, then restart
-                            match cold_tier_coordinator.execute_maintenance(
-                                crate::cache::tier::cold::MaintenanceOperation::Reset,
-                            ).await {
-                                Ok(()) => cold_tier_coordinator.execute_maintenance(
-                                    crate::cache::tier::cold::MaintenanceOperation::Restart,
-                                ).await,
-                                Err(e) => Err(e),
-                            }
-                        });
-                        stats.pending_writes_processed += 1;
-                        let _ = response.send(result);
-                    }
-                    BackingStoreOperation::Sync {
-                        tier: _tier,
-                        response,
-                    } => {
-                        // Sync operations use cold tier defragmentation for data consistency
-                        let result = rt.block_on(cold_tier_coordinator.execute_maintenance(
-                            crate::cache::tier::cold::MaintenanceOperation::Defragment,
-                        ));
-                        stats.syncs_processed += 1;
-                        let _ = response.send(result);
-                    }
-                    BackingStoreOperation::Compact { response } => {
-                        // Compaction is handled by cold tier compaction system
-                        let result = rt.block_on(async {
-                            // Execute compaction and return success indicator as usize
-                            match cold_tier_coordinator.execute_maintenance(
-                                crate::cache::tier::cold::MaintenanceOperation::Compact,
-                            ).await {
-                                Ok(()) => Ok(1usize), // Return 1 to indicate successful compaction
-                                Err(e) => Err(e), // CacheOperationError already matches expected type
-                            }
-                        });
-                        stats.compactions_processed += 1;
-                        let _ = response.send(result);
-                    }
-                    BackingStoreOperation::GetStats { response } => {
-                        let _ = response.send(Ok(stats.clone()));
-                    }
-                    BackingStoreOperation::Shutdown => {
-                        log::info!("Backing store worker shutting down gracefully");
-                        break;
-                    }
-                }
-
-                // Update average operation latency
-                let operation_latency = operation_start.elapsed().as_nanos() as u64;
-                let total_ops = stats.writes_processed
-                    + stats.flushes_processed
-                    + stats.pending_writes_processed
-                    + stats.syncs_processed
-                    + stats.compactions_processed;
-                if total_ops > 0 {
-                    stats.avg_operation_latency_ns =
-                        (stats.avg_operation_latency_ns * (total_ops - 1) + operation_latency)
-                            / total_ops;
-                }
-            }
-
-            // Clean shutdown - delegated to existing cold tier system
-            // The existing cold tier system handles its own cleanup automatically
-            log::info!("Backing store worker shutdown complete");
+        let handle = tokio::runtime::Handle::current().spawn(async move {
+            worker.run().await;
         });
 
         Ok((tx, handle))
     }
+
+
 
     /// Handle write to store operation (worker thread)
     #[allow(dead_code)] // Dead code - not actually used, kept for future implementation
@@ -433,8 +423,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
                     String::from_utf8(data).unwrap_or_else(|_| format!("binary_data_{:?}", key));
                 cold_storage.put(key.clone(), value)?;
                 storage_manager
-                    .sync_data()
-                    .await
+                    .sync_data_sync()
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Warm => {
@@ -467,8 +456,7 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
             CacheTier::Warm => {
                 // Sync warm tier storage
                 storage_manager
-                    .sync_data()
-                    .await
+                    .sync_data_sync()
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Hot => {
@@ -521,18 +509,15 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
             CacheTier::Cold => {
                 cold_storage.sync_to_disk()?;
                 storage_manager
-                    .sync_data()
-                    .await
+                    .sync_data_sync()
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
                 storage_manager
-                    .sync_index()
-                    .await
+                    .sync_index_sync()
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Warm => {
                 storage_manager
-                    .sync_data()
-                    .await
+                    .sync_data_sync()
                     .map_err(|e| CacheOperationError::io_failed(e.to_string()))?;
             }
             CacheTier::Hot => {
@@ -561,9 +546,9 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
 
         let strategy = self.write_strategy.load();
         let result = match strategy {
-            WriteStrategy::Through => self.process_write_through(key, tier),
-            WriteStrategy::Back => self.process_write_back(key, value, tier).await,
-            WriteStrategy::Behind => self.process_write_behind(key, tier),
+            WriteStrategy::Immediate => self.process_write_through(key, tier),
+            WriteStrategy::Buffered => self.process_write_back(key, value, tier).await,
+            WriteStrategy::Deferred => self.process_write_behind(key, tier),
         };
 
         let latency_ns = start_time.elapsed().as_nanos() as u64;
@@ -576,6 +561,36 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
             latency_ns,
             tier,
         })
+    }
+
+    /// Execute immediate write operation (write-through strategy)
+    pub fn execute_immediate_write(
+        &self,
+        key: &K,
+        tier: CacheTier,
+    ) -> Result<(), CacheOperationError> {
+        // Delegate to existing write-through implementation
+        self.process_write_through(key, tier)
+    }
+
+    /// Execute buffered write operation (write-back strategy)
+    pub fn execute_buffered_write(
+        &self,
+        _key: &K,
+        _tier: CacheTier,
+    ) -> Result<(), CacheOperationError> {
+        // Minimal stub - full implementation in future task
+        Ok(())
+    }
+
+    /// Execute deferred write operation (write-behind strategy)
+    pub fn execute_deferred_write(
+        &self,
+        key: &K,
+        tier: CacheTier,
+    ) -> Result<(), CacheOperationError> {
+        // Delegate to existing write-behind implementation
+        self.process_write_behind(key, tier)
     }
 
     /// Process write-through operation
@@ -1215,6 +1230,42 @@ impl<K: CacheKey + Default + 'static + bincode::Encode + bincode::Decode<()>, V:
         }
     }
 
+    /// Record write operation outcome for statistics collection
+    /// 
+    /// Accepts write operation metrics from the PolicyEngine and records them
+    /// in the internal statistics tracking system. This data enables:
+    /// - Operational monitoring and alerting
+    /// - Performance dashboards and metrics
+    /// - Future ML model training for strategy optimization
+    /// 
+    /// # Arguments
+    /// 
+    /// * `_key` - The cache key (for future pattern correlation)
+    /// * `_strategy` - Which write strategy was used
+    /// * `_latency_ns` - Measured operation latency
+    /// * `_success` - Whether the operation succeeded
+    /// 
+    /// # Implementation Status
+    /// 
+    /// Currently a minimal stub. Full statistics recording will be implemented
+    /// in a future task when the comprehensive metrics collection system is built.
+    pub fn record_write_outcome(
+        &self,
+        _key: &K,
+        _strategy: WriteStrategy,
+        _latency_ns: u64,
+        _success: bool,
+    ) {
+        // Statistics recording will be implemented in future task
+        // For now, this establishes the API contract and data flow
+        // 
+        // Future implementation will:
+        // - Update per-strategy performance counters
+        // - Track success/failure rates by strategy
+        // - Maintain latency histograms
+        // - Feed data to ML prediction models (when available)
+    }
+
     /// Shutdown write policy manager gracefully - NOW ASYNC
     pub async fn shutdown(&self) -> Result<(), CacheOperationError> {
         // Process remaining writes with priority ordering
@@ -1362,16 +1413,19 @@ impl FlushStatistics {
     }
 }
 
-impl<K: CacheKey + Default + 'static, V: Clone + 'static> Drop for WritePolicyManager<K, V> {
+impl<K: CacheKey + Default + 'static, V: Clone + PartialEq + 'static> Drop for WritePolicyManager<K, V> {
     fn drop(&mut self) {
-        // Signal worker shutdown
+        // Send shutdown signal
         let _ = self
             .backing_store_sender
             .send(BackingStoreOperation::Shutdown);
 
-        // Wait for worker to complete
-        if let Some(handle) = self.backing_store_worker.take() {
-            let _ = handle.join();
+        // For async tasks, we can't await in Drop (not async context)
+        // Task will complete when it processes Shutdown message
+        // Runtime handles cleanup automatically
+        if let Some(_handle) = self.backing_store_worker.take() {
+            // No .join() - tokio runtime handles task cleanup
+            // Task completes when Shutdown message processed
         }
     }
 }

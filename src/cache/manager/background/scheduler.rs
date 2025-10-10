@@ -31,6 +31,7 @@ impl<K: CacheKey + Default, V: CacheValue + Default> MaintenanceScheduler<K, V>
 where
     K: Clone + bincode::Encode + bincode::Decode<()> + 'static,
     V: Clone
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
@@ -260,7 +261,6 @@ where
         context: &WorkerContext,
     ) -> Result<(), String> {
         use std::sync::Arc;
-        use std::sync::atomic::Ordering;
         
         let target_workers =
             (config.worker_count as f64 * scaling_request.capacity_factor).ceil() as u32;
@@ -436,6 +436,7 @@ impl<K: CacheKey + Default, V: CacheValue + Default> TaskProcessor for Maintenan
 where
     K: Clone + bincode::Encode + bincode::Decode<()> + 'static,
     V: Clone
+        + PartialEq
         + serde::Serialize
         + serde::de::DeserializeOwned
         + bincode::Encode
